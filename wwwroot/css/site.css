@@ -1,0 +1,175 @@
+﻿/* Basic overrides for the Blazor template */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.btn-primary {
+    background-color: #1a73e8;
+    border: none;
+}
+
+    .btn-primary:hover {
+        background-color: #1557b0;
+    }
+
+/* Shared page shell and accessible focus treatment. */
+:root {
+    color-scheme: light;
+    --smart-blue: #1a73e8;
+    --smart-navy: #0d47a1;
+    --smart-ink: #172033;
+}
+
+html {
+    min-height: 100%;
+    scroll-behavior: smooth;
+}
+
+body {
+    min-height: 100vh;
+    margin: 0;
+    font-family: "Inter", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    color: var(--smart-ink);
+}
+
+.app-shell {
+    min-height: 100vh;
+}
+
+/* The individual pages provide their own header, so the template shell stays invisible. */
+.page > .sidebar,
+.page > main > .top-row.auth {
+    display: none;
+}
+
+.page > main,
+.page > main > .content {
+    width: 100%;
+    margin: 0;
+    padding: 0 !important;
+}
+
+:focus-visible {
+    outline: 3px solid rgba(26, 115, 232, .45);
+    outline-offset: 3px;
+}
+
+/* A single, clear access pair in the landing navigation. */
+.nav-auth-actions {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+}
+
+.auth-login,
+.auth-register {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    padding: .55rem .9rem;
+    border-radius: 999px;
+    font-size: .86rem;
+    font-weight: 700;
+    text-decoration: none;
+    transition: transform .2s ease, box-shadow .2s ease, background-color .2s ease;
+}
+
+.auth-login {
+    color: var(--smart-blue);
+}
+
+.auth-login:hover {
+    color: var(--smart-navy);
+    background: rgba(26, 115, 232, .08);
+}
+
+.auth-register {
+    color: #fff;
+    background: linear-gradient(135deg, var(--smart-blue), var(--smart-navy));
+    box-shadow: 0 8px 18px rgba(26, 115, 232, .2);
+}
+
+.auth-register:hover {
+    color: #fff;
+    transform: translateY(-2px);
+    box-shadow: 0 12px 22px rgba(26, 115, 232, .3);
+}
+
+.mobile-auth-link {
+    margin-top: .25rem;
+    border-top: 1px solid rgba(26, 115, 232, .1);
+}
+
+/* Small live control in the hero gives visitors a tangible preview of smart cooling. */
+.comfort-control {
+    width: min(100%, 28rem);
+    margin-top: 1.6rem;
+    padding: .9rem 1rem .75rem;
+    text-align: left;
+    border: 1px solid rgba(26, 115, 232, .12);
+    border-radius: 1rem;
+    background: rgba(255, 255, 255, .72);
+    box-shadow: 0 12px 30px rgba(26, 115, 232, .07);
+    backdrop-filter: blur(12px);
+}
+
+.comfort-control-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .75rem;
+    color: #475467;
+    font-size: .82rem;
+    font-weight: 700;
+}
+
+.comfort-control output {
+    padding: .2rem .55rem;
+    color: var(--smart-blue);
+    border-radius: .5rem;
+    background: rgba(26, 115, 232, .1);
+}
+
+.temperature-slider {
+    width: 100%;
+    height: .5rem;
+    margin: .8rem 0 .45rem;
+    accent-color: var(--smart-blue);
+    cursor: pointer;
+}
+
+.comfort-control small {
+    display: block;
+    color: #667085;
+    font-size: .74rem;
+}
+
+.login-account-switch {
+    margin: 1rem 0 0;
+    color: #667085;
+    font-size: .82rem;
+    text-align: center;
+}
+
+.login-account-switch a {
+    color: var(--smart-blue);
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.login-account-switch a:hover {
+    color: var(--smart-navy);
+    text-decoration: underline;
+}
+
+@media (max-width: 768px) {
+    .nav-auth-actions {
+        display: none;
+    }
+
+    .comfort-control {
+        margin-right: auto;
+        margin-left: auto;
+    }
+}

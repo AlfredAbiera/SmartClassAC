@@ -1,0 +1,3191 @@
+﻿@page "/"
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IJSRuntime JSRuntime
+
+<PageTitle>SmartClass AC – Smart Cooling for Smart Classrooms</PageTitle>
+
+<!-- =========================================================
+     FLOATING BACKGROUND SNOWFLAKES
+     ========================================================= -->
+
+<div class="snowflakes" aria-hidden="true">
+    <div class="snowflake snow-1">❄</div>
+    <div class="snowflake snow-2">❄</div>
+    <div class="snowflake snow-3">❄</div>
+    <div class="snowflake snow-4">❄</div>
+    <div class="snowflake snow-5">❄</div>
+    <div class="snowflake snow-6">❄</div>
+    <div class="snowflake snow-7">❄</div>
+    <div class="snowflake snow-8">❄</div>
+    <div class="snowflake snow-9">❄</div>
+    <div class="snowflake snow-10">❄</div>
+    <div class="snowflake snow-11">❄</div>
+    <div class="snowflake snow-12">❄</div>
+</div>
+
+
+<!-- =========================================================
+     NAVBAR
+     ========================================================= -->
+
+<nav class="smart-navbar" aria-label="Primary navigation">
+
+    <div class="container">
+
+        <div class="navbar-content">
+
+            <!-- BRAND -->
+            <a href="/" class="smart-brand">
+
+                <div class="brand-icon">
+                    <i class="fas fa-snowflake"></i>
+                </div>
+
+                <div class="brand-text">
+                    <span class="brand-name">SmartClass</span>
+                    <span class="brand-ac">AC</span>
+                </div>
+
+            </a>
+
+
+            <!-- DESKTOP NAVIGATION -->
+            <div class="smart-nav-links">
+
+                <a href="/"
+                   class="smart-nav-link active"
+                   aria-current="page">
+
+                    <i class="fas fa-home"></i>
+
+                    <span>Home</span>
+
+                </a>
+
+
+                <a href="#features"
+                   class="smart-nav-link">
+
+                    <i class="fas fa-layer-group"></i>
+
+                    <span>Features</span>
+
+                </a>
+
+
+                <a href="#about"
+                   class="smart-nav-link">
+
+                    <i class="fas fa-circle-info"></i>
+
+                    <span>About</span>
+
+                </a>
+
+
+
+            </div>
+
+            <div class="nav-auth-actions">
+                <a href="/login" class="auth-login">Sign in</a>
+            </div>
+
+
+            <!-- MOBILE MENU BUTTON -->
+            <button type="button"
+                    class="mobile-menu-button"
+                    aria-label="Toggle navigation"
+                    aria-expanded="false"
+                    onclick="toggleSmartMenu()">
+
+                <i class="fas fa-bars"></i>
+
+            </button>
+
+        </div>
+
+
+        <!-- =====================================================
+             MOBILE NAVIGATION
+             ===================================================== -->
+
+        <div class="mobile-nav-menu"
+             id="smartMobileMenu">
+
+            <a href="/"
+               class="mobile-nav-link">
+
+                <i class="fas fa-home"></i>
+
+                <span>Home</span>
+
+            </a>
+
+
+            <a href="#features"
+               class="mobile-nav-link">
+
+                <i class="fas fa-layer-group"></i>
+
+                <span>Features</span>
+
+            </a>
+
+
+            <a href="#about"
+               class="mobile-nav-link">
+
+                <i class="fas fa-circle-info"></i>
+
+                <span>About</span>
+
+            </a>
+
+            <a href="/login"
+               class="mobile-nav-link mobile-auth-link">
+
+                <i class="fas fa-right-to-bracket"></i>
+
+                <span>Sign in</span>
+
+            </a>
+
+        </div>
+
+    </div>
+
+</nav>
+
+
+<!-- =========================================================
+     MAIN CONTENT
+     ========================================================= -->
+
+<div class="landing-wrapper">
+
+    <div class="container">
+
+        <!-- =====================================================
+             HERO SECTION
+             ===================================================== -->
+
+        <div class="row hero-section align-items-center min-vh-100">
+
+            <!-- HERO TEXT -->
+            <div class="col-lg-7 text-center text-lg-start">
+
+                <div class="badge hero-badge px-4 py-2 rounded-pill mb-4">
+
+                    <i class="fas fa-bolt me-2"></i>
+
+                    Next-Gen Classroom Climate
+
+                </div>
+
+
+                <h1 class="display-3 fw-bold mb-3 hero-title">
+
+                    SmartClass
+                    <span class="text-primary">AC</span>
+
+                </h1>
+
+
+                <p class="lead mb-4 text-muted hero-description">
+
+                    Secure smart-classroom control with
+                    <strong>administrator-managed teacher accounts</strong>,
+                    biometric access, and automated attendance.
+
+                </p>
+
+
+                <!-- BUTTONS -->
+                <div class="d-flex flex-wrap gap-3 justify-content-center justify-content-lg-start">
+
+                    <a href="/login"
+                       class="btn btn-primary btn-lg px-5 py-3 rounded-pill shadow-lg hero-button">
+
+                        <i class="fas fa-right-to-bracket me-2"></i>
+
+                        Sign in securely
+
+                    </a>
+
+
+                    <a href="#features"
+                       class="btn btn-outline-secondary btn-lg px-5 py-3 rounded-pill explore-button">
+
+                        <i class="fas fa-chevron-down me-2"></i>
+
+                        Explore
+
+                    </a>
+
+                </div>
+
+                <div class="comfort-control" aria-label="Classroom comfort demonstration">
+                    <div class="comfort-control-header">
+                        <span><i class="fas fa-sliders me-2"></i>Try the comfort control</span>
+                        <output id="targetTemperature" for="temperatureControl">22°C</output>
+                    </div>
+                    <input id="temperatureControl"
+                           class="temperature-slider"
+                           type="range"
+                           min="18"
+                           max="28"
+                           value="22"
+                           aria-label="Target classroom temperature"
+                           oninput="updateClassroomTemperature(this.value)" />
+                    <small id="comfortMessage" aria-live="polite">Balanced cooling for focused learning.</small>
+                </div>
+
+
+                <div class="access-assurance" aria-label="Secure account access">
+                    <div><i class="fas fa-right-to-bracket"></i><span><strong>One secure sign-in</strong><small>No public sign-up or role selection</small></span></div>
+                    <div><i class="fas fa-user-shield"></i><span><strong>Admin-controlled access</strong><small>Only the administrator enrolls teachers</small></span></div>
+                    <div><i class="fas fa-compass"></i><span><strong>Automatic workspace</strong><small>Your stored role opens the right dashboard</small></span></div>
+                </div>
+
+            </div>
+
+
+            <!-- =================================================
+                 SMART AC HERO VISUAL
+                 ================================================= -->
+
+            <div class="col-lg-5 hero-visual-column">
+
+                <div class="hero-illustration">
+
+                    <div class="hero-glow"></div>
+
+                    <div class="ac-ring ring-1"></div>
+
+                    <div class="ac-ring ring-2"></div>
+
+
+                    <!-- SMART AC DEVICE -->
+                    <div class="smart-ac-device">
+
+                        <div class="ac-top">
+
+                            <div class="ac-brand-mini">
+
+                                <i class="fas fa-snowflake"></i>
+
+                                SmartClass
+
+                            </div>
+
+
+                            <div class="ac-status">
+
+                                <span></span>
+
+                                ONLINE
+
+                            </div>
+
+                        </div>
+
+
+                        <div class="ac-display">
+
+                            <div class="display-temperature">
+
+                                <span id="heroTemperature">22</span>
+
+                                <sup>°C</sup>
+
+                            </div>
+
+
+                            <div class="display-label">
+
+                                CLASSROOM TEMPERATURE
+
+                            </div>
+
+                        </div>
+
+
+                        <div class="ac-controls">
+
+                            <div class="ac-control">
+
+                                <i class="fas fa-snowflake"></i>
+
+                                <span>COOLING</span>
+
+                            </div>
+
+
+                            <div class="ac-control">
+
+                                <i class="fas fa-wind"></i>
+
+                                <span>HIGH AIRFLOW</span>
+
+                            </div>
+
+                        </div>
+
+
+                        <div class="ac-airflow">
+
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                            <span></span>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- IOT CARD -->
+                    <div class="iot-card">
+
+                        <div class="iot-icon">
+
+                            <i class="fas fa-wifi"></i>
+
+                        </div>
+
+
+                        <div>
+
+                            <small>
+                                IoT Connection
+                            </small>
+
+                            <strong>
+                                Connected
+                            </strong>
+
+                        </div>
+
+
+                        <span class="iot-dot"></span>
+
+                    </div>
+
+
+                    <!-- TEMPERATURE CARD -->
+                    <div class="temperature-card">
+
+                        <div class="temperature-icon">
+
+                            <i class="fas fa-temperature-low"></i>
+
+                        </div>
+
+
+                        <div class="temperature-content">
+
+                            <small>
+                                Target Temperature
+                            </small>
+
+                            <strong id="cardTemperature">22°C</strong>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- STATUS CARD -->
+                    <div class="status-card">
+
+                        <div class="status-icon">
+
+                            <span class="status-dot"></span>
+
+                        </div>
+
+
+                        <div class="status-content">
+
+                            <small>
+                                Smart AC
+                            </small>
+
+                            <strong>
+                                Running
+                            </strong>
+
+                        </div>
+
+                    </div>
+
+
+                    <!-- AIR QUALITY -->
+                    <div class="air-card">
+
+                        <div class="air-icon">
+
+                            <i class="fas fa-wind"></i>
+
+                        </div>
+
+
+                        <div class="air-content">
+
+                            <small>
+                                Air Quality
+                            </small>
+
+                            <strong>
+                                Excellent
+                            </strong>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <!-- =====================================================
+             FEATURES
+             ===================================================== -->
+
+        <section id="features"
+                 class="features-section py-5">
+
+            <div class="text-center mb-5">
+
+                <div class="section-label">
+                    SMART TECHNOLOGY
+                </div>
+
+
+                <h2 class="display-5 fw-bold">
+                    Why SmartClass AC?
+                </h2>
+
+
+                <p class="text-muted section-description">
+
+                    Everything you need to manage classroom climate
+                    and attendance seamlessly.
+
+                </p>
+
+            </div>
+
+
+            <div class="row g-4">
+
+                <!-- FEATURE 1 -->
+                <div class="col-md-6 col-lg-3">
+
+                    <div class="feature-card text-center p-4 h-100">
+
+                        <div class="feature-icon">
+
+                            <i class="fas fa-microchip"></i>
+
+                        </div>
+
+
+                        <h5 class="fw-bold">
+                            Smart AC Control
+                        </h5>
+
+
+                        <p class="text-muted">
+
+                            IoT-enabled, automated temperature
+                            management based on class schedules.
+
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <!-- FEATURE 2 -->
+                <div class="col-md-6 col-lg-3">
+
+                    <div class="feature-card text-center p-4 h-100">
+
+                        <div class="feature-icon">
+
+                            <i class="fas fa-fingerprint"></i>
+
+                        </div>
+
+
+                        <h5 class="fw-bold">
+                            Biometric Auth
+                        </h5>
+
+
+                        <p class="text-muted">
+
+                            Secure teacher verification via
+                            fingerprint before class starts.
+
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <!-- FEATURE 3 -->
+                <div class="col-md-6 col-lg-3">
+
+                    <div class="feature-card text-center p-4 h-100">
+
+                        <div class="feature-icon">
+
+                            <i class="fas fa-clipboard-check"></i>
+
+                        </div>
+
+
+                        <h5 class="fw-bold">
+                            Automated Attendance
+                        </h5>
+
+
+                        <p class="text-muted">
+
+                            Mark IN/OUT automatically with
+                            fingerprint scan – no manual rolls.
+
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <!-- FEATURE 4 -->
+                <div class="col-md-6 col-lg-3">
+
+                    <div class="feature-card text-center p-4 h-100">
+
+                        <div class="feature-icon">
+
+                            <i class="fas fa-chart-line"></i>
+
+                        </div>
+
+
+                        <h5 class="fw-bold">
+                            Real-time Monitoring
+                        </h5>
+
+
+                        <p class="text-muted">
+
+                            View classroom temperature, AC status,
+                            and attendance history live.
+
+                        </p>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- =====================================================
+             ABOUT
+             ===================================================== -->
+
+        <section id="about"
+                 class="about-section py-5">
+
+            <div class="row align-items-center g-5">
+
+                <!-- ABOUT TEXT -->
+                <div class="col-lg-6">
+
+                    <div class="about-card">
+
+                        <div class="about-icon">
+
+                            <i class="fas fa-school"></i>
+
+                        </div>
+
+
+                        <div class="section-label">
+
+                            ABOUT SMARTCLASS
+
+                        </div>
+
+
+                        <h2 class="fw-bold mb-3">
+
+                            Built for the
+
+                            <span class="text-primary">
+                                Smart Classroom
+                            </span>
+
+                        </h2>
+
+
+                        <p class="text-muted">
+
+                            SmartClass AC combines IoT-based climate
+                            control, biometric teacher authentication,
+                            and automated attendance into one
+                            intelligent classroom platform.
+
+                        </p>
+
+
+                        <div class="about-points">
+
+                            <div>
+
+                                <i class="fas fa-check-circle"></i>
+
+                                <span>
+                                    Automated AC control
+                                </span>
+
+                            </div>
+
+
+                            <div>
+
+                                <i class="fas fa-check-circle"></i>
+
+                                <span>
+                                    Secure biometric authentication
+                                </span>
+
+                            </div>
+
+
+                            <div>
+
+                                <i class="fas fa-check-circle"></i>
+
+                                <span>
+                                    Automated attendance tracking
+                                </span>
+
+                            </div>
+
+
+                            <div>
+
+                                <i class="fas fa-check-circle"></i>
+
+                                <span>
+                                    Real-time classroom monitoring
+                                </span>
+
+                            </div>
+
+                        </div>
+
+
+                        <a href="/login"
+                           class="btn btn-primary rounded-pill px-4 mt-3">
+
+                            Access Dashboard
+
+                            <i class="fas fa-arrow-right ms-2"></i>
+
+                        </a>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ABOUT VISUAL -->
+                <div class="col-lg-6">
+
+                    <div class="about-visual">
+
+                        <div class="about-main-circle">
+
+                            <i class="fas fa-school"></i>
+
+                        </div>
+
+
+                        <div class="floating-icon icon-1">
+
+                            <i class="fas fa-snowflake"></i>
+
+                        </div>
+
+
+                        <div class="floating-icon icon-2">
+
+                            <i class="fas fa-fingerprint"></i>
+
+                        </div>
+
+
+                        <div class="floating-icon icon-3">
+
+                            <i class="fas fa-temperature-half"></i>
+
+                        </div>
+
+
+                        <div class="floating-icon icon-4">
+
+                            <i class="fas fa-chart-line"></i>
+
+                        </div>
+
+
+                        <div class="connection-line line-1"></div>
+
+                        <div class="connection-line line-2"></div>
+
+                        <div class="connection-line line-3"></div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- =====================================================
+             FOOTER
+             ===================================================== -->
+
+        <footer class="footer mt-5 py-4 text-center text-muted">
+
+            <div class="footer-logo">
+
+                <i class="fas fa-snowflake"></i>
+
+                <strong>
+
+                    SmartClass
+                    <span>AC</span>
+
+                </strong>
+
+            </div>
+
+
+            <p class="mb-0 mt-2">
+
+                Smart Cooling for Smart Classrooms
+
+            </p>
+
+
+            <small>
+
+                &copy; 2026 SmartClass AC.
+                All rights reserved.
+
+            </small>
+
+        </footer>
+
+    </div>
+
+</div>
+
+
+<!-- =========================================================
+     CSS
+     ========================================================= -->
+
+<style>
+
+    /* =========================================================
+               GLOBAL
+               ========================================================= */
+
+    html {
+        scroll-behavior: smooth;
+    }
+
+    * {
+        box-sizing: border-box;
+    }
+
+    body {
+        margin: 0;
+        font-family: "Inter", "Segoe UI", sans-serif;
+        background: #f0f8ff;
+        overflow-x: hidden;
+    }
+
+    .landing-wrapper {
+        position: relative;
+        z-index: 1;
+        min-height: 100vh;
+        overflow: hidden;
+        padding-top: 90px;
+        background: radial-gradient( circle at 10% 20%, rgba(66,165,245,0.12), transparent 30% ), radial-gradient( circle at 90% 30%, rgba(26,115,232,0.10), transparent 30% ), linear-gradient( 135deg, #f0f8ff 0%, #e3f2fd 100% );
+    }
+
+
+    /* =========================================================
+               NAVBAR
+               ========================================================= */
+
+    .smart-navbar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 1000;
+        padding: 16px 0;
+    }
+
+    .navbar-content {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px 10px 16px;
+        border-radius: 20px;
+        background: rgba(255,255,255,0.86);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255,255,255,0.95);
+        box-shadow: 0 10px 35px rgba(26,115,232,0.08), 0 2px 10px rgba(0,0,0,0.04);
+        transition: all 0.3s ease;
+    }
+
+
+    /* =========================================================
+               BRAND
+               ========================================================= */
+
+    .smart-brand {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        text-decoration: none;
+        color: #172033;
+    }
+
+    .brand-icon {
+        width: 44px;
+        height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 14px;
+        color: white;
+        font-size: 1.25rem;
+        background: linear-gradient( 135deg, #1a73e8, #42a5f5 );
+        box-shadow: 0 7px 20px rgba(26,115,232,0.25);
+        animation: brandPulse 3s ease-in-out infinite;
+    }
+
+    .brand-text {
+        font-size: 1.22rem;
+        font-weight: 750;
+        letter-spacing: -0.03em;
+    }
+
+    .brand-name {
+        color: #172033;
+    }
+
+    .brand-ac {
+        color: #1a73e8;
+        margin-left: 3px;
+    }
+
+
+    /* =========================================================
+               DESKTOP NAV
+               ========================================================= */
+
+    .smart-nav-links {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+    }
+
+    .smart-nav-link {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 10px 14px;
+        color: #667085;
+        text-decoration: none;
+        font-size: 0.9rem;
+        font-weight: 600;
+        border-radius: 12px;
+        transition: color 0.25s ease, background 0.25s ease, transform 0.25s ease, box-shadow 0.25s ease;
+    }
+
+        .smart-nav-link i {
+            font-size: 0.82rem;
+            transition: transform 0.25s ease, color 0.25s ease;
+        }
+
+
+        /* =========================================================
+               NAV HOVER
+               ========================================================= */
+
+        .smart-nav-link:hover {
+            color: #1a73e8;
+            background: rgba(26,115,232,0.12);
+            transform: translateY(-1px);
+            box-shadow: 0 5px 15px rgba(26,115,232,0.08);
+        }
+
+            .smart-nav-link:hover i {
+                color: #1a73e8;
+                transform: scale(1.1);
+            }
+
+
+        /* =========================================================
+               NAV ACTIVE
+               ========================================================= */
+
+        .smart-nav-link.active {
+            color: #1a73e8;
+            background: rgba(26,115,232,0.12);
+            box-shadow: 0 5px 15px rgba(26,115,232,0.06);
+        }
+
+            .smart-nav-link.active i {
+                color: #1a73e8;
+            }
+
+            .smart-nav-link.active::after {
+                content: "";
+                position: absolute;
+                bottom: 4px;
+                left: 50%;
+                width: 5px;
+                height: 5px;
+                transform: translateX(-50%);
+                border-radius: 50%;
+                background: #1a73e8;
+                box-shadow: 0 0 8px rgba(26,115,232,0.5);
+                animation: navDotIn 0.25s ease;
+            }
+
+
+
+    /* =========================================================
+               MOBILE MENU BUTTON
+               ========================================================= */
+
+    .mobile-menu-button {
+        display: none;
+        width: 42px;
+        height: 42px;
+        border: none;
+        border-radius: 13px;
+        color: #1a73e8;
+        background: rgba(26,115,232,0.09);
+        cursor: pointer;
+        transition: all 0.25s ease;
+    }
+
+        .mobile-menu-button:hover {
+            background: rgba(26,115,232,0.15);
+            transform: scale(1.04);
+        }
+
+        .mobile-menu-button:active {
+            transform: scale(0.95);
+        }
+
+
+    /* =========================================================
+               MOBILE MENU
+               ========================================================= */
+
+    .mobile-nav-menu {
+        display: none;
+        margin-top: 8px;
+        padding: 10px;
+        border-radius: 18px;
+        background: rgba(255,255,255,0.94);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255,255,255,0.95);
+        box-shadow: 0 15px 35px rgba(26,115,232,0.10);
+    }
+
+        .mobile-nav-menu.show {
+            display: block;
+            animation: mobileMenuIn 0.25s ease;
+        }
+
+    .mobile-nav-link {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 13px 14px;
+        color: #596579;
+        text-decoration: none;
+        font-size: 0.95rem;
+        font-weight: 600;
+        border-radius: 12px;
+        transition: all 0.2s ease;
+    }
+
+        .mobile-nav-link i {
+            width: 20px;
+            text-align: center;
+        }
+
+        .mobile-nav-link:hover {
+            color: #1a73e8;
+            background: rgba(26,115,232,0.08);
+            transform: translateX(3px);
+        }
+
+        .mobile-nav-link.active {
+            color: #1a73e8;
+            background: rgba(26,115,232,0.10);
+        }
+
+            .mobile-nav-link.active::after {
+                content: "";
+                position: absolute;
+                right: 12px;
+                width: 6px;
+                height: 6px;
+                border-radius: 50%;
+                background: #1a73e8;
+                box-shadow: 0 0 8px rgba(26,115,232,0.45);
+            }
+
+
+    /* =========================================================
+               SNOWFLAKES
+               ========================================================= */
+
+    .snowflakes {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 0;
+        overflow: hidden;
+    }
+
+    .snowflake {
+        position: absolute;
+        top: -10%;
+        color: rgba(26,115,232,0.16);
+        font-size: clamp(1.2rem, 2.2vw, 3rem);
+        animation: fall linear infinite;
+        user-select: none;
+    }
+
+    .snow-1 {
+        left: 8%;
+        animation-duration: 13s;
+        animation-delay: 0s;
+    }
+
+    .snow-2 {
+        left: 18%;
+        animation-duration: 16s;
+        animation-delay: 2s;
+    }
+
+    .snow-3 {
+        left: 30%;
+        animation-duration: 12s;
+        animation-delay: 4s;
+    }
+
+    .snow-4 {
+        left: 42%;
+        animation-duration: 18s;
+        animation-delay: 1s;
+    }
+
+    .snow-5 {
+        left: 55%;
+        animation-duration: 14s;
+        animation-delay: 3s;
+    }
+
+    .snow-6 {
+        left: 68%;
+        animation-duration: 17s;
+        animation-delay: 5s;
+    }
+
+    .snow-7 {
+        left: 78%;
+        animation-duration: 20s;
+        animation-delay: 7s;
+    }
+
+    .snow-8 {
+        left: 88%;
+        animation-duration: 11s;
+        animation-delay: 2.5s;
+    }
+
+    .snow-9 {
+        left: 12%;
+        animation-duration: 15s;
+        animation-delay: 6s;
+    }
+
+    .snow-10 {
+        left: 35%;
+        animation-duration: 19s;
+        animation-delay: 8s;
+    }
+
+    .snow-11 {
+        left: 63%;
+        animation-duration: 16s;
+        animation-delay: 3s;
+    }
+
+    .snow-12 {
+        left: 94%;
+        animation-duration: 14s;
+        animation-delay: 0.5s;
+    }
+
+
+    /* =========================================================
+               HERO
+               ========================================================= */
+
+    .hero-section {
+        min-height: calc(100vh - 90px);
+        padding-top: clamp(30px,5vw,80px);
+        padding-bottom: clamp(30px,5vw,80px);
+    }
+
+    .hero-badge {
+        background: rgba(26,115,232,0.10);
+        color: #1a73e8;
+        border: 1px solid rgba(26,115,232,0.12);
+        font-size: clamp(0.75rem, 0.8vw, 0.9rem);
+    }
+
+    .hero-title {
+        color: #172033;
+        letter-spacing: -0.04em;
+        font-size: clamp(2.6rem, 5vw, 4.8rem);
+    }
+
+    .hero-description {
+        max-width: 680px;
+        line-height: 1.8;
+        font-size: clamp(0.95rem, 1.3vw, 1.25rem);
+    }
+
+
+    /* =========================================================
+               HERO BUTTON
+               ========================================================= */
+
+    .hero-button {
+        background: linear-gradient( 135deg, #1a73e8, #0d47a1 );
+        border: none;
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+
+        .hero-button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 30px rgba(26,115,232,0.30) !important;
+        }
+
+    .explore-button {
+        border-color: #1a73e8;
+        color: #1a73e8;
+        transition: all 0.3s ease;
+    }
+
+        .explore-button:hover {
+            background: #1a73e8;
+            color: white;
+            transform: translateY(-3px);
+        }
+
+
+    /* =========================================================
+               HERO VISUAL
+               ========================================================= */
+
+    .hero-visual-column {
+        position: relative;
+    }
+
+    .hero-illustration {
+        position: relative;
+        width: 100%;
+        height: clamp(390px, 40vw, 520px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto;
+    }
+
+    .hero-glow {
+        position: absolute;
+        width: clamp(260px, 28vw, 380px);
+        height: clamp(260px, 28vw, 380px);
+        border-radius: 50%;
+        background: radial-gradient( circle, rgba(66,165,245,0.28), rgba(26,115,232,0.08), transparent 70% );
+        animation: glowPulse 4s ease-in-out infinite;
+    }
+
+    .ac-ring {
+        position: absolute;
+        border: 1px solid rgba(26,115,232,0.10);
+        border-radius: 50%;
+        animation: ringPulse 5s ease-in-out infinite;
+    }
+
+    .ring-1 {
+        width: 360px;
+        height: 360px;
+    }
+
+    .ring-2 {
+        width: 450px;
+        height: 450px;
+        opacity: 0.5;
+        animation-delay: 1s;
+    }
+
+
+    /* =========================================================
+               SMART AC DEVICE
+               ========================================================= */
+
+    .smart-ac-device {
+        position: relative;
+        z-index: 5;
+        width: clamp(260px, 27vw, 350px);
+        padding: 22px;
+        border-radius: 28px;
+        background: linear-gradient( 145deg, rgba(255,255,255,0.96), rgba(235,245,255,0.92) );
+        border: 1px solid rgba(255,255,255,0.95);
+        box-shadow: 0 25px 70px rgba(26,115,232,0.18), inset 0 1px 0 rgba(255,255,255,0.9);
+        backdrop-filter: blur(15px);
+        -webkit-backdrop-filter: blur(15px);
+        animation: acFloat 6s ease-in-out infinite;
+    }
+
+    .ac-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 20px;
+    }
+
+    .ac-brand-mini {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: #172033;
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
+
+        .ac-brand-mini i {
+            color: #1a73e8;
+        }
+
+    .ac-status {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        color: #20a67a;
+        font-size: 0.6rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+    }
+
+        .ac-status span {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #20c997;
+            box-shadow: 0 0 0 4px rgba(32,201,151,0.12);
+        }
+
+
+    /* =========================================================
+               DISPLAY
+               ========================================================= */
+
+    .ac-display {
+        padding: 20px;
+        text-align: center;
+        border-radius: 20px;
+        background: linear-gradient( 145deg, #eaf5ff, #dceeff );
+        border: 1px solid rgba(26,115,232,0.08);
+    }
+
+    .display-temperature {
+        color: #1a73e8;
+        font-size: clamp(3rem, 5vw, 4.5rem);
+        font-weight: 750;
+        letter-spacing: -0.06em;
+        line-height: 1;
+    }
+
+        .display-temperature sup {
+            position: relative;
+            top: -20px;
+            font-size: 1.3rem;
+            letter-spacing: normal;
+        }
+
+    .display-label {
+        margin-top: 8px;
+        color: #7b8798;
+        font-size: 0.58rem;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+    }
+
+
+    /* =========================================================
+               AC CONTROLS
+               ========================================================= */
+
+    .ac-controls {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 15px;
+    }
+
+    .ac-control {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 11px;
+        border-radius: 13px;
+        color: #526174;
+        background: rgba(255,255,255,0.75);
+        font-size: 0.58rem;
+        font-weight: 700;
+    }
+
+        .ac-control i {
+            color: #1a73e8;
+            font-size: 0.85rem;
+        }
+
+
+    /* =========================================================
+               AIRFLOW
+               ========================================================= */
+
+    .ac-airflow {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        margin-top: 18px;
+    }
+
+        .ac-airflow span {
+            width: 35px;
+            height: 4px;
+            border-radius: 20px;
+            background: linear-gradient( 90deg, transparent, #42a5f5 );
+            animation: airflow 1.5s ease-in-out infinite;
+        }
+
+            .ac-airflow span:nth-child(2) {
+                animation-delay: 0.15s;
+            }
+
+            .ac-airflow span:nth-child(3) {
+                animation-delay: 0.3s;
+            }
+
+            .ac-airflow span:nth-child(4) {
+                animation-delay: 0.45s;
+            }
+
+            .ac-airflow span:nth-child(5) {
+                animation-delay: 0.6s;
+            }
+
+
+    /* =========================================================
+               IOT CARD
+               ========================================================= */
+
+    .iot-card {
+        position: absolute;
+        z-index: 10;
+        top: 8%;
+        left: 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 15px;
+        border-radius: 16px;
+        background: rgba(255,255,255,0.92);
+        border: 1px solid rgba(255,255,255,0.95);
+        box-shadow: 0 15px 40px rgba(26,115,232,0.12);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        animation: float 5s ease-in-out infinite;
+    }
+
+    .iot-icon {
+        width: 38px;
+        height: 38px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 11px;
+        color: #1a73e8;
+        background: rgba(26,115,232,0.10);
+    }
+
+    .iot-card small {
+        display: block;
+        color: #7a8697;
+        font-size: 0.62rem;
+    }
+
+    .iot-card strong {
+        display: block;
+        color: #20a67a;
+        font-size: 0.78rem;
+    }
+
+    .iot-dot {
+        width: 8px;
+        height: 8px;
+        margin-left: 4px;
+        border-radius: 50%;
+        background: #20c997;
+        box-shadow: 0 0 0 4px rgba(32,201,151,0.10);
+    }
+
+
+    /* =========================================================
+               TEMPERATURE CARD
+               ========================================================= */
+
+    .temperature-card {
+        position: absolute;
+        z-index: 10;
+        top: 7%;
+        right: 0;
+        display: flex;
+        align-items: center;
+        gap: clamp(8px, 1vw, 14px);
+        padding: clamp(10px,1.2vw,16px) clamp(13px,1.6vw,22px);
+        border-radius: clamp(14px,1.5vw,20px);
+        background: rgba(255,255,255,0.90);
+        border: 1px solid rgba(255,255,255,0.9);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        box-shadow: 0 15px 40px rgba(26,115,232,0.13);
+        animation: float 5s ease-in-out infinite;
+    }
+
+    .temperature-icon {
+        width: clamp(35px,4vw,48px);
+        height: clamp(35px,4vw,48px);
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: clamp(10px,1vw,14px);
+        color: white;
+        background: linear-gradient( 135deg, #42a5f5, #1a73e8 );
+    }
+
+        .temperature-icon i {
+            font-size: clamp(0.9rem,1.5vw,1.2rem);
+        }
+
+    .temperature-card small,
+    .status-card small {
+        display: block;
+        color: #6c757d;
+        font-size: clamp(0.65rem,0.8vw,0.8rem);
+        line-height: 1.2;
+    }
+
+    .temperature-card strong {
+        display: block;
+        color: #1a73e8;
+        font-size: clamp(1rem,1.5vw,1.35rem);
+        line-height: 1.3;
+    }
+
+
+    /* =========================================================
+               STATUS CARD
+               ========================================================= */
+
+    .status-card {
+        position: absolute;
+        z-index: 10;
+        bottom: 13%;
+        left: 0;
+        display: flex;
+        align-items: center;
+        gap: clamp(8px,1vw,12px);
+        padding: clamp(10px,1.2vw,15px) clamp(13px,1.5vw,20px);
+        border-radius: clamp(14px,1.5vw,20px);
+        background: rgba(255,255,255,0.90);
+        border: 1px solid rgba(255,255,255,0.9);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        box-shadow: 0 15px 40px rgba(26,115,232,0.13);
+        animation: float 5s ease-in-out infinite;
+        animation-delay: 1s;
+    }
+
+    .status-icon {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .status-dot {
+        display: block;
+        width: clamp(9px,1vw,13px);
+        height: clamp(9px,1vw,13px);
+        border-radius: 50%;
+        background: #20c997;
+        box-shadow: 0 0 0 5px rgba(32,201,151,0.12);
+        animation: statusPulse 2s infinite;
+    }
+
+    .status-card strong {
+        display: block;
+        color: #20a67a;
+        font-size: clamp(0.8rem,1vw,1rem);
+        line-height: 1.3;
+    }
+
+
+    /* =========================================================
+               AIR QUALITY
+               ========================================================= */
+
+    .air-card {
+        position: absolute;
+        z-index: 10;
+        bottom: 3%;
+        right: 2%;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: clamp(9px,1vw,13px) clamp(12px,1.3vw,18px);
+        border-radius: clamp(12px,1.2vw,17px);
+        color: #1a73e8;
+        background: rgba(255,255,255,0.88);
+        border: 1px solid rgba(255,255,255,0.9);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        box-shadow: 0 12px 35px rgba(26,115,232,0.12);
+        animation: float 6s ease-in-out infinite;
+        animation-delay: 2s;
+    }
+
+    .air-icon {
+        width: clamp(30px,3vw,40px);
+        height: clamp(30px,3vw,40px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+        color: #1a73e8;
+        background: rgba(26,115,232,0.10);
+    }
+
+        .air-icon i {
+            font-size: clamp(0.8rem,1.2vw,1.1rem);
+        }
+
+    .air-content small {
+        display: block;
+        color: #6c757d;
+        font-size: clamp(0.6rem,0.75vw,0.75rem);
+        line-height: 1.2;
+    }
+
+    .air-content strong {
+        display: block;
+        color: #20a67a;
+        font-size: clamp(0.75rem,0.9vw,0.9rem);
+        line-height: 1.3;
+    }
+
+
+    .access-assurance {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: .65rem;
+        margin-top: 2rem;
+    }
+
+    .access-assurance > div {
+        display: flex;
+        align-items: flex-start;
+        gap: .6rem;
+        padding: .85rem;
+        border: 1px solid rgba(26, 115, 232, .12);
+        border-radius: .9rem;
+        background: rgba(255, 255, 255, .7);
+        box-shadow: 0 10px 25px rgba(26, 115, 232, .05);
+    }
+
+    .access-assurance > div > i {
+        display: grid;
+        width: 2rem;
+        height: 2rem;
+        flex: 0 0 2rem;
+        place-items: center;
+        color: #1a73e8;
+        border-radius: .6rem;
+        background: rgba(26, 115, 232, .1);
+        font-size: .8rem;
+    }
+
+    .access-assurance strong,
+    .access-assurance small {
+        display: block;
+    }
+
+    .access-assurance strong {
+        color: #283950;
+        font-size: .76rem;
+    }
+
+    .access-assurance small {
+        margin-top: .18rem;
+        color: #718096;
+        font-size: .66rem;
+        line-height: 1.4;
+    }
+
+
+    /* =========================================================
+               SECTION LABEL
+               ========================================================= */
+
+    .section-label {
+        display: inline-block;
+        margin-bottom: 10px;
+        color: #1a73e8;
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.15em;
+    }
+
+    .section-description {
+        max-width: 650px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+
+    /* =========================================================
+               FEATURES
+               ========================================================= */
+
+    .features-section {
+        padding-top: 100px !important;
+        padding-bottom: 100px !important;
+    }
+
+    .feature-card {
+        position: relative;
+        background: rgba(255,255,255,0.62);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border-radius: 1.5rem;
+        border: 1px solid rgba(255,255,255,0.8);
+        transition: all 0.3s ease;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.05);
+        overflow: hidden;
+    }
+
+        .feature-card::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 4px;
+            background: linear-gradient( 90deg, #1a73e8, #42a5f5 );
+            transform: scaleX(0);
+            transform-origin: left;
+            transition: transform 0.3s ease;
+        }
+
+        .feature-card:hover::before {
+            transform: scaleX(1);
+        }
+
+        .feature-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 16px 48px rgba(26,115,232,0.15);
+            background: rgba(255,255,255,0.90);
+        }
+
+    .feature-icon {
+        width: 75px;
+        height: 75px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto 1.5rem;
+        border-radius: 22px;
+        font-size: 2rem;
+        color: #1a73e8;
+        background: rgba(26,115,232,0.10);
+        transition: all 0.3s ease;
+    }
+
+    .feature-card:hover .feature-icon {
+        color: white;
+        background: linear-gradient( 135deg, #1a73e8, #42a5f5 );
+        transform: rotate(-5deg) scale(1.08);
+    }
+
+    .feature-card h5 {
+        color: #1a1a2e;
+    }
+
+    .feature-card p {
+        font-size: 0.95rem;
+        line-height: 1.7;
+    }
+
+
+    /* =========================================================
+               ABOUT
+               ========================================================= */
+
+    .about-section {
+        padding-top: 100px !important;
+        padding-bottom: 100px !important;
+    }
+
+    .about-card {
+        padding: 40px;
+        background: rgba(255,255,255,0.70);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border-radius: 25px;
+        border: 1px solid rgba(255,255,255,0.9);
+        box-shadow: 0 15px 45px rgba(26,115,232,0.08);
+    }
+
+    .about-icon {
+        width: 60px;
+        height: 60px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 20px;
+        color: white;
+        font-size: 1.5rem;
+        border-radius: 18px;
+        background: linear-gradient( 135deg, #1a73e8, #42a5f5 );
+    }
+
+    .about-card p {
+        line-height: 1.8;
+    }
+
+    .about-points {
+        margin-top: 25px;
+    }
+
+        .about-points div {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 13px;
+            color: #495057;
+            font-weight: 500;
+        }
+
+        .about-points i {
+            color: #1a73e8;
+            font-size: 1.1rem;
+        }
+
+
+    /* =========================================================
+               ABOUT VISUAL
+               ========================================================= */
+
+    .about-visual {
+        position: relative;
+        min-height: 400px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 30px;
+        background: radial-gradient( circle at center, rgba(66,165,245,0.18), transparent 60% );
+    }
+
+    .about-main-circle {
+        width: clamp(170px,18vw,220px);
+        height: clamp(170px,18vw,220px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        color: #1a73e8;
+        font-size: clamp(4rem,6vw,6rem);
+        background: rgba(255,255,255,0.75);
+        box-shadow: 0 20px 60px rgba(26,115,232,0.15);
+        animation: float 5s ease-in-out infinite;
+    }
+
+    .floating-icon {
+        position: absolute;
+        width: clamp(50px,5vw,65px);
+        height: clamp(50px,5vw,65px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 20px;
+        color: #1a73e8;
+        font-size: clamp(1rem,1.5vw,1.4rem);
+        background: rgba(255,255,255,0.85);
+        box-shadow: 0 10px 30px rgba(26,115,232,0.15);
+        animation: float 4s ease-in-out infinite;
+    }
+
+    .icon-1 {
+        top: 25px;
+        left: 15%;
+    }
+
+    .icon-2 {
+        right: 10%;
+        top: 35%;
+        animation-delay: 1s;
+    }
+
+    .icon-3 {
+        bottom: 30px;
+        left: 22%;
+        animation-delay: 2s;
+    }
+
+    .icon-4 {
+        right: 22%;
+        bottom: 12%;
+        animation-delay: 1.5s;
+    }
+
+    .connection-line {
+        position: absolute;
+        height: 2px;
+        background: rgba(26,115,232,0.12);
+        transform-origin: left center;
+    }
+
+    .line-1 {
+        width: 100px;
+        top: 100px;
+        left: 27%;
+        transform: rotate(25deg);
+    }
+
+    .line-2 {
+        width: 100px;
+        top: 45%;
+        right: 25%;
+        transform: rotate(-15deg);
+    }
+
+    .line-3 {
+        width: 100px;
+        bottom: 100px;
+        left: 32%;
+        transform: rotate(-20deg);
+    }
+
+
+    /* =========================================================
+               FOOTER
+               ========================================================= */
+
+    .footer {
+        border-top: 1px solid rgba(26,115,232,0.08);
+    }
+
+    .footer-logo {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        color: #1a1a2e;
+    }
+
+        .footer-logo i {
+            color: #1a73e8;
+        }
+
+        .footer-logo span {
+            color: #1a73e8;
+        }
+
+
+    /* =========================================================
+               ANIMATIONS
+               ========================================================= */
+
+    @@keyframes fall {
+
+        0% {
+            transform: translateY(-10vh) rotate(0deg);
+            opacity: 0;
+        }
+
+        10% {
+            opacity: 0.8;
+        }
+
+        90% {
+            opacity: 0.5;
+        }
+
+        100% {
+            transform: translateY(110vh) rotate(720deg);
+            opacity: 0;
+        }
+    }
+
+
+    @@keyframes float {
+
+        0%, 100% {
+            transform: translateY(0);
+        }
+
+        50% {
+            transform: translateY(-12px);
+        }
+    }
+
+
+    @@keyframes acFloat {
+
+        0%, 100% {
+            transform: translateY(0);
+        }
+
+        50% {
+            transform: translateY(-10px);
+        }
+    }
+
+
+    @@keyframes glowPulse {
+
+        0%, 100% {
+            transform: scale(1);
+            opacity: 0.7;
+        }
+
+        50% {
+            transform: scale(1.12);
+            opacity: 1;
+        }
+    }
+
+
+    @@keyframes ringPulse {
+
+        0%, 100% {
+            transform: scale(1);
+            opacity: 0.5;
+        }
+
+        50% {
+            transform: scale(1.04);
+            opacity: 0.9;
+        }
+    }
+
+
+    @@keyframes airflow {
+
+        0%, 100% {
+            opacity: 0.25;
+            transform: translateX(-5px);
+        }
+
+        50% {
+            opacity: 1;
+            transform: translateX(5px);
+        }
+    }
+
+
+    @@keyframes statusPulse {
+
+        0% {
+            box-shadow: 0 0 0 0 rgba(32,201,151,0.35);
+        }
+
+        70% {
+            box-shadow: 0 0 0 8px rgba(32,201,151,0);
+        }
+
+        100% {
+            box-shadow: 0 0 0 0 rgba(32,201,151,0);
+        }
+    }
+
+
+    @@keyframes brandPulse {
+
+        0%, 100% {
+            box-shadow: 0 6px 18px rgba(26,115,232,0.25);
+        }
+
+        50% {
+            box-shadow: 0 8px 25px rgba(26,115,232,0.40);
+        }
+    }
+
+
+    @@keyframes navDotIn {
+
+        from {
+            opacity: 0;
+            transform: translateX(-50%) scale(0);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateX(-50%) scale(1);
+        }
+    }
+
+
+    @@keyframes mobileMenuIn {
+
+        from {
+            opacity: 0;
+            transform: translateY(-8px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+
+    /* =========================================================
+               LARGE LAPTOPS
+               ========================================================= */
+
+    @@media (min-width: 1200px) {
+
+        .hero-illustration {
+            height: 500px;
+        }
+
+        .smart-ac-device {
+            width: 350px;
+        }
+
+        .ring-1 {
+            width: 360px;
+            height: 360px;
+        }
+
+        .ring-2 {
+            width: 450px;
+            height: 450px;
+        }
+    }
+
+
+    /* =========================================================
+               TABLET / SMALL LAPTOP
+               ========================================================= */
+
+    @@media (max-width: 1199px) {
+
+        .hero-illustration {
+            height: 430px;
+        }
+
+        .smart-ac-device {
+            width: 310px;
+        }
+
+        .ring-1 {
+            width: 320px;
+            height: 320px;
+        }
+
+        .ring-2 {
+            width: 400px;
+            height: 400px;
+        }
+    }
+
+
+    /* =========================================================
+               TABLET
+               ========================================================= */
+
+    @@media (max-width: 991px) {
+
+        .hero-section {
+            text-align: center;
+            padding-top: 50px;
+        }
+
+        .hero-description {
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .hero-visual-column {
+            margin-top: 30px;
+        }
+
+        .hero-illustration {
+            height: 410px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .smart-ac-device {
+            width: 310px;
+        }
+
+        .iot-card {
+            left: 5%;
+        }
+
+        .temperature-card {
+            right: 5%;
+        }
+
+        .status-card {
+            left: 5%;
+        }
+
+        .air-card {
+            right: 7%;
+        }
+
+        .features-section,
+        .about-section {
+            padding-top: 80px !important;
+            padding-bottom: 80px !important;
+        }
+
+        .about-card {
+            padding: 30px;
+        }
+    }
+
+
+    /* =========================================================
+               MOBILE
+               ========================================================= */
+
+    @@media (max-width: 767px) {
+
+        .landing-wrapper {
+            padding-top: 75px;
+        }
+
+        .smart-navbar {
+            padding: 10px 12px;
+        }
+
+        .navbar-content {
+            padding: 9px 11px 9px 13px;
+            border-radius: 17px;
+        }
+
+        .smart-nav-links {
+            display: none;
+        }
+
+        .mobile-menu-button {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .brand-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+        }
+
+        .brand-text {
+            font-size: 1.08rem;
+        }
+
+        .hero-section {
+            min-height: auto !important;
+            padding-top: 60px;
+            padding-bottom: 60px;
+        }
+
+        .hero-title {
+            font-size: clamp(2.4rem,10vw,3.2rem);
+        }
+
+        .hero-description {
+            font-size: 1rem;
+            line-height: 1.7;
+        }
+
+        .hero-button,
+        .explore-button {
+            padding: 0.75rem 1.5rem !important;
+            font-size: 1rem;
+        }
+
+        .hero-illustration {
+            height: 350px;
+            max-width: 520px;
+        }
+
+        .smart-ac-device {
+            width: 270px;
+            padding: 17px;
+            border-radius: 23px;
+        }
+
+        .ac-ring.ring-1 {
+            width: 290px;
+            height: 290px;
+        }
+
+        .ac-ring.ring-2 {
+            width: 350px;
+            height: 350px;
+        }
+
+        .iot-card {
+            top: 3%;
+            left: 0;
+            transform: scale(0.85);
+            transform-origin: left top;
+        }
+
+        .temperature-card {
+            top: 3%;
+            right: 0;
+            transform: scale(0.85);
+            transform-origin: right top;
+        }
+
+        .status-card {
+            bottom: 12%;
+            left: 0;
+            transform: scale(0.85);
+            transform-origin: left bottom;
+        }
+
+        .air-card {
+            bottom: 0;
+            right: 0;
+            transform: scale(0.85);
+            transform-origin: right bottom;
+        }
+
+        .features-section,
+        .about-section {
+            padding-top: 70px !important;
+            padding-bottom: 70px !important;
+        }
+
+        .about-visual {
+            min-height: 320px;
+        }
+
+        .about-main-circle {
+            width: 170px;
+            height: 170px;
+            font-size: 4.5rem;
+        }
+
+        .floating-icon {
+            width: 52px;
+            height: 52px;
+            font-size: 1.1rem;
+        }
+    }
+
+
+    /* =========================================================
+               SMALL PHONES
+               ========================================================= */
+
+    @@media (max-width: 576px) {
+
+        .brand-text {
+            display: none;
+        }
+
+        .hero-section {
+            padding-top: 50px;
+        }
+
+        .hero-title {
+            font-size: 2.5rem;
+        }
+
+        .hero-description {
+            font-size: 0.95rem;
+        }
+
+        .hero-button,
+        .explore-button {
+            padding: 0.7rem 1.2rem !important;
+            font-size: 0.95rem;
+        }
+
+        .hero-illustration {
+            height: 310px;
+            max-width: 430px;
+        }
+
+        .smart-ac-device {
+            width: 230px;
+            padding: 14px;
+        }
+
+        .display-temperature {
+            font-size: 3rem;
+        }
+
+        .ac-display {
+            padding: 15px;
+        }
+
+        .ac-control {
+            padding: 8px;
+            font-size: 0.5rem;
+        }
+
+        .iot-card,
+        .temperature-card,
+        .status-card,
+        .air-card {
+            transform: scale(0.72);
+        }
+
+        .ring-1 {
+            width: 250px !important;
+            height: 250px !important;
+        }
+
+        .ring-2 {
+            width: 300px !important;
+            height: 300px !important;
+        }
+
+        .stat-number {
+            font-size: 1.7rem;
+        }
+
+        .stat-label {
+            font-size: 0.65rem;
+        }
+
+        .feature-card {
+            padding: 1.5rem !important;
+        }
+
+        .about-card {
+            padding: 25px;
+        }
+
+        .snowflake {
+            font-size: clamp(1rem,5vw,1.8rem);
+        }
+    }
+
+
+    /* =========================================================
+               VERY SMALL PHONES
+               ========================================================= */
+
+    @@media (max-width: 420px) {
+
+        .navbar-content {
+            padding: 8px 10px;
+        }
+
+        .hero-title {
+            font-size: 2.2rem;
+        }
+
+        .hero-illustration {
+            height: 290px;
+        }
+
+        .smart-ac-device {
+            width: 215px;
+            padding: 12px;
+        }
+
+        .display-temperature {
+            font-size: 2.7rem;
+        }
+
+            .display-temperature sup {
+                top: -12px;
+                font-size: 1rem;
+            }
+
+        .ac-controls {
+            gap: 6px;
+        }
+
+        .ac-control {
+            gap: 5px;
+            padding: 7px;
+            font-size: 0.45rem;
+        }
+
+        .iot-card,
+        .temperature-card,
+        .status-card,
+        .air-card {
+            transform: scale(0.65);
+        }
+
+        .ring-1 {
+            width: 230px !important;
+            height: 230px !important;
+        }
+
+        .ring-2 {
+            width: 280px !important;
+            height: 280px !important;
+        }
+    }
+
+
+    /* =========================================================
+               ACCESSIBILITY
+               ========================================================= */
+
+    @@media (prefers-reduced-motion: reduce) {
+
+        *,
+        *::before,
+        *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            scroll-behavior: auto !important;
+            transition-duration: 0.01ms !important;
+        }
+    }
+
+    @@media (max-width: 767px) {
+        .access-assurance {
+            grid-template-columns: 1fr;
+        }
+    }
+</style>
+
+
+<!-- =========================================================
+     JAVASCRIPT
+     ========================================================= -->
+
+<script>
+
+    /* =========================================================
+       MOBILE MENU
+       ========================================================= */
+
+    function toggleSmartMenu() {
+
+        const menu =
+            document.getElementById(
+                "smartMobileMenu"
+            );
+
+        const button =
+            document.querySelector(
+                ".mobile-menu-button"
+            );
+
+        const icon =
+            document.querySelector(
+                ".mobile-menu-button i"
+            );
+
+
+        if (!menu) {
+            return;
+        }
+
+
+        const isOpen =
+            menu.classList.toggle(
+                "show"
+            );
+
+
+        button?.setAttribute(
+            "aria-expanded",
+            isOpen ? "true" : "false"
+        );
+
+
+        if (isOpen) {
+
+            icon?.classList.remove(
+                "fa-bars"
+            );
+
+            icon?.classList.add(
+                "fa-xmark"
+            );
+
+        }
+        else {
+
+            icon?.classList.remove(
+                "fa-xmark"
+            );
+
+            icon?.classList.add(
+                "fa-bars"
+            );
+
+        }
+
+    }
+
+
+    /* =========================================================
+       CLOSE MOBILE MENU
+       ========================================================= */
+
+    function closeSmartMenu() {
+
+        const menu =
+            document.getElementById(
+                "smartMobileMenu"
+            );
+
+        const button =
+            document.querySelector(
+                ".mobile-menu-button"
+            );
+
+        const icon =
+            document.querySelector(
+                ".mobile-menu-button i"
+            );
+
+
+        menu?.classList.remove(
+            "show"
+        );
+
+
+        button?.setAttribute(
+            "aria-expanded",
+            "false"
+        );
+
+
+        icon?.classList.remove(
+            "fa-xmark"
+        );
+
+        icon?.classList.add(
+            "fa-bars"
+        );
+
+    }
+
+
+    /* =========================================================
+       SET ACTIVE NAVIGATION
+       ========================================================= */
+
+    function setSmartActiveNav(targetHref) {
+
+        const desktopLinks =
+            document.querySelectorAll(
+                ".smart-nav-link"
+            );
+
+
+        const mobileLinks =
+            document.querySelectorAll(
+                ".mobile-nav-link"
+            );
+
+
+        desktopLinks.forEach(
+            link => {
+
+                link.classList.remove(
+                    "active"
+                );
+
+
+                if (
+                    link.getAttribute(
+                        "href"
+                    ) === targetHref
+                ) {
+
+                    link.classList.add(
+                        "active"
+                    );
+
+                }
+
+            }
+        );
+
+
+        mobileLinks.forEach(
+            link => {
+
+                link.classList.remove(
+                    "active"
+                );
+
+
+                if (
+                    link.getAttribute(
+                        "href"
+                    ) === targetHref
+                ) {
+
+                    link.classList.add(
+                        "active"
+                    );
+
+                }
+
+            }
+        );
+
+    }
+
+
+    /* =========================================================
+       NAVIGATION INITIALIZATION
+       ========================================================= */
+
+    function initializeSmartNavigation() {
+
+        const desktopLinks =
+            document.querySelectorAll(
+                ".smart-nav-link"
+            );
+
+
+        const mobileLinks =
+            document.querySelectorAll(
+                ".mobile-nav-link"
+            );
+
+
+        /* =====================================================
+           DESKTOP CLICK
+           ===================================================== */
+
+        desktopLinks.forEach(
+            link => {
+
+                link.addEventListener(
+                    "click",
+                    function() {
+
+                        const href =
+                            this.getAttribute(
+                                "href"
+                            );
+
+
+                        if (
+                            href === "/" ||
+                            href === "#features" ||
+                            href === "#about"
+                        ) {
+
+                            setSmartActiveNav(
+                                href
+                            );
+
+                        }
+
+                    }
+                );
+
+            }
+        );
+
+
+        /* =====================================================
+           MOBILE CLICK
+           ===================================================== */
+
+        mobileLinks.forEach(
+            link => {
+
+                link.addEventListener(
+                    "click",
+                    function() {
+
+                        const href =
+                            this.getAttribute(
+                                "href"
+                            );
+
+
+                        if (
+                            href === "/" ||
+                            href === "#features" ||
+                            href === "#about"
+                        ) {
+
+                            setSmartActiveNav(
+                                href
+                            );
+
+                        }
+
+
+                        closeSmartMenu();
+
+                    }
+                );
+
+            }
+        );
+
+
+        /* =====================================================
+           SMOOTH SCROLL
+           ===================================================== */
+
+        document
+            .querySelectorAll(
+                'a[href^="#"]'
+            )
+            .forEach(
+                link => {
+
+                    link.addEventListener(
+                        "click",
+                        function(e) {
+
+                            const targetId =
+                                this.getAttribute(
+                                    "href"
+                                );
+
+
+                            if (
+                                !targetId ||
+                                targetId === "#"
+                            ) {
+
+                                return;
+
+                            }
+
+
+                            const target =
+                                document.querySelector(
+                                    targetId
+                                );
+
+
+                            if (!target) {
+
+                                return;
+
+                            }
+
+
+                            e.preventDefault();
+
+
+                            /* Immediately highlight */
+
+                            setSmartActiveNav(
+                                targetId
+                            );
+
+
+                            const navbar =
+                                document.querySelector(
+                                    ".smart-navbar"
+                                );
+
+
+                            const navbarHeight =
+                                navbar?.offsetHeight ||
+                                0;
+
+
+                            const targetPosition =
+                                target
+                                    .getBoundingClientRect()
+                                    .top
+                                +
+                                window.scrollY
+                                -
+                                navbarHeight
+                                -
+                                20;
+
+
+                            window.scrollTo({
+
+                                top:
+                                    targetPosition,
+
+                                behavior:
+                                    "smooth"
+
+                            });
+
+                        }
+                    );
+
+                }
+            );
+
+
+        /* =====================================================
+           SCROLL ACTIVE NAVIGATION
+           ===================================================== */
+
+        const sections =
+            document.querySelectorAll(
+                "section[id]"
+            );
+
+
+        function updateActiveNavigation() {
+
+            const scrollPosition =
+                window.scrollY;
+
+
+            /*
+             * TOP OF PAGE = HOME
+             */
+
+            if (
+                scrollPosition < 300
+            ) {
+
+                setSmartActiveNav(
+                    "/"
+                );
+
+                return;
+
+            }
+
+
+            let currentSection =
+                null;
+
+
+            sections.forEach(
+                section => {
+
+                    const sectionTop =
+                        section.offsetTop -
+                        180;
+
+
+                    const sectionBottom =
+                        sectionTop +
+                        section.offsetHeight;
+
+
+                    if (
+                        scrollPosition >=
+                        sectionTop
+                        &&
+                        scrollPosition <
+                        sectionBottom
+                    ) {
+
+                        currentSection =
+                            section.id;
+
+                    }
+
+                }
+            );
+
+
+            if (
+                currentSection
+            ) {
+
+                setSmartActiveNav(
+                    "#" +
+                    currentSection
+                );
+
+            }
+
+        }
+
+
+        window.addEventListener(
+            "scroll",
+            updateActiveNavigation,
+            {
+                passive: true
+            }
+        );
+
+
+        /* Initial state */
+
+        updateActiveNavigation();
+
+    }
+
+
+    /* =========================================================
+       ANIMATED COUNTERS
+       ========================================================= */
+
+    function initializeCounters() {
+
+        const counters =
+            document.querySelectorAll(
+                ".stat-number"
+            );
+
+
+        counters.forEach(
+            counter => {
+
+                const target =
+                    parseInt(
+                        counter.getAttribute(
+                            "data-count"
+                        )
+                    );
+
+
+                const duration =
+                    2000;
+
+
+                let started =
+                    false;
+
+
+                const updateCounter =
+                    () => {
+
+                        if (started) {
+
+                            return;
+
+                        }
+
+
+                        started =
+                            true;
+
+
+                        const startTime =
+                            performance.now();
+
+
+                        const animate =
+                            currentTime => {
+
+                                const elapsed =
+                                    currentTime -
+                                    startTime;
+
+
+                                const progress =
+                                    Math.min(
+                                        elapsed /
+                                        duration,
+                                        1
+                                    );
+
+
+                                const eased =
+                                    1 -
+                                    Math.pow(
+                                        1 - progress,
+                                        3
+                                    );
+
+
+                                const current =
+                                    Math.floor(
+                                        eased *
+                                        target
+                                    );
+
+
+                                counter.innerText =
+                                    current;
+
+
+                                if (
+                                    progress <
+                                    1
+                                ) {
+
+                                    requestAnimationFrame(
+                                        animate
+                                    );
+
+                                }
+                                else {
+
+                                    counter.innerText =
+                                        target;
+
+                                }
+
+                            };
+
+
+                        requestAnimationFrame(
+                            animate
+                        );
+
+                    };
+
+
+                const observer =
+                    new IntersectionObserver(
+                        entries => {
+
+                            entries.forEach(
+                                entry => {
+
+                                    if (
+                                        entry.isIntersecting
+                                    ) {
+
+                                        updateCounter();
+
+
+                                        observer.unobserve(
+                                            entry.target
+                                        );
+
+                                    }
+
+                                }
+                            );
+
+                        },
+                        {
+                            threshold: 0.5
+                        }
+                    );
+
+
+                observer.observe(
+                    counter
+                );
+
+            }
+        );
+
+    }
+
+
+    /* =========================================================
+       INITIALIZE PAGE
+       ========================================================= */
+
+    function initializeSmartClassPage() {
+
+        initializeSmartNavigation();
+
+        initializeCounters();
+
+    }
+
+
+    /* =========================================================
+       START
+       ========================================================= */
+
+    if (
+        document.readyState ===
+        "loading"
+    ) {
+
+        document.addEventListener(
+            "DOMContentLoaded",
+            initializeSmartClassPage
+        );
+
+    }
+    else {
+
+        initializeSmartClassPage();
+
+    }
+
+</script>

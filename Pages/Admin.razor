@@ -1,0 +1,272 @@
+@page "/admin"
+@inject NavigationManager Navigation
+@inject IAuthService AuthService
+@inject CustomAuthStateProvider AuthStateProvider
+@attribute [Authorize(Roles = "Admin")]
+
+<PageTitle>Admin Dashboard | SmartClass AC</PageTitle>
+
+<div class="dashboard-page">
+    <aside class='dashboard-sidebar @(sidebarOpen ? "is-open" : string.Empty)'>
+        <a class="dashboard-brand" href="/"><span class="brand-mark"><i class="fas fa-snowflake"></i></span><span>SmartClass <strong>AC</strong></span></a>
+        <p class="workspace-label">ADMINISTRATOR WORKSPACE</p>
+        <nav class="dashboard-nav" aria-label="Admin dashboard">
+            <button class='@NavClass("overview")' @onclick='() => Navigate("overview")'><i class="fas fa-grid-2"></i>Overview</button>
+            <p class="nav-group-label">MANAGEMENT</p>
+            <button class='@NavClass("teachers")' @onclick='() => Navigate("teachers")'><i class="fas fa-users"></i>Teachers</button>
+            <button class='@NavClass("classrooms")' @onclick='() => Navigate("classrooms")'><i class="fas fa-door-open"></i>Classrooms</button>
+            <button class='@NavClass("schedules")' @onclick='() => Navigate("schedules")'><i class="fas fa-calendar-days"></i>Schedules</button>
+            <p class="nav-group-label">OPERATIONS</p>
+            <button class='@NavClass("temperature")' @onclick='() => Navigate("temperature")'><i class="fas fa-temperature-half"></i>AC control</button>
+            <button class='@NavClass("attendance")' @onclick='() => Navigate("attendance")'><i class="fas fa-clipboard-check"></i>Attendance</button>
+            <button class='@NavClass("requests")' @onclick='() => Navigate("requests")'><i class="fas fa-inbox"></i>Requests</button>
+            <button class='@NavClass("support")' @onclick='() => Navigate("support")'><i class="fas fa-life-ring"></i>Support tickets</button>
+            <p class="nav-group-label">SYSTEM</p>
+            <button class='@NavClass("settings")' @onclick='() => Navigate("settings")'><i class="fas fa-gear"></i>System settings</button>
+        </nav>
+        <button class="sidebar-logout" @onclick="Logout"><i class="fas fa-arrow-right-from-bracket"></i>Log out</button>
+    </aside>
+    @if (sidebarOpen) { <button class="sidebar-scrim" aria-label="Close navigation" @onclick="ToggleSidebar"></button> }
+
+    <main class="dashboard-main">
+        <header class="dashboard-topbar"><button class="icon-button mobile-nav-toggle" aria-label="Open navigation" @onclick="ToggleSidebar"><i class="fas fa-bars"></i></button><div class="topbar-title"><span class="eyebrow">SMARTCLASS AC / ADMIN</span><h1>@Title</h1></div><div class="topbar-actions"><span class="system-status"><i></i>System online</span><button class="profile-chip" @onclick='() => Navigate("settings")'><span>@AdminInitials</span><strong>@AdminName</strong><i class="fas fa-chevron-down"></i></button></div></header>
+        <section class="dashboard-content">
+            @if (!string.IsNullOrEmpty(message)) { <div class="dashboard-toast" role="status"><i class="fas fa-circle-check"></i>@message<button @onclick='() => message = string.Empty' aria-label="Dismiss"><i class="fas fa-xmark"></i></button></div> }
+            @if (isLoading) { <article class="panel"><p class="form-help">Loading Supabase records…</p></article> }
+            else if (active == "overview")
+            {
+                <div class="page-intro split-intro"><div><p>ADMIN DASHBOARD</p><h2>Welcome, @AdminName.</h2><span>Teachers, classrooms, schedules, requests, logs, and tickets are stored in Supabase PostgreSQL.</span></div><button class="primary-button" @onclick='() => Navigate("schedules")'><i class="fas fa-calendar-days"></i>Manage schedules</button></div>
+                <div class="metric-grid"><article class="metric-card blue"><span class="metric-icon"><i class="fas fa-person-chalkboard"></i></span><div><small>TEACHER ACCOUNTS</small><strong>@teachers.Count</strong><p>Biometric teacher records</p></div></article><article class="metric-card violet"><span class="metric-icon"><i class="fas fa-door-open"></i></span><div><small>CLASSROOMS</small><strong>@classrooms.Count</strong><p>Connected room records</p></div></article><article class="metric-card teal"><span class="metric-icon"><i class="fas fa-calendar-days"></i></span><div><small>SCHEDULES TODAY</small><strong>@schedules.Count(schedule => schedule.ScheduleDate == Today)</strong><p>Conflict protected</p></div></article><article class="metric-card amber"><span class="metric-icon"><i class="fas fa-inbox"></i></span><div><small>PENDING REQUESTS</small><strong>@requests.Count(request => request.Status == "Pending")</strong><p>Ready for review</p></div></article></div>
+                <div class="dashboard-grid overview-grid"><article class="panel live-panel"><div class="panel-heading"><div><span class="eyebrow">LIVE ENVIRONMENT</span><h3>Classroom climate</h3></div><button class="text-button" @onclick='() => Navigate("temperature")'>View all <i class="fas fa-arrow-right"></i></button></div><div class="room-climate-list">@if (classrooms.Count == 0) { <p class="form-help">Add classrooms before creating schedules.</p> } @foreach (var room in classrooms.Take(4)) { <div class="room-climate-row"><span class="room-avatar"><i class="fas fa-building"></i></span><div><strong>@room.Name</strong><small>@room.Capacity seats</small></div><span class="mini-temp"><i class="fas fa-temperature-half"></i>@(room.CurrentTemperature ?? room.TargetTemperature)°C</span><span class="room-status online">@room.AcStatus</span></div> }</div></article><article class="panel attendance-panel"><span class="eyebrow">AUTOMATED LOGS</span><h3>Today's attendance</h3><div class="attendance-ring"><div><strong>@attendance.Count(item => DateOnly.FromDateTime(item.TimeInUtc.LocalDateTime) == Today)</strong><small>time-ins</small></div></div><p class="form-help">Class start and end operations write the attendance log.</p></article><article class="panel request-panel"><div class="panel-heading"><div><span class="eyebrow">ACTION CENTRE</span><h3>Requests needing review</h3></div><button class="text-button" @onclick='() => Navigate("requests")'>Open inbox <i class="fas fa-arrow-right"></i></button></div>@foreach (var request in requests.Where(item => item.Status == "Pending").Take(3)) { <div class="request-summary"><span class="request-type-icon"><i class="fas fa-inbox"></i></span><div><strong>@request.TeacherDisplayName</strong><small>@request.RequestType · @request.RequestDate.ToString("MMM d")</small></div></div> }</article></div>
+            }
+            else if (active == "teachers")
+            {
+                <div class="page-intro"><p>TEACHER MANAGEMENT</p><h2>Teacher records & biometric enrollment</h2><span>Create a teacher account and save ten unique fingerprint-template IDs.</span></div>
+                <article class="panel enrollment-panel"><div class="form-grid"><label>Teacher name<input @bind="newTeacherName" /></label><label>Username<input @bind="newTeacherUsername" /></label><label>School email<input @bind="newTeacherEmail" type="email" /></label><label>Login password<input @bind="newTeacherPassword" type="password" /></label></div><div class="form-actions"><button class="primary-button" @onclick="SaveTeacher">Save teacher & templates</button></div></article>
+                <article class="panel"><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Teacher</th><th>Email</th><th>Fingerprints</th><th>Schedule today</th><th>Actions</th></tr></thead><tbody>@if (teachers.Count == 0) { <tr><td colspan="5">No teacher accounts have been created.</td></tr> } @foreach (var teacher in teachers) { <tr><td><strong>@teacher.DisplayName</strong><small>@teacher.Username</small></td><td>@teacher.Email</td><td>@teacher.FingerprintTemplateCount / 10</td><td>@ScheduleTodayFor(teacher.Id)</td><td><button class="danger-outline-button" @onclick='() => OpenDelete("teacher", teacher.Id, teacher.DisplayName)'>Remove</button></td></tr> }</tbody></table></div></article>
+            }
+            else if (active == "classrooms")
+            {
+                <div class="page-intro"><p>CLASSROOM MANAGEMENT</p><h2>Rooms, capacity & IoT availability</h2><span>Classrooms must exist before an administrator can assign a teacher schedule.</span></div>
+                <article class="panel"><span class="eyebrow">@(editingClassroomId == 0 ? "ADD CLASSROOM" : "EDIT CLASSROOM")</span><div class="form-grid"><label>Room name<input @bind="classroomName" maxlength="100" placeholder="Room 301" /></label><label>Capacity<input type="number" @bind="classroomCapacity" min="1" max="1000" /></label><label>Target temperature<input type="number" @bind="classroomTargetTemperature" min="16" max="30" /></label></div><div class="form-actions"><button class="secondary-button" @onclick="ClearClassroomForm">Cancel</button><button class="primary-button" @onclick="SaveClassroom">@(editingClassroomId == 0 ? "Add classroom" : "Save classroom")</button></div></article>
+                <div class="room-card-grid">@if (classrooms.Count == 0) { <article class="panel"><p class="form-help">No classrooms have been created yet.</p></article> } @foreach (var room in classrooms) { <article class="room-card"><div class="room-card-top"><span class="room-icon"><i class="fas fa-door-open"></i></span><span class="status-badge active">@room.AcStatus</span></div><h3>@room.Name</h3><p><i class="fas fa-users"></i>Capacity @room.Capacity</p><div class="room-temp-line"><span>Target temperature</span><strong>@room.TargetTemperature°C</strong></div><button class="card-link" @onclick='() => EditClassroom(room)'>Edit room <i class="fas fa-arrow-right"></i></button><button class="danger-outline-button" @onclick='() => OpenDelete("classroom", room.Id, room.Name)'>Remove room</button></article> }</div>
+            }
+            else if (active == "schedules")
+            {
+                <div class="page-intro"><p>SCHEDULE MANAGEMENT</p><h2>Create schedules without conflicts</h2><span>Select stored teacher and classroom records. PostgreSQL rejects time overlaps for either one.</span></div>
+                <div class="dashboard-grid schedule-grid"><article class="panel"><span class="eyebrow">NEW SCHEDULE</span><div class="form-grid"><label>Teacher<select @bind="scheduleTeacherId"><option value="0">Select a teacher</option>@foreach (var teacher in teachers) { <option value="@teacher.Id">@teacher.DisplayName</option> }</select></label><label>Classroom<select @bind="scheduleClassroomId"><option value="0">Select a classroom</option>@foreach (var room in classrooms) { <option value="@room.Id">@room.Name</option> }</select></label><label>Subject<input @bind="scheduleSubject" placeholder="Physics" /></label><label>Date<input type="date" @bind="scheduleDate" /></label><label>Start time<input type="time" @bind="scheduleStartTime" /></label><label>End time<input type="time" @bind="scheduleEndTime" /></label></div><div class="form-actions"><button class="primary-button" disabled="@(teachers.Count == 0 || classrooms.Count == 0)" @onclick="SaveSchedule">Save schedule</button></div></article><article class="panel schedule-preview"><span class="eyebrow">DATABASE SCHEDULES</span><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Teacher</th><th>Classroom</th><th>Subject</th><th>Date</th><th>Time</th><th>Actions</th></tr></thead><tbody>@if (schedules.Count == 0) { <tr><td colspan="6">No schedules have been stored.</td></tr> } @foreach (var schedule in schedules) { <tr><td>@schedule.TeacherDisplayName</td><td>@schedule.ClassroomName</td><td>@schedule.SubjectName</td><td>@schedule.ScheduleDate.ToString("MMM d, yyyy")</td><td>@schedule.StartTime.ToString("HH:mm") – @schedule.EndTime.ToString("HH:mm")</td><td><button class="danger-outline-button" @onclick='() => OpenDelete("schedule", schedule.Id, $"{schedule.SubjectName} · {schedule.ClassroomName}")'>Delete</button></td></tr> }</tbody></table></div></article></div>
+            }
+            else if (active == "temperature")
+            {
+                <div class="page-intro"><p>TARGET TEMPERATURE PROCESS</p><h2>Classroom AC control</h2><span>Commands are stored as temperature logs for the Smart AC integration.</span></div>
+                <article class="panel"><div class="form-grid"><label>Classroom<select @bind="temperatureClassroomId"><option value="0">Select a classroom</option>@foreach (var room in classrooms) { <option value="@room.Id">@room.Name</option> }</select></label><label>Target temperature<input type="number" min="16" max="30" @bind="temperatureTarget" /></label></div><div class="form-actions"><button class="secondary-button" @onclick='() => SaveTemperature("TargetSet")'>Set target</button><button class="danger-button" @onclick='() => SaveTemperature("EmergencyOverride")'>Emergency override</button><button class="danger-outline-button" @onclick='() => SaveTemperature("HardShutdown")'>Hard shutdown</button></div></article><article class="panel"><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Classroom</th><th>Event</th><th>Target</th><th>Recorded</th></tr></thead><tbody>@foreach (var log in temperatureLogs.Take(20)) { <tr><td>@log.ClassroomName</td><td>@log.EventType</td><td>@(log.TargetTemperature is null ? "—" : $"{log.TargetTemperature}°C")</td><td>@log.RecordedUtc.ToLocalTime().ToString("MMM d HH:mm")</td></tr> }</tbody></table></div></article>
+            }
+            else if (active == "attendance")
+            {
+                <div class="page-intro"><p>ATTENDANCE LOGS</p><h2>Biometric time-in and time-out records</h2><span>Attendance is written when a teacher starts and ends an assigned class.</span></div>
+                <article class="panel"><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Teacher</th><th>Classroom</th><th>Time in</th><th>Time out</th><th>Verification</th><th>Status</th></tr></thead><tbody>@if (attendance.Count == 0) { <tr><td colspan="6">No attendance logs have been recorded.</td></tr> } @foreach (var item in attendance) { <tr><td><strong>@item.TeacherDisplayName</strong></td><td>@item.ClassroomName</td><td>@item.TimeInUtc.ToLocalTime().ToString("MMM d HH:mm")</td><td>@(item.TimeOutUtc?.ToLocalTime().ToString("MMM d HH:mm") ?? "—")</td><td>@item.VerificationMethod</td><td><span class='status-badge @(item.Status == "Completed" ? "active" : "pending")'>@item.Status</span></td></tr> }</tbody></table></div></article>
+            }
+            else if (active == "requests")
+            {
+                <div class="page-intro"><p>LEAVE, OVERTIME & EARLY-OUT MANAGEMENT</p><h2>Review teacher requests</h2><span>Approved leave requests can reassign the original schedule to a substitute teacher after conflict validation.</span></div>
+                <div class="request-inbox">@if (requests.Count == 0) { <article class="panel"><p class="form-help">No teacher requests have been submitted.</p></article> } @foreach (var request in requests) { <article class="request-card"><div class="request-card-heading"><span class="request-type-icon"><i class="fas fa-inbox"></i></span><div><span class="eyebrow">@request.RequestType REQUEST</span><h3>@request.TeacherDisplayName</h3><p>@request.RequestDate.ToString("MMM d, yyyy") · Submitted @request.CreatedUtc.ToLocalTime().ToString("MMM d HH:mm")</p></div><span class='status-badge @(request.Status == "Pending" ? "pending" : request.Status == "Approved" ? "active" : "rejected")'>@request.Status</span></div><p class="request-reason">@request.Reason</p>@if (request.Status == "Pending") { @if (request.RequestType == "Leave" && request.NeedsSubstitute) { <label class="inline-select">Assign substitute<select @bind="substituteSelections[request.Id]"><option value="0">Select a teacher</option>@foreach (var teacher in teachers.Where(teacher => teacher.Id != request.TeacherAccountId)) { <option value="@teacher.Id">@teacher.DisplayName</option> }</select></label> }<div class="request-card-actions"><button class="secondary-button" @onclick='() => ReviewRequest(request, "Rejected")'>Reject</button><button class="primary-button" @onclick='() => ReviewRequest(request, "Approved")'>Approve</button></div> } else if (!string.IsNullOrWhiteSpace(request.AdminResponse)) { <div class="request-resolution">@request.AdminResponse</div> }</article> }</div>
+            }
+            else if (active == "support")
+            {
+                <div class="page-intro"><p>SUPPORT TICKET PROCESS</p><h2>Teacher-reported issues</h2><span>Resolve or dismiss tickets and retain the decision in Supabase.</span></div>
+                <div class="ticket-grid">@if (tickets.Count == 0) { <article class="panel"><p class="form-help">No support tickets have been submitted.</p></article> } @foreach (var ticket in tickets) { <article class="ticket-card"><div><span class="ticket-id">#@ticket.Id</span><span class='status-badge @(ticket.Status == "Open" ? "pending" : "neutral")'>@ticket.Status</span></div><h3>@ticket.Category</h3><p>@ticket.Details</p><small><i class="fas fa-user"></i>@ticket.TeacherDisplayName · @ticket.CreatedUtc.ToLocalTime().ToString("MMM d HH:mm")</small>@if (ticket.Status == "Open") { <div class="ticket-actions"><button class="secondary-button" @onclick='() => ReviewTicket(ticket, "Dismissed")'>Dismiss</button><button class="primary-button" @onclick='() => ReviewTicket(ticket, "Resolved")'>Resolve</button></div> } else if (!string.IsNullOrWhiteSpace(ticket.AdminResponse)) { <p class="form-help">@ticket.AdminResponse</p> }</article> }</div>
+            }
+            else
+            {
+                <div class="page-intro"><p>SYSTEM SETTINGS PROCESS</p><h2>Administration & recovery</h2><span>Manage the default administrator or reset all SmartClass data to the first-access state.</span></div>
+                <div class="settings-grid"><article class="panel"><span class="eyebrow">ADMIN CREDENTIALS</span><h3>Account contact</h3><div class="form-stack"><label>Registered admin email<input type="email" @bind="adminEmail" /></label><label>New password<input type="password" @bind="adminNewPassword" placeholder="Leave blank to keep current password" /></label></div><button class="primary-button" @onclick="SaveAdminSettings">Save settings</button></article><article class="panel"><span class="eyebrow">FRESH START</span><h3>Reset system to first access</h3><p class="form-help">This permanently clears teachers, classrooms, schedules, attendance, requests, tickets, and temperature logs; then it creates the configured default administrator with no email.</p><button class="danger-button" @onclick='() => resetOpen = true'>Reset all system data</button></article></div>
+            }
+        </section>
+    </main>
+</div>
+
+@if (deleteTargetType is not null)
+{
+    <div class="modal-backdrop"><section class="dialog-card" role="dialog" aria-modal="true"><span class="dialog-icon danger"><i class="fas fa-trash"></i></span><h2>Remove @deleteTargetType?</h2><p>@DeleteDescription Type <strong>DELETE</strong> to confirm removal of <strong>@deleteTargetName</strong>.</p><input @bind="deleteConfirmation" placeholder="Type DELETE" /><div class="dialog-actions"><button class="secondary-button" @onclick="CloseDelete">Cancel</button><button class="danger-button" @onclick="DeleteTarget">Remove</button></div></section></div>
+}
+
+@if (resetOpen)
+{
+    <div class="modal-backdrop"><section class="dialog-card" role="dialog" aria-modal="true"><span class="dialog-icon danger"><i class="fas fa-triangle-exclamation"></i></span><h2>Reset SmartClass AC?</h2><p>This cannot be undone. Type <strong>RESET</strong> to delete all stored data and return to First Access.</p><input @bind="resetConfirmation" placeholder="Type RESET" /><div class="dialog-actions"><button class="secondary-button" @onclick='() => resetOpen = false'>Cancel</button><button class="danger-button" @onclick="ResetSystem">Reset system</button></div></section></div>
+}
+
+@code {
+    private string active = "overview", message = string.Empty, newTeacherName = string.Empty, newTeacherUsername = string.Empty, newTeacherEmail = string.Empty, newTeacherPassword = string.Empty, classroomName = string.Empty, scheduleSubject = string.Empty, adminEmail = string.Empty, adminNewPassword = string.Empty, resetConfirmation = string.Empty, deleteConfirmation = string.Empty;
+    private bool sidebarOpen, isLoading, resetOpen;
+    private long editingClassroomId, scheduleTeacherId, scheduleClassroomId, temperatureClassroomId, deleteTargetId;
+    private string? deleteTargetType, deleteTargetName;
+    private int classroomCapacity = 40, classroomTargetTemperature = 22, temperatureTarget = 22;
+    private DateTime scheduleDate = DateTime.Today;
+    private TimeOnly scheduleStartTime = new(8, 0), scheduleEndTime = new(9, 30);
+    private AuthenticatedUser? currentUser;
+    private List<TeacherDirectoryEntry> teachers = new();
+    private List<ClassroomEntry> classrooms = new();
+    private List<ScheduleDirectoryEntry> schedules = new();
+    private List<AttendanceLogEntry> attendance = new();
+    private List<TeacherRequestEntry> requests = new();
+    private List<SupportTicketEntry> tickets = new();
+    private List<TemperatureLogEntry> temperatureLogs = new();
+    private readonly Dictionary<long, long> substituteSelections = new();
+
+    private DateOnly Today => DateOnly.FromDateTime(DateTime.Today);
+    private string AdminName => currentUser?.DisplayName ?? "Administrator";
+    private string AdminInitials => string.Concat(AdminName.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(word => char.ToUpperInvariant(word[0])));
+    private string Title => active switch { "teachers" => "Teacher management", "classrooms" => "Classroom management", "schedules" => "Schedule management", "temperature" => "AC control", "attendance" => "Attendance logs", "requests" => "Request inbox", "support" => "Support tickets", "settings" => "System settings", _ => "Dashboard overview" };
+    private string NavClass(string section) => $"sc-nav-item {(active == section ? "active" : string.Empty)}";
+    private string DeleteDescription => deleteTargetType switch
+    {
+        "teacher" => "This permanently deletes the teacher account from Supabase and removes its related records. Current or future schedules must be removed or reassigned first.",
+        "classroom" => "This retires the room from active use while retaining audit history. Current or future schedules must be removed or moved first.",
+        _ => "This permanently removes the schedule. Existing attendance remains as an audit record."
+    };
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        isLoading = true;
+        try
+        {
+            currentUser = await AuthService.GetCurrentUserAsync();
+            adminEmail = currentUser?.Email ?? string.Empty;
+            teachers = (await AuthService.GetTeachersAsync()).ToList();
+            classrooms = (await AuthService.GetClassroomsAsync()).ToList();
+            schedules = (await AuthService.GetSchedulesAsync()).ToList();
+            attendance = (await AuthService.GetAttendanceLogsAsync()).ToList();
+            requests = (await AuthService.GetTeacherRequestsAsync()).ToList();
+            tickets = (await AuthService.GetSupportTicketsAsync()).ToList();
+            temperatureLogs = (await AuthService.GetTemperatureLogsAsync()).ToList();
+            substituteSelections.Clear();
+            foreach (var request in requests) substituteSelections[request.Id] = request.SubstituteTeacherAccountId ?? 0;
+        }
+        catch { Toast("Supabase records could not be loaded."); }
+        finally { isLoading = false; }
+    }
+
+    private void Navigate(string section) { active = section; sidebarOpen = false; }
+    private void ToggleSidebar() => sidebarOpen = !sidebarOpen;
+    private void Toast(string value) => message = value;
+    private async Task Logout() { await AuthService.LogoutAsync(); AuthStateProvider.NotifyUserLogout(); Navigation.NavigateTo("/login"); }
+    private string ScheduleTodayFor(long teacherId) => string.Join(", ", schedules.Where(schedule => schedule.TeacherAccountId == teacherId && schedule.ScheduleDate == Today).Select(schedule => $"{schedule.StartTime:HH\\:mm} {schedule.ClassroomName}").DefaultIfEmpty("No schedule"));
+
+    private async Task SaveTeacher()
+    {
+        var result = await AuthService.CreateTeacherAsync(new CreateTeacherRequest(newTeacherName, newTeacherUsername, newTeacherEmail, newTeacherPassword));
+        if (!result.Succeeded) { Toast(result.Error ?? "Teacher could not be saved."); return; }
+        newTeacherName = newTeacherUsername = newTeacherEmail = newTeacherPassword = string.Empty;
+        await ReloadAsync();
+        Toast("Teacher account and ten fingerprint templates were stored.");
+    }
+
+    private async Task SaveClassroom()
+    {
+        var result = editingClassroomId == 0
+            ? await AuthService.CreateClassroomAsync(new CreateClassroomRequest(classroomName, classroomCapacity, classroomTargetTemperature))
+            : await AuthService.UpdateClassroomAsync(new UpdateClassroomRequest(editingClassroomId, classroomName, classroomCapacity, classroomTargetTemperature, true));
+        if (!result.Succeeded) { Toast(result.Error ?? "Classroom could not be saved."); return; }
+        ClearClassroomForm();
+        await ReloadAsync();
+        Toast("Classroom was stored in Supabase.");
+    }
+
+    private void EditClassroom(ClassroomEntry room)
+    {
+        editingClassroomId = room.Id;
+        classroomName = room.Name;
+        classroomCapacity = room.Capacity;
+        classroomTargetTemperature = room.TargetTemperature;
+    }
+
+    private void ClearClassroomForm() { editingClassroomId = 0; classroomName = string.Empty; classroomCapacity = 40; classroomTargetTemperature = 22; }
+
+    private void OpenDelete(string type, long id, string name)
+    {
+        deleteTargetType = type;
+        deleteTargetId = id;
+        deleteTargetName = name;
+        deleteConfirmation = string.Empty;
+    }
+
+    private void CloseDelete()
+    {
+        deleteTargetType = null;
+        deleteTargetId = 0;
+        deleteTargetName = string.Empty;
+        deleteConfirmation = string.Empty;
+    }
+
+    private async Task DeleteTarget()
+    {
+        if (!string.Equals(deleteConfirmation, "DELETE", StringComparison.Ordinal)) { Toast("Type DELETE to confirm removal."); return; }
+        var type = deleteTargetType;
+        var result = type switch
+        {
+            "teacher" => await AuthService.DeleteTeacherAsync(deleteTargetId),
+            "classroom" => await AuthService.DeleteClassroomAsync(deleteTargetId),
+            "schedule" => await AuthService.DeleteScheduleAsync(deleteTargetId),
+            _ => OperationResult.Failure("No item was selected for removal.")
+        };
+        if (!result.Succeeded) { Toast(result.Error ?? "Item could not be removed."); return; }
+        CloseDelete();
+        await ReloadAsync();
+        Toast(type == "schedule" ? "Schedule deleted." : $"{type} removed from active use.");
+    }
+
+    private async Task SaveSchedule()
+    {
+        var result = await AuthService.CreateScheduleAsync(new CreateScheduleRequest(scheduleTeacherId, scheduleClassroomId, scheduleSubject, DateOnly.FromDateTime(scheduleDate), scheduleStartTime, scheduleEndTime));
+        if (!result.Succeeded) { Toast(result.Error ?? "Schedule could not be saved."); return; }
+        scheduleTeacherId = scheduleClassroomId = 0;
+        scheduleSubject = string.Empty;
+        await ReloadAsync();
+        Toast("Schedule was stored with teacher and classroom conflict protection.");
+    }
+
+    private async Task SaveTemperature(string eventType)
+    {
+        var result = await AuthService.SetTemperatureAsync(new SetTemperatureRequest(temperatureClassroomId, temperatureTarget, eventType));
+        if (!result.Succeeded) { Toast(result.Error ?? "Temperature command could not be saved."); return; }
+        await ReloadAsync();
+        Toast($"{eventType} command was logged for the classroom.");
+    }
+
+    private async Task ReviewRequest(TeacherRequestEntry request, string status)
+    {
+        var substitute = substituteSelections.TryGetValue(request.Id, out var id) && id > 0 ? id : (long?)null;
+        var result = await AuthService.ReviewTeacherRequestAsync(new ReviewTeacherRequest(request.Id, status, substitute, status == "Approved" ? "Approved by administrator." : "Rejected by administrator."));
+        if (!result.Succeeded) { Toast(result.Error ?? "Request could not be reviewed."); return; }
+        await ReloadAsync();
+        Toast($"Request {status.ToLowerInvariant()}.");
+    }
+
+    private async Task ReviewTicket(SupportTicketEntry ticket, string status)
+    {
+        var result = await AuthService.ReviewSupportTicketAsync(new ReviewSupportTicket(ticket.Id, status, $"Ticket {status.ToLowerInvariant()} by administrator."));
+        if (!result.Succeeded) { Toast(result.Error ?? "Ticket could not be reviewed."); return; }
+        await ReloadAsync();
+        Toast($"Ticket {status.ToLowerInvariant()}.");
+    }
+
+    private async Task SaveAdminSettings()
+    {
+        var result = await AuthService.UpdateAdministratorCredentialsAsync(adminEmail, adminNewPassword);
+        if (!result.Succeeded) { Toast(result.Error ?? "Administrator settings could not be saved."); return; }
+        adminNewPassword = string.Empty;
+        currentUser = await AuthService.GetCurrentUserAsync();
+        Toast("Administrator credentials were saved.");
+    }
+
+    private async Task ResetSystem()
+    {
+        if (!string.Equals(resetConfirmation, "RESET", StringComparison.Ordinal)) { Toast("Type RESET to confirm the fresh-start reset."); return; }
+        var result = await AuthService.ResetSystemToFirstAccessAsync();
+        if (!result.Succeeded) { Toast(result.Error ?? "System could not be reset."); return; }
+        AuthStateProvider.NotifyUserLogout();
+        Navigation.NavigateTo("/first-access", true);
+    }
+}

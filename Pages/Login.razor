@@ -1,0 +1,2234 @@
+﻿@page "/login"
+
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject IAuthService AuthService
+@inject NavigationManager Navigation
+@inject CustomAuthStateProvider AuthStateProvider
+
+<PageTitle>Login - SmartClass AC</PageTitle>
+
+<div class="login-page">
+
+    <!-- =====================================================
+         BACKGROUND
+         ===================================================== -->
+
+    <div class="login-background">
+
+        <div class="glow glow-1"></div>
+        <div class="glow glow-2"></div>
+        <div class="glow glow-3"></div>
+
+        <div class="snowflakes" aria-hidden="true">
+            <div class="snowflake snowflake-1">❄</div>
+            <div class="snowflake snowflake-2">❄</div>
+            <div class="snowflake snowflake-3">❄</div>
+            <div class="snowflake snowflake-4">❄</div>
+            <div class="snowflake snowflake-5">❄</div>
+            <div class="snowflake snowflake-6">❄</div>
+            <div class="snowflake snowflake-7">❄</div>
+            <div class="snowflake snowflake-8">❄</div>
+        </div>
+
+    </div>
+
+
+    <!-- =====================================================
+         RESPONSIVE NAVBAR
+         ===================================================== -->
+
+    <header class="login-navbar">
+
+        <div class="navbar-inner">
+
+            <!-- Brand -->
+            <a href="/" class="brand-link">
+
+                <div class="brand-icon">
+                    <i class="fas fa-snowflake"></i>
+                </div>
+
+                <div class="brand-text">
+                    <span class="brand-name">
+                        SmartClass <strong>AC</strong>
+                    </span>
+
+                    <span class="brand-tagline">
+                        Smart Classroom Technology
+                    </span>
+                </div>
+
+            </a>
+
+
+            <!-- Navigation -->
+            <nav class="navbar-nav">
+
+                <a href="/" class="nav-link">
+                    <i class="fas fa-house"></i>
+                    <span>Home</span>
+                </a>
+
+                <div class="nav-status">
+                    <span class="status-dot"></span>
+                    System Online
+                </div>
+
+            </nav>
+
+        </div>
+
+    </header>
+
+
+    <!-- =====================================================
+         MAIN CONTENT
+         ===================================================== -->
+
+    <main class="login-content">
+
+
+        <!-- =================================================
+             LOGIN CARD
+             ================================================= -->
+
+        <section class="login-card">
+
+            <!-- Header -->
+            <div class="login-header">
+
+                <div class="login-icon">
+                    <i class="fas fa-snowflake"></i>
+                </div>
+
+                <h1>Welcome</h1>
+
+                <p>
+                    Sign in to your SmartClass AC account
+                </p>
+
+            </div>
+
+
+            <!-- Error Message -->
+            @if (!string.IsNullOrWhiteSpace(errorMessage))
+            {
+                <div class="login-error">
+
+                    <i class="fas fa-circle-exclamation"></i>
+
+                    <span>
+                        @errorMessage
+                    </span>
+
+                </div>
+            }
+
+
+            <!-- Login Form -->
+            <form @onsubmit="HandleLogin">
+
+                <!-- Username -->
+                <div class="form-field">
+
+                    <label for="username">
+                        Username / Email
+                    </label>
+
+                    <div class="input-wrapper">
+
+                        <i class="fas fa-user input-icon"></i>
+
+                        <input id="username"
+                               type="text"
+                               class="login-input"
+                               placeholder="Enter your username"
+                               autocomplete="username"
+                               @bind="username" />
+
+                    </div>
+
+                </div>
+
+
+                <!-- Password -->
+                <div class="form-field">
+
+                    <div class="password-label">
+
+                        <label for="password">
+                            Password
+                        </label>
+
+                        <a href="/forgot-password">Forgot password?</a>
+
+                    </div>
+
+                    <div class="input-wrapper">
+
+                        <i class="fas fa-lock input-icon"></i>
+
+                        <input id="password"
+                               type="password"
+                               class="login-input"
+                               placeholder="Enter your password"
+                               autocomplete="current-password"
+                               @bind="password" />
+
+                    </div>
+
+                </div>
+
+
+                <!-- Login Button -->
+                <button type="submit"
+                        class="login-submit"
+                        disabled="@isLoading">
+
+                    @if (isLoading)
+                    {
+                        <span class="spinner-border spinner-border-sm"
+                              role="status"
+                              aria-hidden="true">
+                        </span>
+
+                        <span>
+                            Signing in...
+                        </span>
+                    }
+                    else
+                    {
+                        <span>
+                            Sign In
+                        </span>
+
+                        <i class="fas fa-arrow-right"></i>
+                    }
+
+                </button>
+
+            </form>
+
+            <p class="login-account-switch">
+                Teacher accounts are created by the administrator. Your dashboard is selected automatically after sign-in.
+            </p>
+
+
+            <!-- Security Notice -->
+            <div class="security-notice">
+
+                <div class="security-icon">
+                    <i class="fas fa-shield-halved"></i>
+                </div>
+
+                <div>
+                    <strong>Secure Access</strong>
+
+                    <span>
+                        Your account is protected by SmartClass AC authentication.
+                    </span>
+                </div>
+
+            </div>
+
+
+            <!-- Back Home -->
+            <div class="back-home">
+
+                <a href="/">
+
+                    <i class="fas fa-arrow-left"></i>
+
+                    Back to SmartClass AC
+
+                </a>
+
+            </div>
+
+        </section>
+
+
+        <!-- =================================================
+             INFORMATION PANEL
+             ================================================= -->
+
+        <section class="login-info">
+
+
+            <!-- Decorative Circle -->
+            <div class="info-decoration info-decoration-1"></div>
+            <div class="info-decoration info-decoration-2"></div>
+
+
+            <!-- Badge -->
+            <div class="info-badge">
+
+                <span class="badge-icon">
+                    <i class="fas fa-bolt"></i>
+                </span>
+
+                <span>
+                    Smart Classroom Technology
+                </span>
+
+            </div>
+
+
+            <!-- Heading -->
+            <h2>
+                Smarter classrooms.
+                <span>Better learning.</span>
+            </h2>
+
+
+            <p class="info-description">
+
+                SmartClass AC brings intelligent classroom cooling,
+                secure teacher authentication, and automated attendance
+                together in one modern platform.
+
+            </p>
+
+
+            <!-- Main Visual -->
+            <div class="smart-ac-visual">
+
+                <div class="visual-glow"></div>
+
+                <div class="ac-device">
+
+                    <div class="ac-device-top">
+
+                        <span class="ac-brand">
+                            SMARTCLASS
+                        </span>
+
+                        <span class="ac-indicator"></span>
+
+                    </div>
+
+                    <div class="ac-display">
+                        24°
+                        <span>C</span>
+                    </div>
+
+                    <div class="ac-air-lines">
+                        <span></span>
+                        <span></span>
+                        <span></span>
+                    </div>
+
+                </div>
+
+
+                <!-- Temperature Bubble -->
+                <div class="temperature-card">
+
+                    <div class="temperature-icon">
+                        <i class="fas fa-temperature-low"></i>
+                    </div>
+
+                    <div>
+                        <small>Classroom Temperature</small>
+                        <strong>24°C</strong>
+                    </div>
+
+                    <span class="cooling-status">
+                        <i class="fas fa-circle"></i>
+                        Optimal
+                    </span>
+
+                </div>
+
+            </div>
+
+
+            <!-- Features -->
+            <div class="info-features">
+
+
+                <!-- Feature 1 -->
+                <div class="info-feature">
+
+                    <div class="info-feature-icon blue">
+                        <i class="fas fa-snowflake"></i>
+                    </div>
+
+                    <div class="info-feature-content">
+
+                        <strong>
+                            Smart AC Control
+                        </strong>
+
+                        <small>
+                            Intelligent classroom cooling
+                        </small>
+
+                    </div>
+
+                    <i class="fas fa-check feature-check"></i>
+
+                </div>
+
+
+                <!-- Feature 2 -->
+                <div class="info-feature">
+
+                    <div class="info-feature-icon purple">
+                        <i class="fas fa-fingerprint"></i>
+                    </div>
+
+                    <div class="info-feature-content">
+
+                        <strong>
+                            Biometric Authentication
+                        </strong>
+
+                        <small>
+                            Secure teacher verification
+                        </small>
+
+                    </div>
+
+                    <i class="fas fa-check feature-check"></i>
+
+                </div>
+
+
+                <!-- Feature 3 -->
+                <div class="info-feature">
+
+                    <div class="info-feature-icon cyan">
+                        <i class="fas fa-clipboard-check"></i>
+                    </div>
+
+                    <div class="info-feature-content">
+
+                        <strong>
+                            Automated Attendance
+                        </strong>
+
+                        <small>
+                            Accurate attendance tracking
+                        </small>
+
+                    </div>
+
+                    <i class="fas fa-check feature-check"></i>
+
+                </div>
+
+            </div>
+
+
+            <!-- Bottom Message -->
+            <div class="info-bottom">
+
+                <div class="info-bottom-icon">
+                    <i class="fas fa-wand-magic-sparkles"></i>
+                </div>
+
+                <div>
+                    <strong>Everything in one place</strong>
+
+                    <span>
+                        Built for efficient and connected classrooms.
+                    </span>
+                </div>
+
+            </div>
+
+        </section>
+
+    </main>
+
+
+    <!-- =====================================================
+         FOOTER
+         ===================================================== -->
+
+    <footer class="login-footer">
+
+        <span>
+            © 2026 SmartClass AC
+        </span>
+
+        <span class="footer-dot">
+            •
+        </span>
+
+        <span>
+            Smart Cooling for Smart Classrooms
+        </span>
+
+    </footer>
+
+</div>
+
+
+@code {
+
+    private string username = string.Empty;
+
+    private string password = string.Empty;
+
+    private bool isLoading = false;
+
+    private string errorMessage = string.Empty;
+
+
+    private async Task HandleLogin()
+    {
+        if (isLoading)
+        {
+            return;
+        }
+
+        isLoading = true;
+        errorMessage = string.Empty;
+
+        try
+        {
+            if (await AuthService.IsInitialAdminSetupRequiredAsync())
+            {
+                Navigation.NavigateTo("/first-access");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(username) ||
+                string.IsNullOrWhiteSpace(password))
+            {
+                errorMessage =
+                    "Please enter your username and password.";
+
+                return;
+            }
+
+
+            var result =
+                await AuthService.LoginAsync(
+                    username,
+                    password
+                );
+
+
+            if (result.Succeeded)
+            {
+                AuthStateProvider.NotifyUserAuthentication();
+
+                if (result.User!.Role == UserRole.Admin)
+                {
+                    Navigation.NavigateTo("/admin");
+                }
+                else
+                {
+                    Navigation.NavigateTo("/teacher");
+                }
+            }
+            else
+            {
+                errorMessage =
+                    result.Error ?? "Invalid username or password. Please try again.";
+            }
+        }
+        catch
+        {
+            errorMessage =
+                "An error occurred while signing in. Please try again later.";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+}
+
+
+<style>
+
+    /* =====================================================
+               GLOBAL PAGE
+               ===================================================== */
+
+    .login-page {
+        position: relative;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        background: radial-gradient( circle at 8% 15%, rgba(66, 165, 245, 0.16), transparent 30% ), radial-gradient( circle at 92% 75%, rgba(26, 115, 232, 0.13), transparent 32% ), linear-gradient( 135deg, #f4faff 0%, #e8f4ff 50%, #f6fbff 100% );
+        color: #172033;
+    }
+
+
+    /* =====================================================
+               BACKGROUND
+               ===================================================== */
+
+    .login-background {
+        position: fixed;
+        inset: 0;
+        overflow: hidden;
+        pointer-events: none;
+        z-index: 0;
+    }
+
+
+    .glow {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(80px);
+        opacity: 0.35;
+    }
+
+
+    .glow-1 {
+        width: 340px;
+        height: 340px;
+        background: #42a5f5;
+        top: -120px;
+        left: -120px;
+    }
+
+
+    .glow-2 {
+        width: 400px;
+        height: 400px;
+        background: #1a73e8;
+        right: -180px;
+        top: 20%;
+    }
+
+
+    .glow-3 {
+        width: 300px;
+        height: 300px;
+        background: #90caf9;
+        left: 35%;
+        bottom: -150px;
+    }
+
+
+    /* =====================================================
+               SNOWFLAKES
+               ===================================================== */
+
+    .snowflake {
+        position: absolute;
+        top: -10%;
+        color: rgba(26, 115, 232, 0.12);
+        animation-name: loginSnowfall;
+        animation-timing-function: linear;
+        animation-iteration-count: infinite;
+        user-select: none;
+    }
+
+
+    .snowflake-1 {
+        left: 5%;
+        font-size: 1.5rem;
+        animation-duration: 13s;
+    }
+
+
+    .snowflake-2 {
+        left: 18%;
+        font-size: 2.2rem;
+        animation-duration: 17s;
+        animation-delay: 2s;
+    }
+
+
+    .snowflake-3 {
+        left: 35%;
+        font-size: 1.7rem;
+        animation-duration: 11s;
+        animation-delay: 4s;
+    }
+
+
+    .snowflake-4 {
+        left: 50%;
+        font-size: 2.5rem;
+        animation-duration: 18s;
+        animation-delay: 1s;
+    }
+
+
+    .snowflake-5 {
+        left: 65%;
+        font-size: 1.8rem;
+        animation-duration: 14s;
+        animation-delay: 5s;
+    }
+
+
+    .snowflake-6 {
+        left: 78%;
+        font-size: 2.4rem;
+        animation-duration: 16s;
+        animation-delay: 3s;
+    }
+
+
+    .snowflake-7 {
+        left: 90%;
+        font-size: 1.5rem;
+        animation-duration: 12s;
+        animation-delay: 6s;
+    }
+
+
+    .snowflake-8 {
+        left: 42%;
+        font-size: 1.3rem;
+        animation-duration: 20s;
+        animation-delay: 7s;
+    }
+
+
+    @@keyframes loginSnowfall {
+
+        0% {
+            transform: translateY(0) rotate(0deg);
+            opacity: 0;
+        }
+
+        15% {
+            opacity: 0.8;
+        }
+
+        100% {
+            transform: translateY(110vh) rotate(720deg);
+            opacity: 0;
+        }
+    }
+
+
+    /* =====================================================
+               NAVBAR
+               ===================================================== */
+
+    .login-navbar {
+        position: relative;
+        z-index: 10;
+        width: 100%;
+        padding: 18px 32px;
+        box-sizing: border-box;
+    }
+
+
+    .navbar-inner {
+        width: 100%;
+        max-width: 1280px;
+        margin: 0 auto;
+        min-height: 62px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 25px;
+        padding: 9px 12px 9px 16px;
+        border: 1px solid rgba(255, 255, 255, 0.85);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.62);
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
+        box-shadow: 0 12px 35px rgba(26, 115, 232, 0.07);
+    }
+
+
+    /* =====================================================
+               BRAND
+               ===================================================== */
+
+    .brand-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 11px;
+        color: #172033;
+        text-decoration: none;
+        min-width: 0;
+    }
+
+
+    .brand-icon {
+        width: 43px;
+        height: 43px;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 13px;
+        color: white;
+        font-size: 1.15rem;
+        background: linear-gradient( 135deg, #1a73e8, #42a5f5 );
+        box-shadow: 0 8px 20px rgba(26, 115, 232, 0.24);
+    }
+
+
+    .brand-text {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+    }
+
+
+    .brand-name {
+        color: #172033;
+        font-size: 1.1rem;
+        font-weight: 750;
+        line-height: 1.1;
+        white-space: nowrap;
+    }
+
+
+        .brand-name strong {
+            color: #1a73e8;
+        }
+
+
+    .brand-tagline {
+        margin-top: 3px;
+        color: #98a2b3;
+        font-size: 0.64rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+    }
+
+
+    /* =====================================================
+               NAVIGATION
+               ===================================================== */
+
+    .navbar-nav {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+
+    .nav-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 9px 15px;
+        color: #475467;
+        text-decoration: none;
+        border-radius: 11px;
+        font-size: 0.83rem;
+        font-weight: 650;
+        transition: all 0.2s ease;
+    }
+
+
+        .nav-link i {
+            color: #1a73e8;
+        }
+
+
+        .nav-link:hover {
+            color: #1a73e8;
+            background: rgba(26, 115, 232, 0.07);
+        }
+
+
+    .nav-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 8px 13px;
+        color: #147a4c;
+        border: 1px solid rgba(20, 122, 76, 0.12);
+        border-radius: 50px;
+        background: rgba(20, 122, 76, 0.06);
+        font-size: 0.72rem;
+        font-weight: 650;
+    }
+
+
+    .status-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #22c55e;
+        box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.10);
+    }
+
+
+    /* =====================================================
+               MAIN CONTENT
+               ===================================================== */
+
+    .login-content {
+        position: relative;
+        z-index: 2;
+        flex: 1;
+        width: 100%;
+        max-width: 1220px;
+        margin: 0 auto;
+        padding: 28px 30px 55px;
+        box-sizing: border-box;
+        display: grid;
+        grid-template-columns: minmax(380px, 480px) minmax(400px, 1fr);
+        align-items: center;
+        justify-content: center;
+        gap: 90px;
+    }
+
+
+    /* =====================================================
+               LOGIN CARD
+               ===================================================== */
+
+    .login-card {
+        width: 100%;
+        padding: 40px;
+        box-sizing: border-box;
+        background: rgba(255, 255, 255, 0.88);
+        backdrop-filter: blur(22px);
+        -webkit-backdrop-filter: blur(22px);
+        border: 1px solid rgba(255, 255, 255, 0.95);
+        border-radius: 28px;
+        box-shadow: 0 30px 80px rgba(26, 115, 232, 0.13), 0 5px 20px rgba(26, 115, 232, 0.05);
+        animation: cardAppear 0.7s ease-out;
+    }
+
+
+    @@keyframes cardAppear {
+
+        from {
+            opacity: 0;
+            transform: translateY(25px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+
+    /* =====================================================
+               LOGIN HEADER
+               ===================================================== */
+
+    .login-header {
+        margin-bottom: 28px;
+        text-align: center;
+    }
+
+
+    .login-icon {
+        width: 68px;
+        height: 68px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto 17px;
+        border-radius: 21px;
+        color: white;
+        font-size: 1.7rem;
+        background: linear-gradient( 135deg, #1a73e8, #42a5f5 );
+        box-shadow: 0 13px 30px rgba(26, 115, 232, 0.24);
+        animation: loginIconFloat 4s ease-in-out infinite;
+    }
+
+
+    @@keyframes loginIconFloat {
+
+        0%,
+        100% {
+            transform: translateY(0);
+        }
+
+        50% {
+            transform: translateY(-5px);
+        }
+    }
+
+
+    .login-header h1 {
+        margin: 0 0 7px;
+        color: #172033;
+        font-size: 1.95rem;
+        font-weight: 750;
+        letter-spacing: -0.025em;
+    }
+
+
+    .login-header p {
+        margin: 0;
+        color: #667085;
+        font-size: 0.9rem;
+    }
+
+
+    /* =====================================================
+               ERROR
+               ===================================================== */
+
+    .login-error {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 13px 15px;
+        margin-bottom: 21px;
+        border-radius: 13px;
+        color: #b42318;
+        background: rgba(220, 53, 69, 0.08);
+        border: 1px solid rgba(220, 53, 69, 0.12);
+        font-size: 0.88rem;
+        line-height: 1.4;
+    }
+
+
+        .login-error i {
+            margin-top: 2px;
+        }
+
+
+    /* =====================================================
+               FORM
+               ===================================================== */
+
+    .form-field {
+        margin-bottom: 20px;
+    }
+
+
+        .form-field label {
+            display: block;
+            margin-bottom: 8px;
+            color: #344054;
+            font-size: 0.87rem;
+            font-weight: 650;
+        }
+
+
+    .password-label {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+    }
+
+
+        .password-label label {
+            margin-bottom: 8px;
+        }
+
+
+        .password-label a {
+            margin-bottom: 8px;
+            color: #1a73e8;
+            text-decoration: none;
+            font-size: 0.79rem;
+            font-weight: 650;
+        }
+
+
+            .password-label a:hover {
+                text-decoration: underline;
+            }
+
+
+    /* =====================================================
+               INPUT
+               ===================================================== */
+
+    .input-wrapper {
+        position: relative;
+    }
+
+
+    .input-icon {
+        position: absolute;
+        top: 50%;
+        left: 17px;
+        transform: translateY(-50%);
+        color: #98a2b3;
+        font-size: 0.92rem;
+        pointer-events: none;
+        transition: color 0.2s ease;
+    }
+
+
+    .login-input {
+        width: 100%;
+        height: 52px;
+        padding: 0 16px 0 46px;
+        box-sizing: border-box;
+        border: 1px solid #d0d5dd;
+        border-radius: 14px;
+        outline: none;
+        background: rgba(255, 255, 255, 0.78);
+        color: #172033;
+        font-size: 0.93rem;
+        transition: all 0.25s ease;
+    }
+
+
+        .login-input::placeholder {
+            color: #98a2b3;
+        }
+
+
+        .login-input:focus {
+            border-color: #1a73e8;
+            background: white;
+            box-shadow: 0 0 0 4px rgba(26, 115, 232, 0.10);
+        }
+
+
+    .input-wrapper:focus-within .input-icon {
+        color: #1a73e8;
+    }
+
+
+    /* =====================================================
+               REMEMBER ME
+               ===================================================== */
+
+    .remember-row {
+        margin: 3px 0 21px;
+    }
+
+
+    .remember-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        margin: 0;
+        color: #667085;
+        cursor: pointer;
+        font-size: 0.84rem;
+        font-weight: 500;
+    }
+
+
+        .remember-label input {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+
+    .custom-checkbox {
+        width: 19px;
+        height: 19px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1.5px solid #d0d5dd;
+        border-radius: 5px;
+        background: white;
+        transition: all 0.2s ease;
+    }
+
+
+    .remember-label input:checked + .custom-checkbox {
+        background: #1a73e8;
+        border-color: #1a73e8;
+    }
+
+
+        .remember-label input:checked + .custom-checkbox::after {
+            content: "✓";
+            color: white;
+            font-size: 0.75rem;
+            font-weight: 700;
+        }
+
+
+    /* =====================================================
+               LOGIN BUTTON
+               ===================================================== */
+
+    .login-submit {
+        width: 100%;
+        height: 54px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        border: none;
+        border-radius: 50px;
+        color: white;
+        font-size: 0.94rem;
+        font-weight: 650;
+        cursor: pointer;
+        background: linear-gradient( 135deg, #1a73e8, #0d47a1 );
+        box-shadow: 0 11px 27px rgba(26, 115, 232, 0.25);
+        transition: all 0.25s ease;
+    }
+
+
+        .login-submit:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 34px rgba(26, 115, 232, 0.34);
+        }
+
+
+        .login-submit:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+
+        .login-submit:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+
+    /* =====================================================
+               SECURITY NOTICE
+               ===================================================== */
+
+    .security-notice {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        margin-top: 22px;
+        padding: 13px 14px;
+        border-radius: 14px;
+        background: rgba(26, 115, 232, 0.045);
+        border: 1px solid rgba(26, 115, 232, 0.08);
+    }
+
+
+    .security-icon {
+        width: 34px;
+        height: 34px;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+        color: #1a73e8;
+        background: rgba(26, 115, 232, 0.09);
+        font-size: 0.8rem;
+    }
+
+
+    .security-notice strong {
+        display: block;
+        margin-bottom: 2px;
+        color: #344054;
+        font-size: 0.76rem;
+    }
+
+
+    .security-notice span {
+        display: block;
+        color: #98a2b3;
+        font-size: 0.7rem;
+        line-height: 1.4;
+    }
+
+
+    /* =====================================================
+               BACK HOME
+               ===================================================== */
+
+    .back-home {
+        margin-top: 21px;
+        text-align: center;
+    }
+
+
+        .back-home a {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            color: #667085;
+            text-decoration: none;
+            font-size: 0.8rem;
+            transition: color 0.2s ease;
+        }
+
+
+            .back-home a:hover {
+                color: #1a73e8;
+            }
+
+
+    /* =====================================================
+               INFORMATION PANEL
+               ===================================================== */
+
+    .login-info {
+        position: relative;
+        width: 100%;
+        max-width: 560px;
+        padding: 42px 0;
+        animation: infoAppear 0.8s ease-out;
+    }
+
+
+    @@keyframes infoAppear {
+
+        from {
+            opacity: 0;
+            transform: translateX(25px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateX(0);
+        }
+    }
+
+
+    /* =====================================================
+               INFO DECORATIONS
+               ===================================================== */
+
+    .info-decoration {
+        position: absolute;
+        border-radius: 50%;
+        pointer-events: none;
+    }
+
+
+    .info-decoration-1 {
+        width: 180px;
+        height: 180px;
+        top: 5px;
+        right: -50px;
+        border: 1px solid rgba(26, 115, 232, 0.10);
+        box-shadow: inset 0 0 40px rgba(26, 115, 232, 0.03);
+    }
+
+
+    .info-decoration-2 {
+        width: 90px;
+        height: 90px;
+        bottom: 30px;
+        left: -45px;
+        background: rgba(66, 165, 245, 0.06);
+        border: 1px solid rgba(66, 165, 245, 0.08);
+    }
+
+
+    /* =====================================================
+               INFO BADGE
+               ===================================================== */
+
+    .info-badge {
+        position: relative;
+        z-index: 2;
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 20px;
+        padding: 7px 13px 7px 8px;
+        color: #1a73e8;
+        background: rgba(26, 115, 232, 0.07);
+        border: 1px solid rgba(26, 115, 232, 0.10);
+        border-radius: 50px;
+        font-size: 0.72rem;
+        font-weight: 700;
+    }
+
+
+    .badge-icon {
+        width: 25px;
+        height: 25px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        color: white;
+        background: linear-gradient( 135deg, #1a73e8, #42a5f5 );
+        font-size: 0.65rem;
+    }
+
+
+    /* =====================================================
+               INFO HEADING
+               ===================================================== */
+
+    .login-info h2 {
+        position: relative;
+        z-index: 2;
+        max-width: 550px;
+        margin: 0 0 18px;
+        color: #172033;
+        font-size: clamp(2.5rem, 4vw, 3.45rem);
+        font-weight: 780;
+        line-height: 1.08;
+        letter-spacing: -0.045em;
+    }
+
+
+        .login-info h2 span {
+            display: block;
+            background: linear-gradient( 90deg, #1a73e8, #42a5f5 );
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+
+    .info-description {
+        position: relative;
+        z-index: 2;
+        max-width: 510px;
+        margin: 0 0 25px;
+        color: #667085;
+        font-size: 0.95rem;
+        line-height: 1.8;
+    }
+
+
+    /* =====================================================
+               SMART AC VISUAL
+               ===================================================== */
+
+    .smart-ac-visual {
+        position: relative;
+        height: 190px;
+        margin: 10px 0 22px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 25px;
+        overflow: hidden;
+        background: linear-gradient( 135deg, rgba(255, 255, 255, 0.72), rgba(225, 242, 253, 0.62) );
+        border: 1px solid rgba(255, 255, 255, 0.9);
+        box-shadow: 0 15px 40px rgba(26, 115, 232, 0.08);
+        backdrop-filter: blur(15px);
+    }
+
+
+        .smart-ac-visual::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient( 90deg, transparent 0%, rgba(255, 255, 255, 0.55) 50%, transparent 100% );
+            opacity: 0.55;
+        }
+
+
+    .visual-glow {
+        position: absolute;
+        width: 180px;
+        height: 180px;
+        border-radius: 50%;
+        background: rgba(66, 165, 245, 0.18);
+        filter: blur(35px);
+    }
+
+
+    /* =====================================================
+               AC DEVICE
+               ===================================================== */
+
+    .ac-device {
+        position: relative;
+        z-index: 2;
+        width: 270px;
+        height: 105px;
+        padding: 14px 18px;
+        box-sizing: border-box;
+        border-radius: 18px;
+        background: linear-gradient( 145deg, #ffffff, #e9f4fc );
+        border: 1px solid rgba(255, 255, 255, 0.95);
+        box-shadow: 0 18px 35px rgba(30, 90, 140, 0.14);
+        animation: acFloat 5s ease-in-out infinite;
+    }
+
+
+    @@keyframes acFloat {
+
+        0%,
+        100% {
+            transform: translateY(0);
+        }
+
+        50% {
+            transform: translateY(-5px);
+        }
+    }
+
+
+    .ac-device-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        color: #98a2b3;
+        font-size: 0.48rem;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+    }
+
+
+    .ac-indicator {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #22c55e;
+        box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.10);
+    }
+
+
+    .ac-display {
+        margin-top: 12px;
+        color: #1a73e8;
+        font-size: 2rem;
+        font-weight: 750;
+        line-height: 1;
+    }
+
+
+        .ac-display span {
+            margin-left: 2px;
+            color: #98a2b3;
+            font-size: 0.75rem;
+        }
+
+
+    .ac-air-lines {
+        display: flex;
+        gap: 6px;
+        margin-top: 10px;
+    }
+
+
+        .ac-air-lines span {
+            width: 35px;
+            height: 3px;
+            border-radius: 10px;
+            background: #b9ddf7;
+            transform: skewX(-25deg);
+        }
+
+
+    /* =====================================================
+               TEMPERATURE CARD
+               ===================================================== */
+
+    .temperature-card {
+        position: absolute;
+        z-index: 4;
+        right: 22px;
+        bottom: 22px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 10px 12px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.88);
+        border: 1px solid rgba(255, 255, 255, 0.95);
+        box-shadow: 0 10px 25px rgba(26, 115, 232, 0.10);
+        backdrop-filter: blur(12px);
+    }
+
+
+    .temperature-icon {
+        width: 30px;
+        height: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 9px;
+        color: #1a73e8;
+        background: rgba(26, 115, 232, 0.08);
+        font-size: 0.75rem;
+    }
+
+
+    .temperature-card small {
+        display: block;
+        color: #98a2b3;
+        font-size: 0.55rem;
+    }
+
+
+    .temperature-card strong {
+        display: block;
+        color: #344054;
+        font-size: 0.8rem;
+    }
+
+
+    .cooling-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-left: 4px;
+        color: #159455;
+        font-size: 0.58rem;
+        font-weight: 700;
+    }
+
+
+        .cooling-status i {
+            font-size: 0.38rem;
+        }
+
+
+    /* =====================================================
+               INFO FEATURES
+               ===================================================== */
+
+    .info-features {
+        position: relative;
+        z-index: 2;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+    }
+
+
+    .info-feature {
+        position: relative;
+        min-width: 0;
+        padding: 14px;
+        border-radius: 17px;
+        background: rgba(255, 255, 255, 0.58);
+        border: 1px solid rgba(255, 255, 255, 0.85);
+        backdrop-filter: blur(10px);
+        transition: transform 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+    }
+
+
+        .info-feature:hover {
+            transform: translateY(-4px);
+            background: rgba(255, 255, 255, 0.82);
+            box-shadow: 0 12px 28px rgba(26, 115, 232, 0.08);
+        }
+
+
+    .info-feature-icon {
+        width: 37px;
+        height: 37px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 10px;
+        border-radius: 11px;
+        font-size: 0.78rem;
+    }
+
+
+        .info-feature-icon.blue {
+            color: #1a73e8;
+            background: rgba(26, 115, 232, 0.09);
+        }
+
+
+        .info-feature-icon.purple {
+            color: #7c3aed;
+            background: rgba(124, 58, 237, 0.09);
+        }
+
+
+        .info-feature-icon.cyan {
+            color: #0891b2;
+            background: rgba(8, 145, 178, 0.09);
+        }
+
+
+    .info-feature-content strong {
+        display: block;
+        margin-bottom: 4px;
+        color: #344054;
+        font-size: 0.72rem;
+        font-weight: 700;
+        line-height: 1.3;
+    }
+
+
+    .info-feature-content small {
+        display: block;
+        color: #98a2b3;
+        font-size: 0.62rem;
+        line-height: 1.4;
+    }
+
+
+    .feature-check {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        color: #22a06b;
+        font-size: 0.6rem;
+    }
+
+
+    /* =====================================================
+               INFO BOTTOM
+               ===================================================== */
+
+    .info-bottom {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 14px;
+        padding: 12px 14px;
+        border-radius: 15px;
+        background: rgba(255, 255, 255, 0.40);
+        border: 1px solid rgba(255, 255, 255, 0.65);
+    }
+
+
+    .info-bottom-icon {
+        width: 31px;
+        height: 31px;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 9px;
+        color: #1a73e8;
+        background: rgba(26, 115, 232, 0.08);
+        font-size: 0.7rem;
+    }
+
+
+    .info-bottom strong {
+        display: block;
+        margin-bottom: 2px;
+        color: #475467;
+        font-size: 0.7rem;
+    }
+
+
+    .info-bottom span {
+        display: block;
+        color: #98a2b3;
+        font-size: 0.62rem;
+    }
+
+
+    /* =====================================================
+               FOOTER
+               ===================================================== */
+
+    .login-footer {
+        position: relative;
+        z-index: 2;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 20px 22px;
+        color: #98a2b3;
+        font-size: 0.7rem;
+        text-align: center;
+    }
+
+
+    .footer-dot {
+        color: #1a73e8;
+    }
+
+
+    /* =====================================================
+               LARGE TABLET
+               ===================================================== */
+
+    @@media (max-width: 1100px) {
+
+        .login-content {
+            gap: 55px;
+            grid-template-columns: minmax(350px, 450px) minmax(350px, 1fr);
+        }
+
+
+        .login-info h2 {
+            font-size: 2.7rem;
+        }
+
+
+        .smart-ac-visual {
+            height: 175px;
+        }
+
+
+        .info-features {
+            grid-template-columns: 1fr;
+        }
+
+
+        .info-feature {
+            display: flex;
+            align-items: center;
+            gap: 11px;
+            padding: 11px 13px;
+        }
+
+
+        .info-feature-icon {
+            margin-bottom: 0;
+            flex-shrink: 0;
+        }
+
+
+        .feature-check {
+            top: 50%;
+            right: 14px;
+            transform: translateY(-50%);
+        }
+    }
+
+
+    /* =====================================================
+               TABLET
+               ===================================================== */
+
+    @@media (max-width: 850px) {
+
+        .login-navbar {
+            padding: 15px 20px;
+        }
+
+
+        .navbar-inner {
+            min-height: 58px;
+        }
+
+
+        .brand-tagline {
+            display: none;
+        }
+
+
+        .login-content {
+            grid-template-columns: 1fr;
+            max-width: 650px;
+            gap: 35px;
+            padding: 25px 25px 45px;
+        }
+
+
+        .login-info {
+            order: -1;
+            max-width: 620px;
+            margin: 0 auto;
+            padding: 15px 0 0;
+            text-align: center;
+        }
+
+
+        .info-badge {
+            margin-bottom: 15px;
+        }
+
+
+        .login-info h2 {
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+            font-size: 2.55rem;
+        }
+
+
+            .login-info h2 span {
+                display: inline;
+            }
+
+
+        .info-description {
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+
+        .smart-ac-visual {
+            max-width: 560px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+
+        .info-features {
+            max-width: 560px;
+            margin: 0 auto;
+            grid-template-columns: repeat(3, 1fr);
+        }
+
+
+        .info-feature {
+            display: block;
+            text-align: left;
+        }
+
+
+        .info-feature-icon {
+            margin-bottom: 9px;
+        }
+
+
+        .feature-check {
+            top: 12px;
+            right: 12px;
+            transform: none;
+        }
+
+
+        .info-bottom {
+            max-width: 560px;
+            margin-left: auto;
+            margin-right: auto;
+            text-align: left;
+        }
+
+
+        .login-card {
+            max-width: 500px;
+            margin: 0 auto;
+        }
+    }
+
+
+    /* =====================================================
+               MOBILE
+               ===================================================== */
+
+    @@media (max-width: 600px) {
+
+        .login-page {
+            min-height: 100svh;
+        }
+
+
+        .login-navbar {
+            padding: 10px 12px;
+        }
+
+
+        .navbar-inner {
+            min-height: 53px;
+            padding: 7px 8px 7px 10px;
+            border-radius: 16px;
+        }
+
+
+        .brand-icon {
+            width: 38px;
+            height: 38px;
+            border-radius: 11px;
+            font-size: 1rem;
+        }
+
+
+        .brand-name {
+            font-size: 0.95rem;
+        }
+
+
+        .navbar-nav {
+            gap: 5px;
+        }
+
+
+        .nav-link {
+            padding: 8px 10px;
+            font-size: 0;
+        }
+
+
+            .nav-link i {
+                font-size: 0.85rem;
+            }
+
+
+        .nav-status {
+            padding: 7px 9px;
+            font-size: 0;
+        }
+
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+        }
+
+
+        .login-content {
+            gap: 22px;
+            padding: 18px 14px 35px;
+        }
+
+
+        .login-info {
+            padding-top: 5px;
+        }
+
+
+        .info-decoration {
+            display: none;
+        }
+
+
+        .info-badge {
+            margin-bottom: 13px;
+            padding: 6px 10px 6px 7px;
+            font-size: 0.62rem;
+        }
+
+
+        .badge-icon {
+            width: 22px;
+            height: 22px;
+        }
+
+
+        .login-info h2 {
+            font-size: 2rem;
+            line-height: 1.12;
+        }
+
+
+        .info-description {
+            margin-bottom: 17px;
+            font-size: 0.82rem;
+            line-height: 1.65;
+        }
+
+
+        .smart-ac-visual {
+            height: 155px;
+            margin-bottom: 15px;
+            border-radius: 20px;
+        }
+
+
+        .ac-device {
+            width: 220px;
+            height: 88px;
+            padding: 11px 14px;
+            border-radius: 15px;
+        }
+
+
+        .ac-display {
+            margin-top: 8px;
+            font-size: 1.65rem;
+        }
+
+
+        .ac-air-lines {
+            margin-top: 7px;
+        }
+
+
+            .ac-air-lines span {
+                width: 28px;
+            }
+
+
+        .temperature-card {
+            right: 10px;
+            bottom: 10px;
+            padding: 8px;
+            gap: 7px;
+        }
+
+
+        .temperature-icon {
+            width: 26px;
+            height: 26px;
+        }
+
+
+        .temperature-card small {
+            font-size: 0.48rem;
+        }
+
+
+        .temperature-card strong {
+            font-size: 0.7rem;
+        }
+
+
+        .cooling-status {
+            display: none;
+        }
+
+
+        .info-features {
+            grid-template-columns: 1fr;
+            gap: 7px;
+        }
+
+
+        .info-feature {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+        }
+
+
+        .info-feature-icon {
+            width: 34px;
+            height: 34px;
+            margin: 0;
+        }
+
+
+        .info-feature-content strong {
+            font-size: 0.7rem;
+        }
+
+
+        .info-feature-content small {
+            font-size: 0.6rem;
+        }
+
+
+        .feature-check {
+            top: 50%;
+            right: 12px;
+            transform: translateY(-50%);
+        }
+
+
+        .info-bottom {
+            display: none;
+        }
+
+
+        .login-card {
+            padding: 28px 20px;
+            border-radius: 23px;
+        }
+
+
+        .login-header {
+            margin-bottom: 24px;
+        }
+
+
+        .login-icon {
+            width: 58px;
+            height: 58px;
+            margin-bottom: 14px;
+            border-radius: 18px;
+            font-size: 1.45rem;
+        }
+
+
+        .login-header h1 {
+            font-size: 1.65rem;
+        }
+
+
+        .login-header p {
+            font-size: 0.82rem;
+        }
+
+
+        .login-input {
+            height: 50px;
+            font-size: 0.9rem;
+        }
+
+
+        .security-notice {
+            align-items: flex-start;
+        }
+
+
+        .login-footer {
+            flex-direction: column;
+            gap: 3px;
+            padding-bottom: 16px;
+            font-size: 0.64rem;
+        }
+
+
+        .footer-dot {
+            display: none;
+        }
+    }
+
+
+    /* =====================================================
+               SMALL MOBILE
+               ===================================================== */
+
+    @@media (max-width: 380px) {
+
+        .brand-name {
+            font-size: 0.88rem;
+        }
+
+
+        .nav-status {
+            display: none;
+        }
+
+
+        .login-content {
+            padding-left: 10px;
+            padding-right: 10px;
+        }
+
+
+        .login-card {
+            padding: 25px 17px;
+        }
+
+
+        .login-info h2 {
+            font-size: 1.75rem;
+        }
+
+
+        .info-description {
+            font-size: 0.78rem;
+        }
+
+
+        .smart-ac-visual {
+            height: 145px;
+        }
+
+
+        .ac-device {
+            width: 195px;
+        }
+
+
+        .temperature-card {
+            transform: scale(0.9);
+            transform-origin: bottom right;
+        }
+    }
+
+
+    /* =====================================================
+               REDUCED MOTION
+               ===================================================== */
+
+    @@media (prefers-reduced-motion: reduce) {
+
+        .snowflake,
+        .login-icon,
+        .ac-device,
+        .login-card,
+        .login-info {
+            animation: none !important;
+        }
+
+
+        .login-submit,
+        .info-feature,
+        .login-input,
+        .nav-link {
+            transition: none !important;
+        }
+    }
+
+</style>
