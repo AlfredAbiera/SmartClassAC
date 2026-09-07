@@ -79,7 +79,7 @@
             else
             {
                 <div class="page-intro"><p>SYSTEM SETTINGS PROCESS</p><h2>Administration & recovery</h2><span>Manage the default administrator or reset all SmartClass data to the first-access state.</span></div>
-                <div class="settings-grid"><article class="panel"><span class="eyebrow">ADMIN CREDENTIALS</span><h3>Account contact</h3><div class="form-stack"><label>Registered admin email<input type="email" @bind="adminEmail" /></label><label>New password<input type="password" @bind="adminNewPassword" placeholder="Leave blank to keep current password" /></label></div><button class="primary-button" @onclick="SaveAdminSettings">Save settings</button></article><article class="panel"><span class="eyebrow">FRESH START</span><h3>Reset system to first access</h3><p class="form-help">This permanently clears teachers, classrooms, schedules, attendance, requests, tickets, and temperature logs; then it creates the configured default administrator with no email.</p><button class="danger-button" @onclick='() => resetOpen = true'>Reset all system data</button></article></div>
+                <div class="settings-grid"><article class="panel"><span class="eyebrow">ADMIN CREDENTIALS</span><h3>Account contact</h3><div class="form-stack"><label>Current password<input type="password" @bind="adminCurrentPassword" autocomplete="current-password" /></label><label>Registered admin email<input type="email" @bind="adminEmail" /></label><label>New password<input type="password" @bind="adminNewPassword" placeholder="Leave blank to keep current password" autocomplete="new-password" /></label></div><button class="primary-button" @onclick="SaveAdminSettings">Save settings</button></article><article class="panel"><span class="eyebrow">FRESH START</span><h3>Reset system to first access</h3><p class="form-help">This permanently clears teachers, classrooms, schedules, attendance, requests, tickets, and temperature logs; then it creates the configured default administrator with no email.</p><button class="danger-button" @onclick='() => resetOpen = true'>Reset all system data</button></article></div>
             }
         </section>
     </main>
@@ -92,11 +92,11 @@
 
 @if (resetOpen)
 {
-    <div class="modal-backdrop"><section class="dialog-card" role="dialog" aria-modal="true"><span class="dialog-icon danger"><i class="fas fa-triangle-exclamation"></i></span><h2>Reset SmartClass AC?</h2><p>This cannot be undone. Type <strong>RESET</strong> to delete all stored data and return to First Access.</p><input @bind="resetConfirmation" placeholder="Type RESET" /><div class="dialog-actions"><button class="secondary-button" @onclick='() => resetOpen = false'>Cancel</button><button class="danger-button" @onclick="ResetSystem">Reset system</button></div></section></div>
+    <div class="modal-backdrop"><section class="dialog-card" role="dialog" aria-modal="true"><span class="dialog-icon danger"><i class="fas fa-triangle-exclamation"></i></span><h2>Reset SmartClass AC?</h2><p>This cannot be undone. Type <strong>RESET</strong> to delete all stored data and return to First Access.</p><label>Current administrator password<input type="password" @bind="adminCurrentPassword" autocomplete="current-password" /></label><input @bind="resetConfirmation" placeholder="Type RESET" /><div class="dialog-actions"><button class="secondary-button" @onclick='() => resetOpen = false'>Cancel</button><button class="danger-button" @onclick="ResetSystem">Reset system</button></div></section></div>
 }
 
 @code {
-    private string active = "overview", message = string.Empty, newTeacherName = string.Empty, newTeacherUsername = string.Empty, newTeacherEmail = string.Empty, newTeacherPassword = string.Empty, classroomName = string.Empty, scheduleSubject = string.Empty, adminEmail = string.Empty, adminNewPassword = string.Empty, resetConfirmation = string.Empty, deleteConfirmation = string.Empty;
+    private string active = "overview", message = string.Empty, newTeacherName = string.Empty, newTeacherUsername = string.Empty, newTeacherEmail = string.Empty, newTeacherPassword = string.Empty, classroomName = string.Empty, scheduleSubject = string.Empty, adminEmail = string.Empty, adminCurrentPassword = string.Empty, adminNewPassword = string.Empty, resetConfirmation = string.Empty, deleteConfirmation = string.Empty;
     private bool sidebarOpen, isLoading, resetOpen;
     private long editingClassroomId, scheduleTeacherId, scheduleClassroomId, temperatureClassroomId, deleteTargetId;
     private string? deleteTargetType, deleteTargetName;
@@ -134,13 +134,21 @@
         {
             currentUser = await AuthService.GetCurrentUserAsync();
             adminEmail = currentUser?.Email ?? string.Empty;
-            teachers = (await AuthService.GetTeachersAsync()).ToList();
-            classrooms = (await AuthService.GetClassroomsAsync()).ToList();
-            schedules = (await AuthService.GetSchedulesAsync()).ToList();
-            attendance = (await AuthService.GetAttendanceLogsAsync()).ToList();
-            requests = (await AuthService.GetTeacherRequestsAsync()).ToList();
-            tickets = (await AuthService.GetSupportTicketsAsync()).ToList();
-            temperatureLogs = (await AuthService.GetTemperatureLogsAsync()).ToList();
+            var teachersTask = AuthService.GetTeachersAsync();
+            var classroomsTask = AuthService.GetClassroomsAsync();
+            var schedulesTask = AuthService.GetSchedulesAsync();
+            var attendanceTask = AuthService.GetAttendanceLogsAsync();
+            var requestsTask = AuthService.GetTeacherRequestsAsync();
+            var ticketsTask = AuthService.GetSupportTicketsAsync();
+            var temperatureLogsTask = AuthService.GetTemperatureLogsAsync();
+            await Task.WhenAll(teachersTask, classroomsTask, schedulesTask, attendanceTask, requestsTask, ticketsTask, temperatureLogsTask);
+            teachers = (await teachersTask).ToList();
+            classrooms = (await classroomsTask).ToList();
+            schedules = (await schedulesTask).ToList();
+            attendance = (await attendanceTask).ToList();
+            requests = (await requestsTask).ToList();
+            tickets = (await ticketsTask).ToList();
+            temperatureLogs = (await temperatureLogsTask).ToList();
             substituteSelections.Clear();
             foreach (var request in requests) substituteSelections[request.Id] = request.SubstituteTeacherAccountId ?? 0;
         }
@@ -151,7 +159,7 @@
     private void Navigate(string section) { active = section; sidebarOpen = false; }
     private void ToggleSidebar() => sidebarOpen = !sidebarOpen;
     private void Toast(string value) => message = value;
-    private async Task Logout() { await AuthService.LogoutAsync(); AuthStateProvider.NotifyUserLogout(); Navigation.NavigateTo("/login"); }
+    private async Task Logout() { await AuthService.LogoutAsync(); await AuthStateProvider.NotifyUserLogoutAsync(); Navigation.NavigateTo("/auth/logout", true); }
     private string ScheduleTodayFor(long teacherId) => string.Join(", ", schedules.Where(schedule => schedule.TeacherAccountId == teacherId && schedule.ScheduleDate == Today).Select(schedule => $"{schedule.StartTime:HH\\:mm} {schedule.ClassroomName}").DefaultIfEmpty("No schedule"));
 
     private async Task SaveTeacher()
@@ -254,9 +262,9 @@
 
     private async Task SaveAdminSettings()
     {
-        var result = await AuthService.UpdateAdministratorCredentialsAsync(adminEmail, adminNewPassword);
+        var result = await AuthService.UpdateAdministratorCredentialsAsync(adminEmail, adminCurrentPassword, adminNewPassword);
         if (!result.Succeeded) { Toast(result.Error ?? "Administrator settings could not be saved."); return; }
-        adminNewPassword = string.Empty;
+        adminCurrentPassword = adminNewPassword = string.Empty;
         currentUser = await AuthService.GetCurrentUserAsync();
         Toast("Administrator credentials were saved.");
     }
@@ -264,9 +272,10 @@
     private async Task ResetSystem()
     {
         if (!string.Equals(resetConfirmation, "RESET", StringComparison.Ordinal)) { Toast("Type RESET to confirm the fresh-start reset."); return; }
-        var result = await AuthService.ResetSystemToFirstAccessAsync();
+        var result = await AuthService.ResetSystemToFirstAccessAsync(adminCurrentPassword);
         if (!result.Succeeded) { Toast(result.Error ?? "System could not be reset."); return; }
-        AuthStateProvider.NotifyUserLogout();
-        Navigation.NavigateTo("/first-access", true);
+        adminCurrentPassword = string.Empty;
+        await AuthStateProvider.NotifyUserLogoutAsync();
+        Navigation.NavigateTo("/auth/logout?returnUrl=%2Ffirst-access", true);
     }
 }

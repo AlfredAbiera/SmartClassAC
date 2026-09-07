@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="tests\**\*.cs" />
+    <Content Remove="tests\**" />
+    <None Remove="tests\**" />
+    <EmbeddedResource Remove="tests\**" />
     <!-- Supabase provides PostgreSQL; Npgsql is the .NET PostgreSQL driver. -->
     <PackageReference Include="MailKit" Version="4.17.0" />
     <PackageReference Include="Npgsql" Version="8.0.3" />

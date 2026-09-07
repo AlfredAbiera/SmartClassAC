@@ -131,18 +131,25 @@
         isLoading = true;
         try
         {
-            profile = await AuthService.GetMyTeacherProfileAsync();
+            var profileTask = AuthService.GetMyTeacherProfileAsync();
+            var schedulesTask = AuthService.GetMyTeacherSchedulesAsync();
+            var attendanceTask = AuthService.GetAttendanceLogsAsync();
+            var requestsTask = AuthService.GetTeacherRequestsAsync();
+            var ticketsTask = AuthService.GetSupportTicketsAsync();
+            var temperatureLogsTask = AuthService.GetTemperatureLogsAsync();
+            await Task.WhenAll(profileTask, schedulesTask, attendanceTask, requestsTask, ticketsTask, temperatureLogsTask);
+            profile = await profileTask;
             if (profile is not null)
             {
                 profileName = profile.DisplayName;
                 profileEmail = profile.Email;
                 profilePhone = profile.Phone ?? string.Empty;
             }
-            schedules = (await AuthService.GetMyTeacherSchedulesAsync()).ToList();
-            attendance = (await AuthService.GetAttendanceLogsAsync()).ToList();
-            requests = (await AuthService.GetTeacherRequestsAsync()).ToList();
-            tickets = (await AuthService.GetSupportTicketsAsync()).ToList();
-            temperatureLogs = (await AuthService.GetTemperatureLogsAsync()).ToList();
+            schedules = (await schedulesTask).ToList();
+            attendance = (await attendanceTask).ToList();
+            requests = (await requestsTask).ToList();
+            tickets = (await ticketsTask).ToList();
+            temperatureLogs = (await temperatureLogsTask).ToList();
             selectedClassroomId = TodaySchedules.FirstOrDefault()?.ClassroomId ?? 0;
         }
         catch { Toast("Your dashboard data could not be loaded."); }
@@ -152,7 +159,7 @@
     private void Navigate(string section) { active = section; sidebarOpen = false; }
     private void ToggleSidebar() => sidebarOpen = !sidebarOpen;
     private void Toast(string value) => message = value;
-    private async Task Logout() { await AuthService.LogoutAsync(); AuthStateProvider.NotifyUserLogout(); Navigation.NavigateTo("/login"); }
+    private async Task Logout() { await AuthService.LogoutAsync(); await AuthStateProvider.NotifyUserLogoutAsync(); Navigation.NavigateTo("/auth/logout", true); }
 
     private async Task SaveProfile()
     {

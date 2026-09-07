@@ -127,7 +127,7 @@
 
 
             <!-- Login Form -->
-            <form @onsubmit="HandleLogin">
+            <form method="post" action="/auth/login">
 
                 <!-- Username -->
                 <div class="form-field">
@@ -145,6 +145,7 @@
                                class="login-input"
                                placeholder="Enter your username"
                                autocomplete="username"
+                               name="username"
                                @bind="username" />
 
                     </div>
@@ -174,6 +175,7 @@
                                class="login-input"
                                placeholder="Enter your password"
                                autocomplete="current-password"
+                               name="password"
                                @bind="password" />
 
                     </div>
@@ -478,68 +480,11 @@
     private string errorMessage = string.Empty;
 
 
-    private async Task HandleLogin()
+    protected override void OnInitialized()
     {
-        if (isLoading)
+        if (Navigation.Uri.Contains("error=signin", StringComparison.OrdinalIgnoreCase))
         {
-            return;
-        }
-
-        isLoading = true;
-        errorMessage = string.Empty;
-
-        try
-        {
-            if (await AuthService.IsInitialAdminSetupRequiredAsync())
-            {
-                Navigation.NavigateTo("/first-access");
-                return;
-            }
-
-            if (string.IsNullOrWhiteSpace(username) ||
-                string.IsNullOrWhiteSpace(password))
-            {
-                errorMessage =
-                    "Please enter your username and password.";
-
-                return;
-            }
-
-
-            var result =
-                await AuthService.LoginAsync(
-                    username,
-                    password
-                );
-
-
-            if (result.Succeeded)
-            {
-                AuthStateProvider.NotifyUserAuthentication();
-
-                if (result.User!.Role == UserRole.Admin)
-                {
-                    Navigation.NavigateTo("/admin");
-                }
-                else
-                {
-                    Navigation.NavigateTo("/teacher");
-                }
-            }
-            else
-            {
-                errorMessage =
-                    result.Error ?? "Invalid username or password. Please try again.";
-            }
-        }
-        catch
-        {
-            errorMessage =
-                "An error occurred while signing in. Please try again later.";
-        }
-        finally
-        {
-            isLoading = false;
+            errorMessage = "Invalid username or password.";
         }
     }
 

@@ -8,6 +8,11 @@ public sealed class DefaultAdminOptions
     public string Password { get; set; } = string.Empty;
 }
 
+public sealed class SchoolTimeOptions
+{
+    public string TimeZoneId { get; set; } = string.Empty;
+}
+
 public sealed record AuthenticatedUser(long Id, string Username, string DisplayName, string? Email, UserRole Role, bool IsDefaultAdmin);
 public sealed record LoginResult(bool Succeeded, AuthenticatedUser? User, string? Error)
 {
@@ -114,7 +119,9 @@ public sealed record UserAccountRecord(long Id, string Username, string DisplayN
 public interface IUserAccountRepository
 {
     Task InitializeAsync(DefaultAdminOptions defaultAdmin, string passwordHash, CancellationToken cancellationToken);
+    Task CheckHealthAsync(CancellationToken cancellationToken = default);
     Task<UserAccountRecord?> FindByIdentifierAsync(string usernameOrEmail, CancellationToken cancellationToken = default);
+    Task<UserAccountRecord?> FindByIdAsync(long accountId, CancellationToken cancellationToken = default);
     Task<bool> IsInitialAdminSetupRequiredAsync(CancellationToken cancellationToken = default);
     Task<bool> SetInitialAdminEmailAsync(string email, CancellationToken cancellationToken = default);
     Task<OperationResult> UpdateDefaultAdminCredentialsAsync(long accountId, string email, string? passwordHash, CancellationToken cancellationToken = default);
@@ -134,7 +141,7 @@ public interface IUserAccountRepository
     Task<OperationResult> UpdateTeacherProfileAsync(long accountId, UpdateTeacherProfileRequest request, string? passwordHash, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ScheduleDirectoryEntry>> GetTeacherSchedulesAsync(long accountId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<AttendanceLogEntry>> GetAttendanceLogsAsync(long? teacherAccountId = null, CancellationToken cancellationToken = default);
-    Task<OperationResult> StartClassAsync(long teacherAccountId, long scheduleId, CancellationToken cancellationToken = default);
+    Task<OperationResult> StartClassAsync(long teacherAccountId, long scheduleId, DateOnly schoolDate, TimeOnly schoolTime, CancellationToken cancellationToken = default);
     Task<OperationResult> EndClassAsync(long teacherAccountId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TeacherRequestEntry>> GetTeacherRequestsAsync(long? teacherAccountId = null, CancellationToken cancellationToken = default);
     Task<OperationResult> SubmitTeacherRequestAsync(long teacherAccountId, SubmitTeacherRequest request, CancellationToken cancellationToken = default);
@@ -152,9 +159,10 @@ public interface IAuthService
     Task<LoginResult> LoginAsync(string usernameOrEmail, string password);
     Task LogoutAsync();
     Task<AuthenticatedUser?> GetCurrentUserAsync();
+    Task<AuthenticatedUser?> RestoreUserAsync(long accountId, CancellationToken cancellationToken = default);
     Task<bool> IsInitialAdminSetupRequiredAsync();
     Task<OperationResult> CompleteInitialAdminSetupAsync(string email);
-    Task<OperationResult> UpdateAdministratorCredentialsAsync(string email, string? newPassword);
+    Task<OperationResult> UpdateAdministratorCredentialsAsync(string email, string currentPassword, string? newPassword);
     Task<OperationResult> CreateTeacherAsync(CreateTeacherRequest request);
     Task<IReadOnlyList<TeacherDirectoryEntry>> GetTeachersAsync();
     Task<OperationResult> DeleteTeacherAsync(long accountId);
@@ -181,5 +189,5 @@ public interface IAuthService
     Task<OperationResult> ReviewSupportTicketAsync(ReviewSupportTicket request);
     Task<IReadOnlyList<TemperatureLogEntry>> GetTemperatureLogsAsync(long? classroomId = null);
     Task<OperationResult> SetTemperatureAsync(SetTemperatureRequest request);
-    Task<OperationResult> ResetSystemToFirstAccessAsync();
+    Task<OperationResult> ResetSystemToFirstAccessAsync(string currentPassword);
 }

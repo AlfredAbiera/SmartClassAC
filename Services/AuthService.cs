@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage;
 using Microsoft.Extensions.Options;
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
@@ -12,6 +13,8 @@ public sealed class AuthService : IAuthService
     private readonly DefaultAdminOptions _defaultAdmin;
     private readonly PasswordResetOptions _passwordReset;
     private readonly IPasswordResetEmailSender _passwordResetEmailSender;
+    private readonly LoginAttemptLimiter _loginAttemptLimiter;
+    private readonly SchoolTimeOptions _schoolTime;
     private AuthenticatedUser? _currentUser;
 
     public AuthService(
@@ -19,22 +22,35 @@ public sealed class AuthService : IAuthService
         PasswordHasher passwordHasher,
         IOptions<DefaultAdminOptions> defaultAdmin,
         IOptions<PasswordResetOptions> passwordReset,
-        IPasswordResetEmailSender passwordResetEmailSender)
+        IPasswordResetEmailSender passwordResetEmailSender,
+        LoginAttemptLimiter loginAttemptLimiter,
+        IOptions<SchoolTimeOptions> schoolTime)
     {
         _accounts = accounts;
         _passwordHasher = passwordHasher;
         _defaultAdmin = defaultAdmin.Value;
         _passwordReset = passwordReset.Value;
         _passwordResetEmailSender = passwordResetEmailSender;
+        _loginAttemptLimiter = loginAttemptLimiter;
+        _schoolTime = schoolTime.Value;
     }
 
     public async Task<LoginResult> LoginAsync(string usernameOrEmail, string password)
     {
-        var account = await _accounts.FindByIdentifierAsync(usernameOrEmail.Trim());
+        var identifier = usernameOrEmail.Trim();
+        if (_loginAttemptLimiter.IsBlocked(identifier))
+        {
+            return LoginResult.Failure("Too many unsuccessful attempts. Try again in a few minutes.");
+        }
+
+        var account = await _accounts.FindByIdentifierAsync(identifier);
         if (account is null || !_passwordHasher.Verify(password, account.PasswordHash))
         {
+            _loginAttemptLimiter.RecordFailure(identifier);
             return LoginResult.Failure("Invalid username or password.");
         }
+
+        _loginAttemptLimiter.RecordSuccess(identifier);
 
         _currentUser = new AuthenticatedUser(
             account.Id,
@@ -51,6 +67,25 @@ public sealed class AuthService : IAuthService
     {
         _currentUser = null;
         return Task.CompletedTask;
+    }
+
+    public async Task<AuthenticatedUser?> RestoreUserAsync(long accountId, CancellationToken cancellationToken = default)
+    {
+        var account = await _accounts.FindByIdAsync(accountId, cancellationToken);
+        if (account is null || account.Id != accountId)
+        {
+            _currentUser = null;
+            return null;
+        }
+
+        _currentUser = new AuthenticatedUser(
+            account.Id,
+            account.Username,
+            account.DisplayName,
+            account.Email,
+            account.Role,
+            account.IsDefaultAdmin);
+        return _currentUser;
     }
 
     public Task<AuthenticatedUser?> GetCurrentUserAsync() => Task.FromResult(_currentUser);
@@ -125,11 +160,16 @@ public sealed class AuthService : IAuthService
             : OperationResult.Failure("Initial administrator setup has already been completed.");
     }
 
-    public async Task<OperationResult> UpdateAdministratorCredentialsAsync(string email, string? newPassword)
+    public async Task<OperationResult> UpdateAdministratorCredentialsAsync(string email, string currentPassword, string? newPassword)
     {
         if (_currentUser is not { Role: UserRole.Admin, IsDefaultAdmin: true } currentUser)
         {
             return OperationResult.Failure("Only the default administrator can change these credentials.");
+        }
+
+        if (!await IsCurrentPasswordValidAsync(currentUser.Id, currentPassword))
+        {
+            return OperationResult.Failure("The current administrator password is incorrect.");
         }
 
         if (!new EmailAddressAttribute().IsValid(email))
@@ -345,9 +385,17 @@ public sealed class AuthService : IAuthService
     public async Task<OperationResult> StartMyClassAsync(long scheduleId)
     {
         var teacher = RequireTeacher();
-        return teacher is null
-            ? OperationResult.Failure("Only a signed-in teacher can start a class.")
-            : await _accounts.StartClassAsync(teacher.Id, scheduleId);
+        if (teacher is null)
+        {
+            return OperationResult.Failure("Only a signed-in teacher can start a class.");
+        }
+
+        var schoolNow = GetSchoolNow();
+        return await _accounts.StartClassAsync(
+            teacher.Id,
+            scheduleId,
+            DateOnly.FromDateTime(schoolNow),
+            TimeOnly.FromDateTime(schoolNow));
     }
 
     public async Task<OperationResult> EndMyClassAsync()
@@ -376,6 +424,17 @@ public sealed class AuthService : IAuthService
         if (request.RequestType is not ("Leave" or "EarlyOut" or "Overtime"))
         {
             return OperationResult.Failure("Choose a valid request type.");
+        }
+
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        if (request.RequestType == "Leave" && request.RequestDate < today)
+        {
+            return OperationResult.Failure("Leave requests cannot be submitted for a past date.");
+        }
+
+        if (request.RequestType is "EarlyOut" or "Overtime" && request.RequestDate != today)
+        {
+            return OperationResult.Failure("Early-out and overtime requests must be submitted for today.");
         }
 
         if (string.IsNullOrWhiteSpace(request.Reason) || request.Reason.Trim().Length > 1000)
@@ -473,11 +532,16 @@ public sealed class AuthService : IAuthService
         return await _accounts.SetTemperatureAsync(_currentUser.Id, request);
     }
 
-    public async Task<OperationResult> ResetSystemToFirstAccessAsync()
+    public async Task<OperationResult> ResetSystemToFirstAccessAsync(string currentPassword)
     {
         if (_currentUser is not { Role: UserRole.Admin, IsDefaultAdmin: true })
         {
             return OperationResult.Failure("Only the default administrator can reset the system.");
+        }
+
+        if (!await IsCurrentPasswordValidAsync(_currentUser.Id, currentPassword))
+        {
+            return OperationResult.Failure("The current administrator password is incorrect.");
         }
 
         if (string.IsNullOrWhiteSpace(_defaultAdmin.Username) || string.IsNullOrWhiteSpace(_defaultAdmin.Password))
@@ -495,17 +559,86 @@ public sealed class AuthService : IAuthService
         : OperationResult.Failure("Only an administrator can perform this action.");
 
     private AuthenticatedUser? RequireTeacher() => _currentUser?.Role == UserRole.Teacher ? _currentUser : null;
+
+    private async Task<bool> IsCurrentPasswordValidAsync(long accountId, string password)
+    {
+        if (string.IsNullOrEmpty(password))
+        {
+            return false;
+        }
+
+        var account = await _accounts.FindByIdAsync(accountId);
+        return account is not null && _passwordHasher.Verify(password, account.PasswordHash);
+    }
+
+    private DateTime GetSchoolNow()
+    {
+        if (string.IsNullOrWhiteSpace(_schoolTime.TimeZoneId))
+        {
+            return DateTime.Now;
+        }
+
+        try
+        {
+            return TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, TimeZoneInfo.FindSystemTimeZoneById(_schoolTime.TimeZoneId)).DateTime;
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return DateTime.Now;
+        }
+        catch (InvalidTimeZoneException)
+        {
+            return DateTime.Now;
+        }
+    }
 }
 
 public sealed class CustomAuthStateProvider : AuthenticationStateProvider
 {
+    private const string AccountIdStorageKey = "smartclass.account-id";
     private readonly IAuthService _authService;
+    private readonly ProtectedSessionStorage _sessionStorage;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public CustomAuthStateProvider(IAuthService authService) => _authService = authService;
+    public CustomAuthStateProvider(IAuthService authService, ProtectedSessionStorage sessionStorage, IHttpContextAccessor httpContextAccessor)
+    {
+        _authService = authService;
+        _sessionStorage = sessionStorage;
+        _httpContextAccessor = httpContextAccessor;
+    }
 
     public override async Task<AuthenticationState> GetAuthenticationStateAsync()
     {
         var currentUser = await _authService.GetCurrentUserAsync();
+        if (currentUser is null)
+        {
+            var accountIdClaim = _httpContextAccessor.HttpContext?.User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (long.TryParse(accountIdClaim, out var cookieAccountId))
+            {
+                currentUser = await _authService.RestoreUserAsync(cookieAccountId);
+            }
+
+            try
+            {
+                if (currentUser is null)
+                {
+                    var storedAccount = await _sessionStorage.GetAsync<long>(AccountIdStorageKey);
+                    if (storedAccount.Success)
+                    {
+                        currentUser = await _authService.RestoreUserAsync(storedAccount.Value);
+                        if (currentUser is null)
+                        {
+                            await _sessionStorage.DeleteAsync(AccountIdStorageKey);
+                        }
+                    }
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // Browser storage is unavailable during prerendering.
+            }
+        }
+
         if (currentUser is null)
         {
             return new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity()));
@@ -520,6 +653,15 @@ public sealed class CustomAuthStateProvider : AuthenticationStateProvider
         return new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity(claims, "SmartClass")));
     }
 
-    public void NotifyUserAuthentication() => NotifyAuthenticationStateChanged(GetAuthenticationStateAsync());
-    public void NotifyUserLogout() => NotifyAuthenticationStateChanged(Task.FromResult(new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity()))));
+    public async Task NotifyUserAuthenticationAsync(long accountId)
+    {
+        await _sessionStorage.SetAsync(AccountIdStorageKey, accountId);
+        NotifyAuthenticationStateChanged(GetAuthenticationStateAsync());
+    }
+
+    public async Task NotifyUserLogoutAsync()
+    {
+        await _sessionStorage.DeleteAsync(AccountIdStorageKey);
+        NotifyAuthenticationStateChanged(Task.FromResult(new AuthenticationState(new ClaimsPrincipal(new ClaimsIdentity()))));
+    }
 }
