@@ -140,11 +140,12 @@
     private string Title => active switch { "profile" => "My profile", "schedule" => "My schedule", "attendance" => "Attendance history", "classroom" => "Classroom temperature", "active" => "Active class", "leave" => "Leave & substitute", "support" => "Support", _ => "Dashboard overview" };
     private string NavClass(string section) => $"sc-nav-item {(active == section ? "active" : string.Empty)}";
     private static string AcStatusTone(string status) =>
-        status is "Cooling" or "Override" ? "online" : "idle";
+        status is "Cooling" or "Override" or "Remote" ? "online" : "idle";
     private static string AcStatusLabel(string status) => status switch
     {
         "Cooling" => "Cooling",
         "Override" => "Override",
+        "Remote" => "Remote on",
         "Off" => "Off",
         "Idle" => "Off",
         _ => status

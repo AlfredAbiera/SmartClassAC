@@ -1238,14 +1238,15 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             markAbsent.Parameters.Add("@recordedAt", MySqlDbType.DateTime).Value = recordedAt;
             changed += await markAbsent.ExecuteNonQueryAsync(cancellationToken);
 
-            // AC-only re-entry can leave Cooling after attendance closed — turn Off once no schedule is in-window for that room.
+            // Session-tied Cooling can linger after attendance closes — turn Off once no schedule is in-window.
+            // Remote / Override stay on until an explicit Off (portal remote off, hard shutdown, scan end, clear-session).
             await using var clearAc = connection.CreateCommand();
             clearAc.Transaction = transaction;
             clearAc.CommandText = @"
                 SELECT c.id
                 FROM classrooms c
                 WHERE c.is_active = TRUE
-                  AND c.ac_status IN ('Cooling', 'Override')
+                  AND c.ac_status = 'Cooling'
                   AND NOT EXISTS (
                         SELECT 1
                         FROM attendance_logs a
@@ -1547,7 +1548,13 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
-            var status = request.EventType == "HardShutdown" ? "Off" : request.EventType == "EmergencyOverride" ? "Override" : "Cooling";
+            var status = request.EventType switch
+            {
+                "HardShutdown" or "RemoteOff" => "Off",
+                "EmergencyOverride" => "Override",
+                "RemoteOn" => "Remote",
+                _ => "Cooling"
+            };
             await using var update = connection.CreateCommand();
             update.Transaction = transaction;
             update.CommandText = @"
@@ -1841,25 +1848,22 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             return new DeviceFingerprintEnrollResult(false, "No active teacher matched that PIN.");
         }
 
-        if (profile.FingerprintTemplateCount >= FingerprintSlots.All.Length)
-        {
-            return new DeviceFingerprintEnrollResult(
-                Ok: false,
-                Error: "All ten fingerprint slots are already enrolled for this teacher.",
-                TeacherAccountId: profile.AccountId,
-                DisplayName: profile.DisplayName,
-                Username: profile.Username,
-                EmployeeNumber: profile.EmployeeNumber,
-                DevicePin: profile.DevicePin,
-                Email: profile.Email,
-                Phone: profile.Phone,
-                FingerprintTemplateCount: profile.FingerprintTemplateCount);
-        }
-
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            // Sensor IDs are authoritative after a device DELETEALL — reclaim any DB row
+            // still holding this template_identifier (orphan from a wiped sensor).
+            await using (var reclaim = connection.CreateCommand())
+            {
+                reclaim.Transaction = transaction;
+                reclaim.CommandText = @"
+                    DELETE FROM fingerprint_templates
+                    WHERE template_identifier = @templateId;";
+                reclaim.Parameters.Add("@templateId", MySqlDbType.Int64).Value = templateId;
+                await reclaim.ExecuteNonQueryAsync(cancellationToken);
+            }
+
             var usedSlots = new HashSet<string>(StringComparer.Ordinal);
             await using (var slots = connection.CreateCommand())
             {
@@ -1891,7 +1895,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                     DevicePin: profile.DevicePin,
                     Email: profile.Email,
                     Phone: profile.Phone,
-                    FingerprintTemplateCount: profile.FingerprintTemplateCount);
+                    FingerprintTemplateCount: usedSlots.Count);
             }
 
             await using (var insert = connection.CreateCommand())
@@ -1916,7 +1920,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 DevicePin: profile.DevicePin,
                 Email: profile.Email,
                 Phone: profile.Phone,
-                FingerprintTemplateCount: profile.FingerprintTemplateCount + 1,
+                FingerprintTemplateCount: usedSlots.Count + 1,
                 TemplateId: templateId,
                 FingerPosition: fingerPosition);
         }
@@ -2190,7 +2194,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             resolvedDeviceCode = reader.GetString(3);
         }
 
-        var acOn = acStatus is "Cooling" or "Override";
+        var acOn = acStatus is "Cooling" or "Override" or "Remote";
         long? teacherId = null;
         string? teacherName = null;
         long? scheduleId = null;
@@ -2247,14 +2251,14 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
 
         if (acOn && string.IsNullOrWhiteSpace(teacherName))
         {
-            // Last AC-on actor from temperature logs (ClassStarted / AcReentryOn).
+            // Prefer last teacher actor from temperature logs.
             await using var log = connection.CreateCommand();
             log.CommandText = @"
                 SELECT teacher.id, teacher.display_name
                 FROM temperature_logs t
-                INNER JOIN user_accounts teacher ON teacher.id = t.actor_account_id
+                INNER JOIN user_accounts teacher ON teacher.id = t.actor_account_id AND teacher.role = 'Teacher'
                 WHERE t.classroom_id = @classroomId
-                  AND t.event_type IN ('ClassStarted', 'AcReentryOn')
+                  AND t.event_type IN ('ClassStarted', 'AcReentryOn', 'TargetSet')
                 ORDER BY t.recorded_utc DESC
                 LIMIT 1;";
             log.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = classroomId;
@@ -2264,6 +2268,11 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 teacherId = reader.GetInt64(0);
                 teacherName = reader.GetString(1);
             }
+        }
+
+        if (acOn && string.IsNullOrWhiteSpace(teacherName) && acStatus is "Remote" or "Override")
+        {
+            teacherName = acStatus == "Remote" ? "Remote AC" : "Override";
         }
 
         return new DeviceRoomStatusResult(
@@ -2280,6 +2289,96 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             scheduleId);
     }
 
+    public async Task<OperationResult> ClearRoomSessionByDeviceCodeAsync(string deviceCode, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(deviceCode))
+        {
+            return OperationResult.Failure("deviceCode is required.");
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            long classroomId;
+            await using (var device = connection.CreateCommand())
+            {
+                device.Transaction = transaction;
+                device.CommandText = @"
+                    SELECT d.classroom_id
+                    FROM biometric_devices d
+                    INNER JOIN classrooms c ON c.id = d.classroom_id AND c.is_active = TRUE
+                    WHERE d.device_code = @deviceCode AND d.is_active = TRUE
+                    LIMIT 1
+                    FOR UPDATE;";
+                device.Parameters.Add("@deviceCode", MySqlDbType.VarChar).Value = deviceCode.Trim();
+                var id = await device.ExecuteScalarAsync(cancellationToken);
+                if (id is null or DBNull)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return OperationResult.Failure("Unknown or inactive biometric device.");
+                }
+
+                classroomId = Convert.ToInt64(id);
+            }
+
+            var recordedAt = SchoolNow();
+            var sessions = new List<(long AttendanceId, long TeacherId)>();
+            await using (var find = connection.CreateCommand())
+            {
+                find.Transaction = transaction;
+                find.CommandText = @"
+                    SELECT id, teacher_account_id
+                    FROM attendance_logs
+                    WHERE classroom_id = @classroomId
+                      AND time_out_utc IS NULL
+                      AND status = 'Active'
+                    FOR UPDATE;";
+                find.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = classroomId;
+                await using var reader = await find.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    sessions.Add((reader.GetInt64(0), reader.GetInt64(1)));
+                }
+            }
+
+            foreach (var session in sessions)
+            {
+                await using var close = connection.CreateCommand();
+                close.Transaction = transaction;
+                close.CommandText = @"
+                    UPDATE attendance_logs
+                    SET time_out_utc = @recordedAt,
+                        status = 'Completed',
+                        outcome = COALESCE(outcome, 'OnTime')
+                    WHERE id = @id AND time_out_utc IS NULL;";
+                close.Parameters.Add("@id", MySqlDbType.Int64).Value = session.AttendanceId;
+                close.Parameters.Add("@recordedAt", MySqlDbType.DateTime).Value = recordedAt;
+                await close.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            var actorId = sessions.Count > 0 ? sessions[0].TeacherId : (long?)null;
+            await SetClassroomStatusAndLogAsync(
+                connection,
+                transaction,
+                classroomId,
+                actorId,
+                "Off",
+                "ClassEnded",
+                "Device DELETEALL: fingerprints cleared — session and AC reset",
+                recordedAt,
+                cancellationToken);
+
+            await transaction.CommitAsync(cancellationToken);
+            return OperationResult.Success();
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
     public async Task<AcReentryResult?> TryInWindowAcReentryAsync(
         long teacherAccountId,
         long scheduleId,
@@ -2292,7 +2391,8 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
-            // Still inside this teacher's schedule window for this classroom, and attendance already completed.
+            // Still inside this teacher's schedule window; a real (non-Absent) punch already exists.
+            // Caller only reaches here when the teacher has no open session (logout already recorded).
             await using var eligible = connection.CreateCommand();
             eligible.Transaction = transaction;
             eligible.CommandText = @"
@@ -2315,7 +2415,8 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                         FROM attendance_logs prior
                         WHERE prior.class_schedule_id = schedule.id
                           AND prior.teacher_account_id = @teacherId
-                          AND prior.time_out_utc IS NOT NULL
+                          AND prior.verification_method <> 'System'
+                          AND COALESCE(prior.outcome, '') <> 'Absent'
                   )
                   AND NOT EXISTS (
                         SELECT 1
@@ -2337,14 +2438,59 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 return null;
             }
 
-            var turnOn = !string.Equals(currentStatus, "Cooling", StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(currentStatus, "Override", StringComparison.OrdinalIgnoreCase);
+            var turnOn = currentStatus is not ("Cooling" or "Override" or "Remote");
             var nextStatus = turnOn ? "Cooling" : "Off";
             var action = turnOn ? "ac_on" : "ac_off";
             var eventType = turnOn ? "AcReentryOn" : "AcReentryOff";
+            var recordedAt = SchoolNow();
             var notes = turnOn
-                ? "In-window AC re-entry (no new attendance)"
-                : "In-window AC off after re-entry";
+                ? "In-window re-login: reopened attendance (cleared time-out)"
+                : "In-window logout: updated attendance time-out";
+
+            if (turnOn)
+            {
+                // Relogin: reopen the schedule's attendance row so the teacher is Active again.
+                await using var reopen = connection.CreateCommand();
+                reopen.Transaction = transaction;
+                reopen.CommandText = @"
+                    UPDATE attendance_logs
+                    SET time_out_utc = NULL,
+                        status = 'Active'
+                    WHERE class_schedule_id = @scheduleId
+                      AND teacher_account_id = @teacherId
+                      AND verification_method <> 'System'
+                      AND COALESCE(outcome, '') <> 'Absent'
+                    ORDER BY time_in_utc DESC
+                    LIMIT 1;";
+                reopen.Parameters.Add("@scheduleId", MySqlDbType.Int64).Value = scheduleId;
+                reopen.Parameters.Add("@teacherId", MySqlDbType.Int64).Value = teacherAccountId;
+                if (await reopen.ExecuteNonQueryAsync(cancellationToken) != 1)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return null;
+                }
+            }
+            else
+            {
+                // Logout while AC still Cooling but session already closed: refresh time-out to now.
+                await using var touchOut = connection.CreateCommand();
+                touchOut.Transaction = transaction;
+                touchOut.CommandText = @"
+                    UPDATE attendance_logs
+                    SET time_out_utc = @recordedAt,
+                        status = 'Completed',
+                        outcome = COALESCE(outcome, 'OnTime')
+                    WHERE class_schedule_id = @scheduleId
+                      AND teacher_account_id = @teacherId
+                      AND verification_method <> 'System'
+                      AND COALESCE(outcome, '') <> 'Absent'
+                    ORDER BY time_in_utc DESC
+                    LIMIT 1;";
+                touchOut.Parameters.Add("@scheduleId", MySqlDbType.Int64).Value = scheduleId;
+                touchOut.Parameters.Add("@teacherId", MySqlDbType.Int64).Value = teacherAccountId;
+                touchOut.Parameters.Add("@recordedAt", MySqlDbType.DateTime).Value = recordedAt;
+                await touchOut.ExecuteNonQueryAsync(cancellationToken);
+            }
 
             await SetClassroomStatusAndLogAsync(
                 connection,
@@ -2354,7 +2500,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 nextStatus,
                 eventType,
                 notes,
-                SchoolNow(),
+                recordedAt,
                 cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return new AcReentryResult(action, nextStatus);

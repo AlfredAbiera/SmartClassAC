@@ -172,7 +172,9 @@ public sealed class DeviceFingerprintService
                 device.ClassroomId,
                 device.ClassroomName,
                 device.DeviceCode,
-                reentry.Action == "ac_on" ? "AC resumed for this schedule window." : "AC turned off for this schedule window.");
+                reentry.Action == "ac_on"
+                    ? "Re-login: attendance reopened (time-out cleared)."
+                    : "Logout: attendance time-out updated.");
         }
 
         return new DeviceFingerprintScanResult(
@@ -208,6 +210,17 @@ public sealed class DeviceFingerprintService
         }
 
         return await _accounts.GetDeviceRoomStatusAsync(device.DeviceCode, schoolDate, schoolTime, cancellationToken);
+    }
+
+    public async Task<OperationResult> ClearRoomSessionAsync(string deviceCode, CancellationToken cancellationToken = default)
+    {
+        var device = await ResolveDeviceAsync(deviceCode, cancellationToken);
+        if (device is null)
+        {
+            return OperationResult.Failure("Unknown or inactive biometric device.");
+        }
+
+        return await _accounts.ClearRoomSessionByDeviceCodeAsync(device.DeviceCode, cancellationToken);
     }
 
     private async Task<BiometricDeviceEntry?> ResolveDeviceAsync(string? deviceCode, CancellationToken cancellationToken)

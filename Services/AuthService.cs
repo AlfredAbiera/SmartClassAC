@@ -660,7 +660,7 @@ public sealed class AuthService : IAuthService
         }
 
         if (request.ClassroomId <= 0 || request.TargetTemperature is < 16 or > 30 ||
-            request.EventType is not ("TargetSet" or "EmergencyOverride" or "HardShutdown"))
+            request.EventType is not ("TargetSet" or "EmergencyOverride" or "HardShutdown" or "RemoteOn" or "RemoteOff"))
         {
             return OperationResult.Failure("Enter a valid classroom, temperature, and command type.");
         }

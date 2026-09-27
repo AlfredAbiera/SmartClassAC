@@ -121,6 +121,52 @@ app.MapGet("/auth/logout", async (HttpContext context) =>
     return Results.Redirect(safeReturnUrl);
 });
 
+app.MapPost("/api/device/clear-session", async (
+    DeviceStatusRequest request,
+    HttpContext context,
+    DeviceFingerprintService fingerprints,
+    IConfiguration configuration,
+    ILoggerFactory loggerFactory,
+    CancellationToken cancellationToken) =>
+{
+    if (!IsAuthorizedDevice(context, configuration))
+    {
+        return Results.Json(new { ok = false, error = "Unauthorized device.", message = "Unauthorized device." }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+
+    try
+    {
+        var result = await fingerprints.ClearRoomSessionAsync(request.DeviceCode ?? string.Empty, cancellationToken);
+        if (!result.Succeeded)
+        {
+            return Results.Json(new
+            {
+                ok = false,
+                error = result.Error,
+                message = result.Error
+            }, statusCode: StatusCodes.Status404NotFound);
+        }
+
+        return Results.Json(new
+        {
+            ok = true,
+            deviceCode = request.DeviceCode?.Trim(),
+            acOn = false,
+            message = "Room session ended and AC turned off."
+        });
+    }
+    catch (Exception exception)
+    {
+        loggerFactory.CreateLogger("DeviceClearSession").LogError(exception, "Clear session failed for device {DeviceCode}", request.DeviceCode);
+        return Results.Json(new
+        {
+            ok = false,
+            message = exception.Message,
+            error = exception.Message
+        }, statusCode: StatusCodes.Status500InternalServerError);
+    }
+});
+
 app.MapPost("/api/device/status", async (
     DeviceStatusRequest request,
     HttpContext context,

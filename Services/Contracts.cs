@@ -393,12 +393,16 @@ public interface IUserAccountRepository
     Task<IReadOnlyList<BiometricDeviceEntry>> GetBiometricDevicesAsync(CancellationToken cancellationToken = default);
     Task<OperationResult> CreateBiometricDeviceAsync(CreateBiometricDeviceRequest request, CancellationToken cancellationToken = default);
     Task<DeviceRoomStatusResult> GetDeviceRoomStatusAsync(string deviceCode, DateOnly schoolDate, TimeOnly schoolTime, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Ends any active attendance in this device's classroom and sets AC Off (e.g. after sensor DELETEALL).
+    /// </summary>
+    Task<OperationResult> ClearRoomSessionByDeviceCodeAsync(string deviceCode, CancellationToken cancellationToken = default);
     Task<bool> HasActiveAttendanceAsync(long teacherAccountId, CancellationToken cancellationToken = default);
     Task<long?> GetActiveAttendanceClassroomIdAsync(long teacherAccountId, CancellationToken cancellationToken = default);
     Task<long?> FindInWindowScheduleIdAsync(long teacherAccountId, long classroomId, DateOnly schoolDate, TimeOnly schoolTime, CancellationToken cancellationToken = default);
     /// <summary>
-    /// When attendance for this schedule is already completed and the window is still open,
-    /// toggle classroom AC (Cooling ↔ Off) without creating another attendance session.
+    /// When attendance for this schedule already exists and the window is still open,
+    /// re-login clears time-out (Active + AC Cooling); logout refreshes time-out (Completed + AC Off).
     /// </summary>
     Task<AcReentryResult?> TryInWindowAcReentryAsync(long teacherAccountId, long scheduleId, long classroomId, DateOnly schoolDate, TimeOnly schoolTime, CancellationToken cancellationToken = default);
 }

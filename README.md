@@ -200,13 +200,18 @@ Hardware (or Bruno) calls these endpoints with header **`X-Device-Api-Key`** = `
 |--------|------|------|----------|
 | `POST` | `/api/device/fingerprint/enroll` | `{ "pinCode", "templateId", "deviceCode" }` | Validate room scanner; resolve teacher by PIN; store template |
 | `POST` | `/api/device/fingerprint/scan` | `{ "templateId", "deviceCode" }` | Match finger **in that room**; `started` / `ended` / `ac_on` / `ac_off` / `unknown` / `unknown_device` / `wrong_room` / `no_schedule` |
-| `POST` | `/api/device/status` | `{ "deviceCode" }` | Power-loss recovery: room AC on/off, active/in-window teacher, `sessionActive` |
+| `POST` | `/api/device/status` | `{ "deviceCode" }` | Room AC on/off (`acOn`), `acStatus`, teacher, `sessionActive` — power-loss recovery and Admin remote AC sync |
+| `POST` | `/api/device/clear-session` | `{ "deviceCode" }` | End active attendance in that room + set AC Off (used by Serial `DELETEALL`) |
 
 Every room has its own ESP32. Shared header `X-Device-Api-Key` authenticates the fleet; **`deviceCode`** (e.g. `ROOM-101`) selects the classroom. Scan only starts a schedule for that classroom; ending must happen on the same room’s scanner.
 
 **Power-loss recovery:** after WiFi connects (boot or reconnect), firmware `1.2.5+` calls `/api/device/status` with its `deviceCode`, restores the relay from `acOn`, and shows `teacherDisplayName` on the LCD when AC is on. Serial `STATUS` also refreshes from the server.
 
-**Attendance vs AC re-entry:** the first in-window scan creates one attendance session (`started` → AC Cooling). A second scan ends it (`ended` → AC Off). Further scans **in the same schedule window** do **not** create another attendance row — they only toggle AC (`ac_on` / `ac_off`). Outside the window, scans return `no_schedule`. When the window ends, reconcile turns Cooling rooms Off if no active session remains.
+**Remote AC from Admin:** **Admin → AC control** can **Turn AC on** (`RemoteOn` → status `Remote`) or **Turn AC off** (`RemoteOff` → `Off`). That updates MariaDB desired state; firmware `1.2.12+` polls `/api/device/status` about every 30s (with `/health`) and applies `acOn` without a fingerprint scan. Firmware `1.2.13+` keeps the idle LCD on **Ready to scan** if a status sync blip fails (health still drives online/offline). Remote / Override stay on until an explicit Off (portal, hard shutdown, scan end, or clear-session); schedule-window auto-off only clears session-tied `Cooling`.
+
+**Server health:** firmware `1.2.9+` polls `GET /health` every 30s (and on boot / WiFi reconnect / Serial `HEALTH`). Idle LCD (firmware `1.2.14+`) keeps **Ready to scan** on row 1 and shows **Offline** on row 2 when WiFi is up but SmartClass is unreachable (or WiFi is down); fingerprint scans are blocked until health returns Healthy (HTTP 200).
+
+**Attendance vs AC re-entry:** the first in-window scan creates one attendance session (`started` → AC Cooling). A second scan ends it (`ended` → sets **time-out**, AC Off). Further scans **in the same schedule window** reuse that attendance row: `ac_on` reopens it (clears time-out, status Active, AC on); the next scan is `ended` again and **updates time-out** to now. Outside the window, scans return `no_schedule`. When the window ends, reconcile turns `Cooling` rooms Off if no active session remains (does not auto-clear `Remote` / `Override`).
 
 ### Device PIN
 
@@ -297,13 +302,13 @@ sequenceDiagram
 2. **HTTP** — JSON POST, `X-Device-Api-Key`, parse `ok` / `action` from the body.
 3. **Enroll** — Serial `ENROLL` (hardcoded `testPinCode` for now): capture twice, store free sensor ID, `POST` enroll, LCD success/fail; delete sensor slot if API fails.
 4. **Scan** — On match, `POST` scan; `started`/`ac_on` → AC ON; `ended`/`ac_off` → AC OFF; deny paths do **not** flip AC.
-5. **AC** — LCD icons; optional `#define AC_RELAY_PIN -1` for a physical relay later.
+5. **AC** — LCD icons; optional `#define AC_RELAY_PIN -1` for a physical relay later. Desired state also comes from Admin remote on/off via `/api/device/status` poll.
 6. **Temperature** — DHT for LCD idle display only (optional later: send room temp on scan).
 
 ### Out of scope (still)
 
 - Keypad UI for PIN entry (Serial / hardcoded PIN is interim).
-- Separate smart-AC cloud protocol beyond classroom status already written on scan start/end.
+- Push/MQTT command channel (devices pull desired AC state via `/status`).
 
 ### Status
 
@@ -311,6 +316,7 @@ sequenceDiagram
 |------|--------|
 | Enroll API (`pinCode` + `templateId`) | Done |
 | Scan API + attendance / AC | Done |
+| Admin remote AC on/off + device status poll | Done |
 | Bruno + README docs | Done |
 | ESP32 JSON + API key | Done |
 | Serial `ENROLL` + server-trusted scan AC | Done |
@@ -345,7 +351,7 @@ Serial Monitor **115200**:
 
 Usual use: device boots in **scanning mode** (`Ready to scan`). Place an enrolled finger anytime → local match → `POST /api/device/fingerprint/scan` for attendance logging → AC follows `started` / `ended` / `ac_on` / `ac_off`. While AC is on, the LCD shows **teacher name** on row 1 and **clock · session timer · temp · AC icon** on row 2 (both times use a blinking colon). Overlays return to scanning automatically. `ENROLL` is the only mode that pauses scanning.
 
-Serial Monitor tip (firmware `1.2.6+`): set line ending to **Newline** or **Both NL & CR**. Older builds used blocking `readStringUntil`, which stalled the loop (~1s) whenever USB noise arrived without a newline and made the device look “busy”.
+Serial Monitor tip (firmware `1.2.6+`): set line ending to **Newline** or **Both NL & CR**. Commands: `ENROLL`, `DELETEALL` (wipe sensor templates + turn AC off / clear room session), `STATUS`, `HEALTH`, `HELP`. Older builds used blocking `readStringUntil`, which stalled the loop (~1s) whenever USB noise arrived without a newline and made the device look “busy”.
 
 If Serial Monitor shows only □□□ / `` boxes: baud must be **115200** (match `SERIAL_BAUD`). Also check fingerprint wiring — sensor **TX → GPIO16**, **RX → GPIO17**; never onto GPIO1/3 (USB). Tools → board option **USB CDC On Boot = Disabled** for classic ESP32-WROOM USB-UART boards. Flash `1.2.8+`, press reset, and you should see an ASCII `SmartClass device booting` banner first.
 
@@ -557,7 +563,7 @@ AC ON / AC OFF
 | **REGULAR / MAKEUP** | Done | `schedule_kind`; Makeup preferred when overlapping |
 | **CLASSROOM** | Done | Rooms, capacity, target temperature |
 | **BIOMETRIC_DEVICE** | Done | Per-room `deviceCode`; required on enroll/scan |
-| **AC_UNIT** | Partial | Room `ac_status` only — no separate AC inventory table |
+| **AC_UNIT** | Done | Room `ac_status` + Admin remote on/off; ESP polls `/status` (~30s) |
 | **BIOMETRIC_EVENT** | Done | ESP32 / API enroll + scan → start/end class |
 | **ATTENDANCE** session | Done | `Active` → `Completed`; school-local timestamps |
 | **LATE** | Done | Time-in after `LateGraceMinutes` |
@@ -599,7 +605,7 @@ BiometricEvent → Attendance → Late | Absent | MissingTimeOut | OnTime
 | **Missing time-out** | Session still open after schedule end + `MissingTimeOutGraceMinutes` (auto-closed; AC off) |
 | **Absent** | Schedule ended with no time-in punch (system row) |
 
-Session lifecycle remains `Active` → `Completed` (**one attendance session per schedule**). After time-out, further in-window scans only toggle AC (`ac_on` / `ac_off`) and write temperature-log events `AcReentryOn` / `AcReentryOff`. Reconciliation runs every minute and also before scan / dashboard attendance reads; it also turns AC Off when a room is Cooling with no active session and no schedule still in window.
+Session lifecycle remains `Active` → `Completed` (**one attendance row per schedule**). After time-out, in-window re-login (`ac_on`) reopens that row (clears time-out); the next logout (`ended`) writes a fresh time-out. Reconciliation runs every minute and also before scan / dashboard attendance reads; it also turns AC Off when a room is Cooling with no active session and no schedule still in window.
 
 ---
 
@@ -640,6 +646,18 @@ Document every shipped change here (newest first). Also update the relevant sect
 
 ### Entries
 
+#### 2026-09-27 — Admin remote AC on/off to classroom devices
+
+- Admin **AC control**: Turn AC on (`RemoteOn` → `Remote`) / Turn AC off (`RemoteOff` → `Off`), plus per-room On/Off in the status table.
+- Devices: ESP32 firmware `1.2.12` polls `POST /api/device/status` with the 30s health check and applies `acOn` when it changes.
+- Firmware `1.2.13`: a failed status sync no longer clears `serverOnline` (fixes idle LCD stuck on **No server** after remote control).
+- Reconcile auto-off only clears session-tied `Cooling` (not `Remote` / `Override`).
+
+#### 2026-09-27 — Device server health check
+
+- ESP32 firmware `1.2.9` polls existing `GET /health` every 30s; Serial `HEALTH` forces a check.
+- Idle LCD (`1.2.14+`): row 1 **Ready to scan**, row 2 **Offline** when unreachable; scans blocked until healthy.
+
 #### 2026-09-27 — Device status recovery after power loss
 
 - `POST /api/device/status` `{ deviceCode }` returns room `acOn` / `acStatus`, `teacherDisplayName`, and `sessionActive`.
@@ -649,9 +667,14 @@ Document every shipped change here (newest first). Also update the relevant sect
 
 - ESP32 firmware `1.2.4`: after `started` / `ac_on`, scanning idle screen shows teacher name + `AC ON`; cleared on `ended` / `ac_off`.
 
+#### 2026-09-27 — Re-login updates attendance time-out
+
+- In-window `ac_on` reopens the schedule’s attendance row (clears `time_out`, status Active).
+- Following logout (`ended`) writes a new `time_out`; repeats for each re-login / logout in the window.
+
 #### 2026-09-27 — In-window AC re-entry (no new attendance)
 
-- After time-out for a schedule, further scans while still inside that schedule window toggle AC only (`ac_on` / `ac_off`); attendance is not started again.
+- After time-out for a schedule, further scans while still inside that schedule window reuse the same attendance row (`ac_on` / `ended`); a new attendance insert is not created.
 - ESP32 firmware `1.2.3` shows “AC resumed” / “AC off” for those actions.
 - Reconcile turns Cooling Off when the schedule window ends and no active session remains.
 
