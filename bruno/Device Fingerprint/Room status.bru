@@ -1,0 +1,34 @@
+meta {
+  name: Room status
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/device/status
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Device-Api-Key: {{deviceApiKey}}
+}
+
+body:json {
+  {
+    "deviceCode": "{{deviceCode}}"
+  }
+}
+
+docs {
+  Power-loss recovery snapshot for a room scanner.
+
+  Returns:
+  - acOn / acStatus — whether the classroom AC should be Cooling
+  - teacherDisplayName — logged-in / last in-window teacher when AC is on
+  - sessionActive — true if attendance time-in is still open
+  - classroomId / classroomName / deviceCode / scheduleId
+
+  ESP32 calls this after WiFi connect (and on STATUS) to restore relay + LCD.
+}

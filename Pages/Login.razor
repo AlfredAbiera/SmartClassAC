@@ -171,12 +171,20 @@
                         <i class="fas fa-lock input-icon"></i>
 
                         <input id="password"
-                               type="password"
-                               class="login-input"
+                               type="@(showPassword ? "text" : "password")"
+                               class="login-input login-input-password"
                                placeholder="Enter your password"
                                autocomplete="current-password"
                                name="password"
                                @bind="password" />
+
+                        <button type="button"
+                                class="password-peek"
+                                aria-label="@(showPassword ? "Hide password" : "Show password")"
+                                title="@(showPassword ? "Hide password" : "Show password")"
+                                @onclick="TogglePasswordVisibility">
+                            <i class="fas @(showPassword ? "fa-eye-slash" : "fa-eye")" aria-hidden="true"></i>
+                        </button>
 
                     </div>
 
@@ -475,6 +483,8 @@
 
     private string password = string.Empty;
 
+    private bool showPassword;
+
     private bool isLoading = false;
 
     private string errorMessage = string.Empty;
@@ -487,6 +497,8 @@
             errorMessage = "Invalid username or password.";
         }
     }
+
+    private void TogglePasswordVisibility() => showPassword = !showPassword;
 
 }
 
@@ -1028,7 +1040,44 @@
         }
 
 
+    .login-input-password {
+        padding-right: 48px;
+    }
+
+
+    .password-peek {
+        position: absolute;
+        top: 50%;
+        right: 10px;
+        display: grid;
+        width: 36px;
+        height: 36px;
+        place-items: center;
+        transform: translateY(-50%);
+        border: 0;
+        border-radius: 10px;
+        background: transparent;
+        color: #98a2b3;
+        cursor: pointer;
+        font-size: 0.95rem;
+        transition: color 0.2s ease, background 0.2s ease;
+    }
+
+
+        .password-peek:hover,
+        .password-peek:focus-visible {
+            color: #1a73e8;
+            background: rgba(26, 115, 232, 0.08);
+            outline: none;
+        }
+
+
     .input-wrapper:focus-within .input-icon {
+        color: #1a73e8;
+    }
+
+
+    .input-wrapper:focus-within .password-peek {
         color: #1a73e8;
     }
 

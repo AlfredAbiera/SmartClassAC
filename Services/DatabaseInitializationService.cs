@@ -32,13 +32,17 @@ public sealed class DatabaseInitializationService : IHostedService
         }
 
         using var scope = _scopeFactory.CreateScope();
+        var migrations = scope.ServiceProvider.GetRequiredService<DatabaseMigrationRunner>();
         var repository = scope.ServiceProvider.GetRequiredService<IUserAccountRepository>();
         var passwordHash = _passwordHasher.Hash(admin.Password);
         for (var attempt = 1; attempt <= MaximumAttempts; attempt++)
         {
             try
             {
+                await migrations.RunMigrationsAsync(cancellationToken);
                 await repository.InitializeAsync(admin, passwordHash, cancellationToken);
+                var demo = scope.ServiceProvider.GetRequiredService<DemoDataSeeder>();
+                await demo.SeedIfNeededAsync(cancellationToken);
                 return;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -53,8 +57,10 @@ public sealed class DatabaseInitializationService : IHostedService
             }
             catch (Exception exception)
             {
-                _logger.LogError(exception, "Database initialization failed after {MaximumAttempts} attempts.", MaximumAttempts);
-                throw new InvalidOperationException("SmartClass AC could not initialize the Supabase database after several attempts.", exception);
+                _logger.LogError(exception, "Database initialization failed after {MaximumAttempts} attempts. The app will start in degraded state; ensure the database schema is initialized (see README.md).", MaximumAttempts);
+                // Do not throw; allow the app to start without the default admin seeded.
+                // This enables deployment workflows where schema migrations happen before app startup.
+                return;
             }
         }
     }

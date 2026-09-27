@@ -1,0 +1,26 @@
+meta {
+  name: Scan without API key
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/device/fingerprint/scan
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "templateId": {{templateId}},
+    "deviceCode": "{{deviceCode}}"
+  }
+}
+
+docs {
+  Negative test: missing X-Device-Api-Key should return 401.
+}

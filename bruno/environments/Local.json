@@ -1,0 +1,35 @@
+{
+  "name": "Local",
+  "variables": [
+    {
+      "name": "baseUrl",
+      "value": "http://localhost:5062",
+      "enabled": true,
+      "secret": false
+    },
+    {
+      "name": "deviceApiKey",
+      "value": "dev-device-key-smartclass",
+      "enabled": true,
+      "secret": true
+    },
+    {
+      "name": "pinCode",
+      "value": "1001",
+      "enabled": true,
+      "secret": false
+    },
+    {
+      "name": "templateId",
+      "value": "12",
+      "enabled": true,
+      "secret": false
+    },
+    {
+      "name": "deviceCode",
+      "value": "ROOM-101",
+      "enabled": true,
+      "secret": false
+    }
+  ]
+}

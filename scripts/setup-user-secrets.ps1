@@ -1,17 +1,17 @@
-# Configures .NET User Secrets for local SmartClass AC development.
+# Configures .NET User Secrets for local SmartClass AC development against XAMPP MariaDB.
 # Run from the repo root:  .\scripts\setup-user-secrets.ps1
-# Or with parameters:     .\scripts\setup-user-secrets.ps1 -SupabasePassword '...' -AdminPassword '...'
+# Or with parameters:     .\scripts\setup-user-secrets.ps1 -AdminPassword '...'
 
 [CmdletBinding()]
 param(
-    [string] $ProjectRef,
-    [string] $SupabaseHost="https://xwoejfubhmgcnfmzodlu.supabase.co",
-    [int] $SupabasePort = 5432,
-    [string] $SupabaseUser = "postgres",
-    [string] $SupabasePassword,
+    [string] $MariaDbServer = "127.0.0.1",
+    [int] $MariaDbPort = 3306,
+    [string] $MariaDbDatabase = "smartclassac",
+    [string] $MariaDbUser = "root",
+    [string] $MariaDbPassword = "",
     [string] $AdminUsername = "admin",
     [string] $AdminPassword = "R3m0vabl3!2028",
-    [switch] $UseSessionPooler,
+    [string] $DeviceApiKey,
     [switch] $ConfigureSmtp
 )
 
@@ -43,52 +43,46 @@ function ConvertTo-PlainText {
     }
 }
 
-Write-Host "SmartClass AC - User Secrets setup" -ForegroundColor Cyan
+Write-Host "SmartClass AC - User Secrets setup (MariaDB / XAMPP)" -ForegroundColor Cyan
 Write-Host "Project: $project`n"
 
 dotnet user-secrets init --project $project | Out-Null
 
-if (-not $ProjectRef -and -not $SupabaseHost) {
-    $connectionChoice = Read-Host "Use (D)irect connection or (S)ession pooler? [D/S]"
-    $UseSessionPooler = $connectionChoice -match '^[Ss]'
-}
-
-if ($UseSessionPooler) {
-    if (-not $SupabaseHost) {
-        $SupabaseHost = Read-Host "Session pooler host (e.g. aws-0-ap-southeast-1.pooler.supabase.com)"
-    }
-        if ($SupabasePort -eq 5432) {
-            $portInput = Read-Host "Session pooler port [5432]"
-            if ($portInput) { $SupabasePort = [int]$portInput } else { $SupabasePort = 5432 }
-    }
-    if ($SupabaseUser -eq "postgres") {
-        $SupabaseUser = Read-Host "Session pooler username (e.g. postgres.YOUR_PROJECT_REF)"
-    }
-}
-else {
-    if (-not $ProjectRef) {
-        $ProjectRef = Read-Host "Supabase project ref (from db.YOUR_REF.supabase.co)"
-    }
-    if (-not $SupabaseHost) {
-        $SupabaseHost = "db.$ProjectRef.supabase.co"
-    }
-}
-
-if (-not $SupabasePassword) {
-    $SupabasePassword = ConvertTo-PlainText (Read-SecretValue "Supabase database password" -AsSecureString)
+if (-not $PSBoundParameters.ContainsKey('MariaDbPassword')) {
+    $secure = Read-SecretValue "MariaDB password for '$MariaDbUser' (blank for XAMPP default)" -AsSecureString
+    $MariaDbPassword = ConvertTo-PlainText $secure
 }
 
 if (-not $AdminPassword) {
     $AdminPassword = ConvertTo-PlainText (Read-SecretValue "Default admin password (used on first seed only)" -AsSecureString)
 }
 
-$connectionString = "Host=$SupabaseHost;Port=$SupabasePort;Database=postgres;Username=$SupabaseUser;Password=$SupabasePassword;SSL Mode=Require;"
+$connectionString = "Server=$MariaDbServer;Port=$MariaDbPort;Database=$MariaDbDatabase;User ID=$MariaDbUser;Password=$MariaDbPassword;"
 
-dotnet user-secrets set "ConnectionStrings:SmartClassSupabase" "$connectionString" --project $project
+dotnet user-secrets set "ConnectionStrings:SmartClassMariaDb" "$connectionString" --project $project
 dotnet user-secrets set "DefaultAdmin:Username" "$AdminUsername" --project $project
 dotnet user-secrets set "DefaultAdmin:Password" "$AdminPassword" --project $project
 
+if (-not $DeviceApiKey) {
+    $deviceChoice = Read-Host "Configure fingerprint device API key now? [Y/n]"
+    if ($deviceChoice -notmatch '^[Nn]') {
+        $DeviceApiKey = ConvertTo-PlainText (Read-SecretValue "Device API key (sent as X-Device-Api-Key)" -AsSecureString)
+        if (-not $DeviceApiKey) {
+            $DeviceApiKey = [guid]::NewGuid().ToString("N")
+            Write-Host "Generated device API key: $DeviceApiKey" -ForegroundColor Yellow
+        }
+    }
+}
+
+if ($DeviceApiKey) {
+    dotnet user-secrets set "DeviceApi:ApiKey" "$DeviceApiKey" --project $project
+}
+
 Write-Host "`nCore secrets saved." -ForegroundColor Green
+Write-Host "Connection: Server=$MariaDbServer;Port=$MariaDbPort;Database=$MariaDbDatabase;User ID=$MariaDbUser"
+if ($DeviceApiKey) {
+    Write-Host "Device API key configured for /api/device/fingerprint/*"
+}
 
 $configureEmail = $ConfigureSmtp.IsPresent
 if (-not $configureEmail) {
@@ -121,8 +115,10 @@ if ($configureEmail) {
 
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
-Write-Host "  1. Run SUPABASE-SQL-SETUP.sql once in Supabase Dashboard SQL Editor"
-Write-Host "  2. Start the app:  dotnet run"
-Write-Host "  3. Open http://localhost:5062/first-access"
-Write-Host "  4. Sign in at http://localhost:5062/login"
+Write-Host "  1. Ensure XAMPP MySQL/MariaDB is running"
+Write-Host "  2. Database/tables are created automatically on first start (or run Migrations/*.sql)"
+Write-Host "  3. Start the app:  dotnet run"
+Write-Host "  4. Open http://localhost:5062/first-access"
+Write-Host "  5. Sign in at http://localhost:5062/login"
+Write-Host "  6. Device enroll/scan: POST /api/device/fingerprint/enroll|scan with header X-Device-Api-Key"
 Write-Host ""

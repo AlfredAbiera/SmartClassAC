@@ -1,7 +1,10 @@
 @page "/teacher"
+@using Microsoft.Extensions.Options
+@implements IAsyncDisposable
 @inject NavigationManager Navigation
 @inject IAuthService AuthService
 @inject CustomAuthStateProvider AuthStateProvider
+@inject IOptions<SchoolTimeOptions> SchoolTime
 @attribute [Authorize(Roles = "Teacher")]
 
 <PageTitle>Teacher Dashboard | SmartClass AC</PageTitle>
@@ -38,7 +41,7 @@
 
             @if (isLoading)
             {
-                <article class="panel"><p class="form-help">Loading your Supabase records…</p></article>
+                <article class="panel"><p class="form-help">Loading your records…</p></article>
             }
             else if (profile is null)
             {
@@ -46,16 +49,16 @@
             }
             else if (active == "overview")
             {
-                <div class="teacher-welcome"><div><p>@DateTime.Today.ToString("dddd, MMMM d")</p><h2>Welcome back, @TeacherName.</h2><span>Your dashboard is showing only your Supabase account and assignments.</span></div><div class="teacher-avatar-large">@Initials<span class="online-indicator"></span></div></div>
+                <div class="teacher-welcome"><div><p>@SchoolClock.GetNow(SchoolTime.Value).ToString("dddd, MMMM d")</p><h2>Welcome back, @TeacherName.</h2><span>Your dashboard is showing only your account and assignments.</span></div><div class="teacher-avatar-large">@Initials<span class="online-indicator"></span></div></div>
                 <div class="metric-grid teacher-metric-grid">
                     <article class="metric-card blue"><span class="metric-icon"><i class="fas fa-chalkboard-user"></i></span><div><small>ACTIVE CLASS</small><strong>@(ActiveAttendance is null ? "None" : ActiveAttendance.ClassroomName)</strong><p>@(ActiveAttendance is null ? "No class is currently active" : "Time-in recorded")</p></div></article>
                     <article class="metric-card teal"><span class="metric-icon"><i class="fas fa-temperature-half"></i></span><div><small>ASSIGNED ROOMS</small><strong>@TodaySchedules.Select(schedule => schedule.ClassroomId).Distinct().Count()</strong><p>Today’s scheduled classrooms</p></div></article>
-                    <article class="metric-card violet"><span class="metric-icon"><i class="fas fa-fingerprint"></i></span><div><small>ATTENDANCE TODAY</small><strong>@(TodayAttendance.Count == 0 ? "Not recorded" : TodayAttendance[0].Status)</strong><p>Biometric workflow log</p></div></article>
+                    <article class="metric-card violet"><span class="metric-icon"><i class="fas fa-fingerprint"></i></span><div><small>ATTENDANCE TODAY</small><strong>@(TodayAttendance.Count == 0 ? "Not recorded" : AttendanceOutcomes.Display(TodayAttendance[0].Outcome, TodayAttendance[0].Status))</strong><p>Biometric workflow log</p></div></article>
                 </div>
                 <div class="dashboard-grid teacher-overview-grid">
                     <article class="panel class-now-panel"><div class="panel-heading"><div><span class="eyebrow">TODAY'S ASSIGNMENTS</span><h3>@(TodaySchedules.FirstOrDefault()?.SubjectName ?? "No schedule today")</h3></div><span class='status-badge @(ActiveAttendance is null ? "neutral" : "active")'>@(ActiveAttendance is null ? "Scheduled" : "In session")</span></div>
                         @if (TodaySchedules.Count == 0) { <p class="form-help">Ask an administrator to create a classroom and schedule before starting a class.</p> }
-                        else { <div class="class-now-details"><div><i class="fas fa-door-open"></i><span><small>Classroom</small><strong>@TodaySchedules[0].ClassroomName</strong></span></div><div><i class="fas fa-clock"></i><span><small>Schedule</small><strong>@TodaySchedules[0].StartTime.ToString("HH:mm") – @TodaySchedules[0].EndTime.ToString("HH:mm")</strong></span></div><div><i class="fas fa-users"></i><span><small>Capacity</small><strong>@TodaySchedules[0].ClassroomCapacity students</strong></span></div></div><button class="primary-button" @onclick='() => Navigate("active")'>Open active class <i class="fas fa-arrow-right"></i></button> }
+                        else { <div class="class-now-details"><div><i class="fas fa-door-open"></i><span><small>Classroom</small><strong>@TodaySchedules[0].ClassroomName</strong></span></div><div><i class="fas fa-clock"></i><span><small>Schedule</small><strong>@TodaySchedules[0].StartTime.ToString("HH:mm") – @TodaySchedules[0].EndTime.ToString("HH:mm")</strong></span></div><div><i class="fas fa-snowflake"></i><span><small>AC status</small><strong><span class='room-status @AcStatusTone(AssignedRooms.FirstOrDefault()?.AcStatus ?? "Idle")'>@AcStatusLabel(AssignedRooms.FirstOrDefault()?.AcStatus ?? "Idle")</span></strong></span></div></div><button class="primary-button" @onclick='() => Navigate("active")'>Open active class <i class="fas fa-arrow-right"></i></button> }
                     </article>
                     <article class="panel next-class-panel"><span class="eyebrow">PENDING REQUESTS</span><h3>@requests.Count(request => request.Status == "Pending") request(s)</h3><p>@(requests.FirstOrDefault(request => request.Status == "Pending")?.Reason ?? "No request is awaiting administrator review.")</p><button class="secondary-button" @onclick='() => Navigate("leave")'>View requests</button></article>
                 </div>
@@ -63,28 +66,28 @@
             else if (active == "profile")
             {
                 <div class="page-intro"><p>MY PROFILE PROCESS</p><h2>Profile & access details</h2><span>Your account is loaded from the teacher record created by the administrator.</span></div>
-                <div class="dashboard-grid profile-grid"><article class="panel profile-summary"><div class="profile-portrait">@Initials</div><h3>@TeacherName</h3><p>@profile.Email</p><span class="verified-badge"><i class="fas fa-fingerprint"></i>@profile.FingerprintTemplateCount fingerprints enrolled</span><hr /><small>ACCOUNT ACCESS</small><strong><i class="fas fa-shield-halved"></i>Active teacher account</strong></article><article class="panel"><span class="eyebrow">EDIT PROFILE</span><h3>Your information</h3><div class="form-grid"><label>Full name<input @bind="profileName" /></label><label>Email<input @bind="profileEmail" type="email" /></label><label>Phone<input @bind="profilePhone" /></label><label>New password<input type="password" @bind="profilePassword" placeholder="Leave blank to keep current password" /></label></div><div class="form-actions"><button class="primary-button" @onclick="SaveProfile">Save profile changes</button></div></article></div>
+                <div class="dashboard-grid profile-grid"><article class="panel profile-summary"><div class="profile-portrait">@Initials</div><h3>@TeacherName</h3><p>@profile.Email</p>@if (!string.IsNullOrWhiteSpace(profile.EmployeeNumber)) { <p><small>Employee #</small> <strong>@profile.EmployeeNumber</strong></p> }@if (!string.IsNullOrWhiteSpace(profile.DevicePin)) { <p><small>Device PIN</small> <strong>@profile.DevicePin</strong></p> }<span class="verified-badge"><i class="fas fa-fingerprint"></i>@profile.FingerprintTemplateCount fingerprints enrolled</span><hr /><small>ACCOUNT ACCESS</small><strong><i class="fas fa-shield-halved"></i>Active teacher account</strong><p class="form-help">Use your device PIN on the fingerprint terminal to enroll or update fingerprints.</p></article><article class="panel"><span class="eyebrow">EDIT PROFILE</span><h3>Your information</h3><div class="form-grid"><label>Full name<input @bind="profileName" /></label><label>Employee number<input value="@(profile.EmployeeNumber ?? string.Empty)" readonly /></label><label>Device PIN<input @bind="profilePin" inputmode="numeric" maxlength="6" pattern="[0-9]*" title="4–6 digits for the fingerprint terminal" /><small class="form-help">Enter this PIN on the device to enroll fingerprints.</small></label><label>Email<input @bind="profileEmail" type="email" /></label><label>Phone<input @bind="profilePhone" /></label><label>New password<input type="password" @bind="profilePassword" placeholder="Leave blank to keep current password" /></label></div><div class="form-actions"><button class="primary-button" @onclick="SaveProfile">Save profile changes</button></div></article></div>
             }
             else if (active == "schedule")
             {
                 <div class="page-intro"><p>MY SCHEDULE PROCESS</p><h2>Your scheduled classes</h2><span>Schedules are assigned by the administrator and include any approved substitute assignment.</span></div>
-                <article class="panel"><div class="teacher-schedule-list">@if (schedules.Count == 0) { <p class="form-help">No classes are assigned to your account yet.</p> } @foreach (var item in schedules) { <div class='teacher-schedule-item @(item.ScheduleDate == DateOnly.FromDateTime(DateTime.Today) ? "is-live" : string.Empty)'><div class="schedule-time"><strong>@item.StartTime.ToString("HH:mm")</strong><span>@item.EndTime.ToString("HH:mm")</span></div><div class="schedule-line"></div><div class="schedule-info"><span class='status-badge @(item.ScheduleDate == DateOnly.FromDateTime(DateTime.Today) ? "active" : "neutral")'>@item.ScheduleDate.ToString("MMM d")</span><h3>@item.SubjectName</h3><p><i class="fas fa-door-open"></i>@item.ClassroomName <i class="fas fa-users"></i>@item.ClassroomCapacity students</p></div></div> }</div></article>
+                <article class="panel"><div class="teacher-schedule-list">@if (schedules.Count == 0) { <p class="form-help">No classes are assigned to your account yet.</p> } @foreach (var item in schedules) { <div class='teacher-schedule-item @(item.ScheduleDate == Today ? "is-live" : string.Empty)'><div class="schedule-time"><strong>@item.StartTime.ToString("HH:mm")</strong><span>@item.EndTime.ToString("HH:mm")</span></div><div class="schedule-line"></div><div class="schedule-info"><span class='status-badge @(item.ScheduleDate == Today ? "active" : "neutral")'>@item.ScheduleDate.ToString("MMM d")</span><span class='status-badge @(item.ScheduleKind == "Makeup" ? "pending" : "neutral")'>@item.ScheduleKind</span><h3>@item.SubjectName</h3><p><i class="fas fa-door-open"></i>@item.ClassroomName <i class="fas fa-layer-group"></i>@(item.SemesterName ?? "—") <i class="fas fa-users"></i>@item.ClassroomCapacity students</p></div></div> }</div></article>
             }
             else if (active == "attendance")
             {
-                <div class="page-intro"><p>ATTENDANCE HISTORY PROCESS</p><h2>Your biometric attendance history</h2><span>Time-in and time-out records are stored in Supabase when a class starts and ends.</span></div>
-                <article class="panel"><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Date</th><th>Classroom</th><th>Time in</th><th>Time out</th><th>Verification</th><th>Status</th></tr></thead><tbody>@if (attendance.Count == 0) { <tr><td colspan="6">No attendance record has been created.</td></tr> } @foreach (var item in attendance) { <tr><td><strong>@item.TimeInUtc.ToLocalTime().ToString("MMM d, yyyy")</strong></td><td>@item.ClassroomName</td><td>@item.TimeInUtc.ToLocalTime().ToString("HH:mm")</td><td>@(item.TimeOutUtc?.ToLocalTime().ToString("HH:mm") ?? "—")</td><td><span class="verified-badge"><i class="fas fa-fingerprint"></i>@item.VerificationMethod</span></td><td><span class='status-badge @(item.Status == "Completed" ? "active" : "pending")'>@item.Status</span></td></tr> }</tbody></table></div></article>
+                <div class="page-intro"><p>ATTENDANCE HISTORY PROCESS</p><h2>Your biometric attendance history</h2><span>Outcomes come from punches vs your schedule: On time, Late, Absent, or Missing time-out.</span></div>
+                <article class="panel"><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Date</th><th>Classroom</th><th>Time in</th><th>Time out</th><th>Verification</th><th>Outcome</th></tr></thead><tbody>@if (attendance.Count == 0) { <tr><td colspan="6">No attendance record has been created.</td></tr> } @foreach (var item in attendance) { <tr><td><strong>@SchoolClock.Format(item.TimeIn, "MMM d, yyyy")</strong></td><td>@item.ClassroomName</td><td>@(item.Outcome == AttendanceOutcomes.Absent ? "—" : SchoolClock.Format(item.TimeIn, "HH:mm"))</td><td>@(item.Outcome == AttendanceOutcomes.Absent ? "—" : SchoolClock.Format(item.TimeOut, "HH:mm"))</td><td><span class="verified-badge"><i class="fas fa-fingerprint"></i>@item.VerificationMethod</span></td><td><span class='status-badge @AttendanceOutcomes.BadgeClass(item.Outcome, item.Status)'>@AttendanceOutcomes.Display(item.Outcome, item.Status)</span></td></tr> }</tbody></table></div></article>
             }
             else if (active == "classroom")
             {
                 <div class="page-intro"><p>CLASSROOM TEMPERATURE PROCESS</p><h2>Assigned classroom temperature</h2><span>You may send a target command only for a classroom assigned to you today.</span></div>
                 <article class="panel"><div class="form-grid"><label>Classroom<select @bind="selectedClassroomId"><option value="0">Select a scheduled room</option>@foreach (var room in AssignedRooms) { <option value="@room.Id">@room.Name</option> }</select></label><label>Target temperature<input type="number" min="16" max="30" @bind="targetTemp" /></label></div><div class="form-actions"><button class="primary-button" disabled="@(selectedClassroomId == 0)" @onclick="ApplyTarget"><i class="fas fa-paper-plane"></i>Send target command</button><button class="danger-outline-button" disabled="@(selectedClassroomId == 0)" @onclick="Shutdown">Hard shutdown</button></div></article>
-                <article class="panel"><span class="eyebrow">RECENT TEMPERATURE LOGS</span><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Classroom</th><th>Event</th><th>Target</th><th>Recorded</th></tr></thead><tbody>@foreach (var log in temperatureLogs.Take(10)) { <tr><td>@log.ClassroomName</td><td>@log.EventType</td><td>@(log.TargetTemperature is null ? "—" : $"{log.TargetTemperature}°C")</td><td>@log.RecordedUtc.ToLocalTime().ToString("MMM d HH:mm")</td></tr> }</tbody></table></div></article>
+                <article class="panel"><span class="eyebrow">RECENT TEMPERATURE LOGS</span><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Classroom</th><th>Event</th><th>Target</th><th>Recorded</th></tr></thead><tbody>@foreach (var log in temperatureLogs.Take(10)) { <tr><td>@log.ClassroomName</td><td>@log.EventType</td><td>@(log.TargetTemperature is null ? "—" : $"{log.TargetTemperature}°C")</td><td>@SchoolClock.Format(log.RecordedAt, "MMM d HH:mm")</td></tr> }</tbody></table></div></article>
             }
             else if (active == "active")
             {
                 <div class="page-intro"><p>ACTIVE CLASS AUTOMATION</p><h2>Start and end your scheduled class</h2><span>Starting records a time-in and cooling event; ending records time-out and turns the classroom status off.</span></div>
-                <div class="dashboard-grid active-class-grid"><article class="panel"><span class="eyebrow">TODAY'S SCHEDULE</span>@if (TodaySchedules.Count == 0) { <p class="form-help">No class is scheduled for today.</p> } @foreach (var schedule in TodaySchedules) { <div class="request-summary"><span class="request-type-icon"><i class="fas fa-chalkboard-user"></i></span><div><strong>@schedule.SubjectName</strong><small>@schedule.ClassroomName · @schedule.StartTime.ToString("HH:mm") – @schedule.EndTime.ToString("HH:mm")</small></div><button class="primary-button" disabled="@(ActiveAttendance is not null)" @onclick='() => StartClass(schedule.Id)'>Start</button></div> }</article><article class="panel class-session-card"><span class="eyebrow">ACTIVE ATTENDANCE</span><h3>@(ActiveAttendance?.ClassroomName ?? "No active class")</h3><p>@(ActiveAttendance is null ? "Select a schedule to record biometric time-in." : $"Started {ActiveAttendance.TimeInUtc.ToLocalTime():HH:mm}")</p><button class="danger-outline-button" disabled="@(ActiveAttendance is null)" @onclick="EndClass">End class</button></article></div>
+                <div class="dashboard-grid active-class-grid"><article class="panel"><span class="eyebrow">TODAY'S SCHEDULE</span>@if (TodaySchedules.Count == 0) { <p class="form-help">No class is scheduled for today.</p> } @foreach (var schedule in TodaySchedules) { <div class="request-summary"><span class="request-type-icon"><i class="fas fa-chalkboard-user"></i></span><div><strong>@schedule.SubjectName</strong><small>@schedule.ClassroomName · @schedule.StartTime.ToString("HH:mm") – @schedule.EndTime.ToString("HH:mm")</small></div><button class="primary-button" disabled="@(ActiveAttendance is not null)" @onclick='() => StartClass(schedule.Id)'>Start</button></div> }</article><article class="panel class-session-card"><span class="eyebrow">ACTIVE ATTENDANCE</span><h3>@(ActiveAttendance?.ClassroomName ?? "No active class")</h3><p>@(ActiveAttendance is null ? "Select a schedule to record biometric time-in." : $"Started {SchoolClock.Format(ActiveAttendance.TimeIn, "HH:mm")}")</p><button class="danger-outline-button" disabled="@(ActiveAttendance is null)" @onclick="EndClass">End class</button></article></div>
                 <article class="panel request-action-panel"><span class="eyebrow">EARLY OUT OR OVERTIME</span><div class="form-grid"><label>Reason<textarea @bind="classRequestReason" placeholder="Reason for the administrator"></textarea></label></div><div class="form-actions"><button class="secondary-button" @onclick='() => SubmitClassRequest("EarlyOut")'>Request early out</button><button class="primary-button" @onclick='() => SubmitClassRequest("Overtime")'>Request overtime</button></div></article>
             }
             else if (active == "leave")
@@ -94,37 +97,65 @@
             }
             else
             {
-                <div class="page-intro"><p>SUPPORT / HELP PROCESS</p><h2>Report an issue</h2><span>Tickets are delivered to the administrator’s Supabase support inbox.</span></div>
-                <div class="dashboard-grid support-form-grid"><article class="panel"><span class="eyebrow">NEW SUPPORT TICKET</span><h3>What needs attention?</h3><div class="form-stack"><label>Issue category<select @bind="issueCategory"><option>Fingerprint scanner</option><option>Smart AC / temperature</option><option>Schedule or attendance</option><option>Other</option></select></label><label>Details and message<textarea @bind="issueDetails" placeholder="Explain what happened."></textarea></label></div><div class="form-actions"><button class="primary-button" @onclick="SubmitTicket">Send ticket to admin</button></div></article><article class="panel"><span class="eyebrow">MY TICKETS</span>@if (tickets.Count == 0) { <p class="form-help">No support tickets have been submitted.</p> } @foreach (var ticket in tickets) { <div class="request-summary"><span class="request-type-icon"><i class="fas fa-life-ring"></i></span><div><strong>@ticket.Category</strong><small>@ticket.Status · @ticket.CreatedUtc.ToLocalTime().ToString("MMM d HH:mm")</small><p>@ticket.Details</p>@if (!string.IsNullOrWhiteSpace(ticket.AdminResponse)) { <small>Admin: @ticket.AdminResponse</small> }</div></div> }</article></div>
+                <div class="page-intro"><p>SUPPORT / HELP PROCESS</p><h2>Report an issue</h2><span>Tickets are delivered to the administrator’s support inbox.</span></div>
+                <div class="dashboard-grid support-form-grid"><article class="panel"><span class="eyebrow">NEW SUPPORT TICKET</span><h3>What needs attention?</h3><div class="form-stack"><label>Issue category<select @bind="issueCategory"><option>Fingerprint scanner</option><option>Smart AC / temperature</option><option>Schedule or attendance</option><option>Other</option></select></label><label>Details and message<textarea @bind="issueDetails" placeholder="Explain what happened."></textarea></label></div><div class="form-actions"><button class="primary-button" @onclick="SubmitTicket">Send ticket to admin</button></div></article><article class="panel"><span class="eyebrow">MY TICKETS</span>@if (tickets.Count == 0) { <p class="form-help">No support tickets have been submitted.</p> } @foreach (var ticket in tickets) { <div class="request-summary"><span class="request-type-icon"><i class="fas fa-life-ring"></i></span><div><strong>@ticket.Category</strong><small>@ticket.Status · @SchoolClock.Format(ticket.CreatedAt, "MMM d HH:mm")</small><p>@ticket.Details</p>@if (!string.IsNullOrWhiteSpace(ticket.AdminResponse)) { <small>Admin: @ticket.AdminResponse</small> }</div></div> }</article></div>
             }
         </section>
     </main>
 </div>
 
 @code {
-    private string active = "overview", message = string.Empty, profileName = string.Empty, profileEmail = string.Empty, profilePhone = string.Empty, profilePassword = string.Empty, classRequestReason = string.Empty, leaveReason = string.Empty, issueCategory = "Fingerprint scanner", issueDetails = string.Empty;
+    private string active = "overview", message = string.Empty, profileName = string.Empty, profileEmail = string.Empty, profilePhone = string.Empty, profilePin = string.Empty, profilePassword = string.Empty, classRequestReason = string.Empty, leaveReason = string.Empty, issueCategory = "Fingerprint scanner", issueDetails = string.Empty;
     private bool sidebarOpen, isLoading, needsSubstitute;
     private int targetTemp = 22;
     private long selectedClassroomId;
     private DateTime leaveDate = DateTime.Today;
     private TeacherProfileEntry? profile;
     private List<ScheduleDirectoryEntry> schedules = new();
+    private List<ClassroomEntry> classrooms = new();
     private List<AttendanceLogEntry> attendance = new();
     private List<TeacherRequestEntry> requests = new();
     private List<SupportTicketEntry> tickets = new();
     private List<TemperatureLogEntry> temperatureLogs = new();
+    private CancellationTokenSource? liveRefreshCts;
 
     private string TeacherName => profile?.DisplayName ?? "Teacher";
     private string Initials => string.Concat(TeacherName.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(word => char.ToUpperInvariant(word[0])));
-    private DateOnly Today => DateOnly.FromDateTime(DateTime.Today);
+    private DateOnly Today => SchoolClock.Today(SchoolTime.Value);
     private List<ScheduleDirectoryEntry> TodaySchedules => schedules.Where(schedule => schedule.ScheduleDate == Today).ToList();
     private AttendanceLogEntry? ActiveAttendance => attendance.FirstOrDefault(item => item.Status == "Active");
-    private List<AttendanceLogEntry> TodayAttendance => attendance.Where(item => DateOnly.FromDateTime(item.TimeInUtc.LocalDateTime) == Today).ToList();
-    private List<ClassroomEntry> AssignedRooms => TodaySchedules.GroupBy(schedule => schedule.ClassroomId).Select(group => new ClassroomEntry(group.Key, group.First().ClassroomName, group.First().ClassroomCapacity, 22, null, "Scheduled", true)).ToList();
+    private List<AttendanceLogEntry> TodayAttendance => attendance.Where(item => DateOnly.FromDateTime(item.TimeIn) == Today).ToList();
+    private List<ClassroomEntry> AssignedRooms => TodaySchedules.GroupBy(schedule => schedule.ClassroomId).Select(group =>
+    {
+        var room = classrooms.FirstOrDefault(item => item.Id == group.Key);
+        return new ClassroomEntry(
+            group.Key,
+            group.First().ClassroomName,
+            group.First().ClassroomCapacity,
+            room?.TargetTemperature ?? 22,
+            room?.CurrentTemperature,
+            room?.AcStatus ?? "Idle",
+            true);
+    }).ToList();
     private string Title => active switch { "profile" => "My profile", "schedule" => "My schedule", "attendance" => "Attendance history", "classroom" => "Classroom temperature", "active" => "Active class", "leave" => "Leave & substitute", "support" => "Support", _ => "Dashboard overview" };
     private string NavClass(string section) => $"sc-nav-item {(active == section ? "active" : string.Empty)}";
+    private static string AcStatusTone(string status) =>
+        status is "Cooling" or "Override" ? "online" : "idle";
+    private static string AcStatusLabel(string status) => status switch
+    {
+        "Cooling" => "Cooling",
+        "Override" => "Override",
+        "Off" => "Off",
+        "Idle" => "Off",
+        _ => status
+    };
 
-    protected override async Task OnInitializedAsync() => await ReloadAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        await ReloadAsync();
+        liveRefreshCts = new CancellationTokenSource();
+        _ = RunLiveRefreshLoopAsync(liveRefreshCts.Token);
+    }
 
     private async Task ReloadAsync()
     {
@@ -133,19 +164,22 @@
         {
             var profileTask = AuthService.GetMyTeacherProfileAsync();
             var schedulesTask = AuthService.GetMyTeacherSchedulesAsync();
+            var classroomsTask = AuthService.GetClassroomsAsync();
             var attendanceTask = AuthService.GetAttendanceLogsAsync();
             var requestsTask = AuthService.GetTeacherRequestsAsync();
             var ticketsTask = AuthService.GetSupportTicketsAsync();
             var temperatureLogsTask = AuthService.GetTemperatureLogsAsync();
-            await Task.WhenAll(profileTask, schedulesTask, attendanceTask, requestsTask, ticketsTask, temperatureLogsTask);
+            await Task.WhenAll(profileTask, schedulesTask, classroomsTask, attendanceTask, requestsTask, ticketsTask, temperatureLogsTask);
             profile = await profileTask;
             if (profile is not null)
             {
                 profileName = profile.DisplayName;
                 profileEmail = profile.Email;
                 profilePhone = profile.Phone ?? string.Empty;
+                profilePin = profile.DevicePin ?? string.Empty;
             }
             schedules = (await schedulesTask).ToList();
+            classrooms = (await classroomsTask).ToList();
             attendance = (await attendanceTask).ToList();
             requests = (await requestsTask).ToList();
             tickets = (await ticketsTask).ToList();
@@ -156,14 +190,71 @@
         finally { isLoading = false; }
     }
 
-    private void Navigate(string section) { active = section; sidebarOpen = false; }
+    private async Task RefreshLiveStateAsync()
+    {
+        try
+        {
+            var classroomsTask = AuthService.GetClassroomsAsync();
+            var attendanceTask = AuthService.GetAttendanceLogsAsync();
+            var temperatureLogsTask = AuthService.GetTemperatureLogsAsync();
+            await Task.WhenAll(classroomsTask, attendanceTask, temperatureLogsTask);
+            classrooms = (await classroomsTask).ToList();
+            attendance = (await attendanceTask).ToList();
+            temperatureLogs = (await temperatureLogsTask).ToList();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task RunLiveRefreshLoopAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(4));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                if (active is "overview" or "classroom" or "active" or "attendance")
+                {
+                    await RefreshLiveStateAsync();
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task Navigate(string section)
+    {
+        active = section;
+        sidebarOpen = false;
+        if (section is "overview" or "classroom" or "active" or "attendance")
+        {
+            await RefreshLiveStateAsync();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (liveRefreshCts is null)
+        {
+            return;
+        }
+
+        await liveRefreshCts.CancelAsync();
+        liveRefreshCts.Dispose();
+        liveRefreshCts = null;
+    }
+
     private void ToggleSidebar() => sidebarOpen = !sidebarOpen;
     private void Toast(string value) => message = value;
     private async Task Logout() { await AuthService.LogoutAsync(); await AuthStateProvider.NotifyUserLogoutAsync(); Navigation.NavigateTo("/auth/logout", true); }
 
     private async Task SaveProfile()
     {
-        var result = await AuthService.UpdateMyTeacherProfileAsync(new UpdateTeacherProfileRequest(profileName, profileEmail, profilePhone, profilePassword));
+        var result = await AuthService.UpdateMyTeacherProfileAsync(new UpdateTeacherProfileRequest(profileName, profileEmail, profilePhone, profilePin, profilePassword));
         if (!result.Succeeded) { Toast(result.Error ?? "Profile could not be updated."); return; }
         profilePassword = string.Empty;
         await ReloadAsync();
@@ -204,7 +295,7 @@
 
     private async Task SubmitClassRequest(string type)
     {
-        var result = await AuthService.SubmitTeacherRequestAsync(new SubmitTeacherRequest(type, DateOnly.FromDateTime(DateTime.Today), classRequestReason, false));
+        var result = await AuthService.SubmitTeacherRequestAsync(new SubmitTeacherRequest(type, Today, classRequestReason, false));
         if (!result.Succeeded) { Toast(result.Error ?? "Request could not be submitted."); return; }
         classRequestReason = string.Empty;
         requests = (await AuthService.GetTeacherRequestsAsync()).ToList();

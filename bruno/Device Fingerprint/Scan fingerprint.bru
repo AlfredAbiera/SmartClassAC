@@ -1,0 +1,35 @@
+meta {
+  name: Scan fingerprint
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/device/fingerprint/scan
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Device-Api-Key: {{deviceApiKey}}
+}
+
+body:json {
+  {
+    "templateId": {{templateId}},
+    "deviceCode": "{{deviceCode}}"
+  }
+}
+
+docs {
+  Looks up templateId at a specific room scanner (deviceCode) and starts or ends class attendance.
+
+  action values:
+  - started — began today's in-window schedule for this classroom
+  - ended — closed an active attendance row for this classroom
+  - unknown — template not enrolled (404)
+  - unknown_device — deviceCode not registered (404)
+  - wrong_room — active class is in a different classroom (409)
+  - no_schedule — teacher matched but no current schedule in this room (409)
+}

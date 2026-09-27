@@ -208,6 +208,11 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("Enter the teacher's name and username.");
         }
 
+        if (string.IsNullOrWhiteSpace(request.EmployeeNumber))
+        {
+            return OperationResult.Failure("Enter the teacher's employee number.");
+        }
+
         if (!new EmailAddressAttribute().IsValid(request.Email))
         {
             return OperationResult.Failure("Enter a valid school email address.");
@@ -222,12 +227,84 @@ public sealed class AuthService : IAuthService
         {
             DisplayName = request.DisplayName.Trim(),
             Username = request.Username.Trim(),
-            Email = request.Email.Trim()
+            EmployeeNumber = request.EmployeeNumber.Trim(),
+            Email = request.Email.Trim(),
+            DevicePin = string.IsNullOrWhiteSpace(request.DevicePin) ? null : DevicePinCodes.Normalize(request.DevicePin)
         };
+
+        if (cleanRequest.DevicePin is not null && !DevicePinCodes.IsValid(cleanRequest.DevicePin))
+        {
+            return OperationResult.Failure(DevicePinCodes.RequirementMessage);
+        }
+
         return await _accounts.CreateTeacherAsync(cleanRequest, _passwordHasher.Hash(request.Password));
     }
 
+    public async Task<OperationResult> UpdateAdminTeacherAsync(UpdateAdminTeacherRequest request)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null)
+        {
+            return authorization;
+        }
+
+        if (request.AccountId <= 0)
+        {
+            return OperationResult.Failure("Select a teacher account to update.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.DisplayName) || string.IsNullOrWhiteSpace(request.Username))
+        {
+            return OperationResult.Failure("Enter the teacher's name and username.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.EmployeeNumber))
+        {
+            return OperationResult.Failure("Enter the teacher's employee number.");
+        }
+
+        if (!new EmailAddressAttribute().IsValid(request.Email))
+        {
+            return OperationResult.Failure("Enter a valid school email address.");
+        }
+
+        string? passwordHash = null;
+        if (!string.IsNullOrWhiteSpace(request.NewPassword))
+        {
+            if (!PasswordPolicy.MeetsRequirements(request.NewPassword))
+            {
+                return OperationResult.Failure(PasswordPolicy.RequirementMessage);
+            }
+
+            passwordHash = _passwordHasher.Hash(request.NewPassword);
+        }
+
+        var cleanRequest = request with
+        {
+            DisplayName = request.DisplayName.Trim(),
+            Username = request.Username.Trim(),
+            EmployeeNumber = request.EmployeeNumber.Trim(),
+            Email = request.Email.Trim(),
+            DevicePin = string.IsNullOrWhiteSpace(request.DevicePin) ? null : DevicePinCodes.Normalize(request.DevicePin)
+        };
+
+        if (cleanRequest.DevicePin is not null && !DevicePinCodes.IsValid(cleanRequest.DevicePin))
+        {
+            return OperationResult.Failure(DevicePinCodes.RequirementMessage);
+        }
+
+        return await _accounts.UpdateAdminTeacherAsync(cleanRequest, passwordHash);
+    }
+
     public Task<IReadOnlyList<TeacherDirectoryEntry>> GetTeachersAsync() => _accounts.GetTeachersAsync();
+
+    public async Task<TeacherProfileEntry?> GetTeacherProfileForAdminAsync(long accountId)
+    {
+        var authorization = RequireAdmin();
+        return authorization is not null
+            ? null
+            : await _accounts.GetTeacherProfileAsync(accountId);
+    }
 
     public async Task<OperationResult> DeleteTeacherAsync(long accountId)
     {
@@ -308,6 +385,16 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("Select a teacher and a classroom from the database directory.");
         }
 
+        if (request.SemesterId <= 0)
+        {
+            return OperationResult.Failure("Select a semester for this schedule.");
+        }
+
+        if (!ScheduleKinds.IsValid(request.ScheduleKind))
+        {
+            return OperationResult.Failure("Schedule kind must be Regular or Makeup.");
+        }
+
         if (string.IsNullOrWhiteSpace(request.SubjectName) || request.SubjectName.Trim().Length > 160)
         {
             return OperationResult.Failure("Enter a class subject of 160 characters or fewer.");
@@ -318,7 +405,11 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("The end time must be later than the start time.");
         }
 
-        return await _accounts.CreateScheduleAsync(request with { SubjectName = request.SubjectName.Trim() });
+        return await _accounts.CreateScheduleAsync(request with
+        {
+            SubjectName = request.SubjectName.Trim(),
+            ScheduleKind = request.ScheduleKind.Trim()
+        });
     }
 
     public async Task<OperationResult> DeleteScheduleAsync(long scheduleId)
@@ -327,6 +418,43 @@ public sealed class AuthService : IAuthService
         return authorization is not null
             ? authorization
             : await _accounts.DeleteScheduleAsync(scheduleId);
+    }
+
+    public Task<IReadOnlyList<SemesterEntry>> GetSemestersAsync() => _accounts.GetSemestersAsync();
+
+    public async Task<OperationResult> CreateSemesterAsync(CreateSemesterRequest request)
+    {
+        var authorization = RequireAdmin();
+        return authorization is not null
+            ? authorization
+            : await _accounts.CreateSemesterAsync(request);
+    }
+
+    public async Task<OperationResult> SetSemesterActiveAsync(long semesterId, bool isActive)
+    {
+        var authorization = RequireAdmin();
+        return authorization is not null
+            ? authorization
+            : await _accounts.SetSemesterActiveAsync(semesterId, isActive);
+    }
+
+    public Task<IReadOnlyList<TeacherSemesterEntry>> GetTeacherSemestersAsync(long? semesterId = null) =>
+        _accounts.GetTeacherSemestersAsync(semesterId);
+
+    public async Task<OperationResult> EnrollTeacherInSemesterAsync(long teacherAccountId, long semesterId)
+    {
+        var authorization = RequireAdmin();
+        return authorization is not null
+            ? authorization
+            : await _accounts.EnrollTeacherInSemesterAsync(teacherAccountId, semesterId);
+    }
+
+    public async Task<OperationResult> UnenrollTeacherFromSemesterAsync(long teacherAccountId, long semesterId)
+    {
+        var authorization = RequireAdmin();
+        return authorization is not null
+            ? authorization
+            : await _accounts.UnenrollTeacherFromSemesterAsync(teacherAccountId, semesterId);
     }
 
     public Task<TeacherProfileEntry?> GetMyTeacherProfileAsync() =>
@@ -352,13 +480,19 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure(PasswordPolicy.RequirementMessage);
         }
 
+        if (string.IsNullOrWhiteSpace(request.DevicePin) || !DevicePinCodes.IsValid(request.DevicePin))
+        {
+            return OperationResult.Failure(DevicePinCodes.RequirementMessage);
+        }
+
         var result = await _accounts.UpdateTeacherProfileAsync(
             teacher.Id,
             request with
             {
                 DisplayName = request.DisplayName.Trim(),
                 Email = request.Email.Trim(),
-                Phone = string.IsNullOrWhiteSpace(request.Phone) ? null : request.Phone.Trim()
+                Phone = string.IsNullOrWhiteSpace(request.Phone) ? null : request.Phone.Trim(),
+                DevicePin = DevicePinCodes.Normalize(request.DevicePin)
             },
             string.IsNullOrEmpty(request.NewPassword) ? null : _passwordHasher.Hash(request.NewPassword));
 
@@ -375,12 +509,20 @@ public sealed class AuthService : IAuthService
             ? _accounts.GetTeacherSchedulesAsync(_currentUser.Id)
             : Task.FromResult<IReadOnlyList<ScheduleDirectoryEntry>>(Array.Empty<ScheduleDirectoryEntry>());
 
-    public Task<IReadOnlyList<AttendanceLogEntry>> GetAttendanceLogsAsync() =>
-        _currentUser?.Role == UserRole.Teacher
-            ? _accounts.GetAttendanceLogsAsync(_currentUser.Id)
-            : _currentUser?.Role == UserRole.Admin
-                ? _accounts.GetAttendanceLogsAsync()
-                : Task.FromResult<IReadOnlyList<AttendanceLogEntry>>(Array.Empty<AttendanceLogEntry>());
+    public async Task<IReadOnlyList<AttendanceLogEntry>> GetAttendanceLogsAsync()
+    {
+        if (_currentUser is null)
+        {
+            return Array.Empty<AttendanceLogEntry>();
+        }
+
+        await ReconcileAttendanceAsync();
+        return _currentUser.Role == UserRole.Teacher
+            ? await _accounts.GetAttendanceLogsAsync(_currentUser.Id)
+            : _currentUser.Role == UserRole.Admin
+                ? await _accounts.GetAttendanceLogsAsync()
+                : Array.Empty<AttendanceLogEntry>();
+    }
 
     public async Task<OperationResult> StartMyClassAsync(long scheduleId)
     {
@@ -390,7 +532,8 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("Only a signed-in teacher can start a class.");
         }
 
-        var schoolNow = GetSchoolNow();
+        await ReconcileAttendanceAsync();
+        var schoolNow = SchoolClock.GetNow(_schoolTime);
         return await _accounts.StartClassAsync(
             teacher.Id,
             scheduleId,
@@ -401,9 +544,13 @@ public sealed class AuthService : IAuthService
     public async Task<OperationResult> EndMyClassAsync()
     {
         var teacher = RequireTeacher();
-        return teacher is null
-            ? OperationResult.Failure("Only a signed-in teacher can end a class.")
-            : await _accounts.EndClassAsync(teacher.Id);
+        if (teacher is null)
+        {
+            return OperationResult.Failure("Only a signed-in teacher can end a class.");
+        }
+
+        await ReconcileAttendanceAsync();
+        return await _accounts.EndClassAsync(teacher.Id);
     }
 
     public Task<IReadOnlyList<TeacherRequestEntry>> GetTeacherRequestsAsync() =>
@@ -426,7 +573,7 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("Choose a valid request type.");
         }
 
-        var today = DateOnly.FromDateTime(DateTime.Today);
+        var today = SchoolClock.Today(_schoolTime);
         if (request.RequestType == "Leave" && request.RequestDate < today)
         {
             return OperationResult.Failure("Leave requests cannot be submitted for a past date.");
@@ -520,7 +667,7 @@ public sealed class AuthService : IAuthService
 
         if (_currentUser.Role == UserRole.Teacher)
         {
-            var today = DateOnly.FromDateTime(DateTime.Today);
+            var today = SchoolClock.Today(_schoolTime);
             var allowed = (await _accounts.GetTeacherSchedulesAsync(_currentUser.Id))
                 .Any(schedule => schedule.ClassroomId == request.ClassroomId && schedule.ScheduleDate == today);
             if (!allowed)
@@ -530,6 +677,16 @@ public sealed class AuthService : IAuthService
         }
 
         return await _accounts.SetTemperatureAsync(_currentUser.Id, request);
+    }
+
+    public Task<IReadOnlyList<BiometricDeviceEntry>> GetBiometricDevicesAsync() => _accounts.GetBiometricDevicesAsync();
+
+    public async Task<OperationResult> CreateBiometricDeviceAsync(CreateBiometricDeviceRequest request)
+    {
+        var authorization = RequireAdmin();
+        return authorization is not null
+            ? authorization
+            : await _accounts.CreateBiometricDeviceAsync(request);
     }
 
     public async Task<OperationResult> ResetSystemToFirstAccessAsync(string currentPassword)
@@ -560,6 +717,14 @@ public sealed class AuthService : IAuthService
 
     private AuthenticatedUser? RequireTeacher() => _currentUser?.Role == UserRole.Teacher ? _currentUser : null;
 
+    private async Task ReconcileAttendanceAsync()
+    {
+        var schoolNow = SchoolClock.GetNow(_schoolTime);
+        await _accounts.ReconcileAttendanceOutcomesAsync(
+            DateOnly.FromDateTime(schoolNow),
+            TimeOnly.FromDateTime(schoolNow));
+    }
+
     private async Task<bool> IsCurrentPasswordValidAsync(long accountId, string password)
     {
         if (string.IsNullOrEmpty(password))
@@ -569,27 +734,6 @@ public sealed class AuthService : IAuthService
 
         var account = await _accounts.FindByIdAsync(accountId);
         return account is not null && _passwordHasher.Verify(password, account.PasswordHash);
-    }
-
-    private DateTime GetSchoolNow()
-    {
-        if (string.IsNullOrWhiteSpace(_schoolTime.TimeZoneId))
-        {
-            return DateTime.Now;
-        }
-
-        try
-        {
-            return TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, TimeZoneInfo.FindSystemTimeZoneById(_schoolTime.TimeZoneId)).DateTime;
-        }
-        catch (TimeZoneNotFoundException)
-        {
-            return DateTime.Now;
-        }
-        catch (InvalidTimeZoneException)
-        {
-            return DateTime.Now;
-        }
     }
 }
 

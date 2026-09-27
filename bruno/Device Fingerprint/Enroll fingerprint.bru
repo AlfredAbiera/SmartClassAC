@@ -1,0 +1,34 @@
+meta {
+  name: Enroll fingerprint
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/device/fingerprint/enroll
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+  X-Device-Api-Key: {{deviceApiKey}}
+}
+
+body:json {
+  {
+    "pinCode": "{{pinCode}}",
+    "templateId": {{templateId}},
+    "deviceCode": "{{deviceCode}}"
+  }
+}
+
+docs {
+  Enrolls a device-assigned fingerprint template ID for a teacher looked up by device PIN.
+  deviceCode identifies which room scanner is calling (e.g. ROOM-101).
+
+  pinCode must match user_accounts.device_pin (4–6 digits). Demo Maria PIN is 1001.
+  templateId is the numeric ID stored on the fingerprint sensor.
+
+  Expect 200 on success, 400 if teacher/device not found, 409 if slots full or templateId already used.
+}
