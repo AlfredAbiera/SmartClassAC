@@ -29,6 +29,7 @@ docs {
   - teacherDisplayName — logged-in / last in-window teacher when AC is on
   - sessionActive — true if attendance time-in is still open
   - classroomId / classroomName / deviceCode / scheduleId
+  - clearFingerprints — true when Admin queued a sensor wipe (firmware 1.2.15+ empties the sensor and POSTs clear-session)
 
-  ESP32 calls this after WiFi connect (and on STATUS) to restore relay + LCD.
+  ESP32 calls this after WiFi connect (and on STATUS / ~30s poll) to restore relay + LCD and apply remote commands.
 }

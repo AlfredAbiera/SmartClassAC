@@ -213,9 +213,19 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("Enter the teacher's employee number.");
         }
 
-        if (!new EmailAddressAttribute().IsValid(request.Email))
+        if (!string.IsNullOrWhiteSpace(request.Email) && !new EmailAddressAttribute().IsValid(request.Email.Trim()))
         {
-            return OperationResult.Failure("Enter a valid school email address.");
+            return OperationResult.Failure("Enter a valid school email address, or leave it blank.");
+        }
+
+        if (!MobilePhones.IsValid(request.Phone))
+        {
+            return OperationResult.Failure(MobilePhones.RequirementMessage);
+        }
+
+        if (!RegistrationOtp.Matches(request.RegistrationOtp))
+        {
+            return OperationResult.Failure(RegistrationOtp.RequirementMessage);
         }
 
         if (!PasswordPolicy.MeetsRequirements(request.Password))
@@ -228,8 +238,10 @@ public sealed class AuthService : IAuthService
             DisplayName = request.DisplayName.Trim(),
             Username = request.Username.Trim(),
             EmployeeNumber = request.EmployeeNumber.Trim(),
-            Email = request.Email.Trim(),
-            DevicePin = string.IsNullOrWhiteSpace(request.DevicePin) ? null : DevicePinCodes.Normalize(request.DevicePin)
+            Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim(),
+            Phone = MobilePhones.Normalize(request.Phone),
+            DevicePin = string.IsNullOrWhiteSpace(request.DevicePin) ? null : DevicePinCodes.Normalize(request.DevicePin),
+            RegistrationOtp = null
         };
 
         if (cleanRequest.DevicePin is not null && !DevicePinCodes.IsValid(cleanRequest.DevicePin))
@@ -263,9 +275,14 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("Enter the teacher's employee number.");
         }
 
-        if (!new EmailAddressAttribute().IsValid(request.Email))
+        if (!string.IsNullOrWhiteSpace(request.Email) && !new EmailAddressAttribute().IsValid(request.Email.Trim()))
         {
-            return OperationResult.Failure("Enter a valid school email address.");
+            return OperationResult.Failure("Enter a valid school email address, or leave it blank.");
+        }
+
+        if (!MobilePhones.IsValid(request.Phone))
+        {
+            return OperationResult.Failure(MobilePhones.RequirementMessage);
         }
 
         string? passwordHash = null;
@@ -284,7 +301,8 @@ public sealed class AuthService : IAuthService
             DisplayName = request.DisplayName.Trim(),
             Username = request.Username.Trim(),
             EmployeeNumber = request.EmployeeNumber.Trim(),
-            Email = request.Email.Trim(),
+            Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim(),
+            Phone = MobilePhones.Normalize(request.Phone),
             DevicePin = string.IsNullOrWhiteSpace(request.DevicePin) ? null : DevicePinCodes.Normalize(request.DevicePin)
         };
 
@@ -312,6 +330,14 @@ public sealed class AuthService : IAuthService
         return authorization is not null
             ? authorization
             : await _accounts.DeleteTeacherAsync(accountId);
+    }
+
+    public async Task<OperationResult> SetTeacherActiveAsync(long accountId, bool isActive)
+    {
+        var authorization = RequireAdmin();
+        return authorization is not null
+            ? authorization
+            : await _accounts.SetTeacherActiveAsync(accountId, isActive);
     }
 
     public Task<IReadOnlyList<ClassroomEntry>> GetClassroomsAsync() => _accounts.GetClassroomsAsync();
@@ -374,30 +400,69 @@ public sealed class AuthService : IAuthService
 
     public async Task<OperationResult> CreateScheduleAsync(CreateScheduleRequest request)
     {
+        var result = await CreateSchedulesAsync(request with { RecurrencePattern = ScheduleRecurrence.None });
+        return result.Succeeded
+            ? OperationResult.Success()
+            : OperationResult.Failure(result.Error ?? "Schedule could not be saved.");
+    }
+
+    public async Task<CreateSchedulesResult> CreateSchedulesAsync(CreateScheduleRequest request)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null)
+        {
+            return CreateSchedulesResult.Failure(authorization.Error ?? "Only an administrator can perform this action.");
+        }
+
+        if (request.TeacherAccountId <= 0 || request.ClassroomId <= 0)
+        {
+            return CreateSchedulesResult.Failure("Select a teacher and a classroom from the database directory.");
+        }
+
+        if (request.SemesterId <= 0)
+        {
+            return CreateSchedulesResult.Failure("Select a semester for this schedule.");
+        }
+
+        if (!ScheduleKinds.IsValid(request.ScheduleKind))
+        {
+            return CreateSchedulesResult.Failure("Schedule kind must be Regular or Makeup.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.SubjectName) || request.SubjectName.Trim().Length > 160)
+        {
+            return CreateSchedulesResult.Failure("Enter a class subject of 160 characters or fewer.");
+        }
+
+        if (request.EndTime <= request.StartTime)
+        {
+            return CreateSchedulesResult.Failure("The end time must be later than the start time.");
+        }
+
+        var pattern = string.IsNullOrWhiteSpace(request.RecurrencePattern)
+            ? ScheduleRecurrence.None
+            : request.RecurrencePattern.Trim();
+
+        return await _accounts.CreateSchedulesAsync(request with
+        {
+            SubjectName = request.SubjectName.Trim(),
+            ScheduleKind = request.ScheduleKind.Trim(),
+            RecurrencePattern = pattern,
+            CustomWeekdays = pattern == ScheduleRecurrence.Custom ? request.CustomWeekdays : null
+        });
+    }
+
+    public async Task<OperationResult> MoveScheduleAsync(MoveScheduleRequest request)
+    {
         var authorization = RequireAdmin();
         if (authorization is not null)
         {
             return authorization;
         }
 
-        if (request.TeacherAccountId <= 0 || request.ClassroomId <= 0)
+        if (request.ScheduleId <= 0)
         {
-            return OperationResult.Failure("Select a teacher and a classroom from the database directory.");
-        }
-
-        if (request.SemesterId <= 0)
-        {
-            return OperationResult.Failure("Select a semester for this schedule.");
-        }
-
-        if (!ScheduleKinds.IsValid(request.ScheduleKind))
-        {
-            return OperationResult.Failure("Schedule kind must be Regular or Makeup.");
-        }
-
-        if (string.IsNullOrWhiteSpace(request.SubjectName) || request.SubjectName.Trim().Length > 160)
-        {
-            return OperationResult.Failure("Enter a class subject of 160 characters or fewer.");
+            return OperationResult.Failure("Select a schedule to move.");
         }
 
         if (request.EndTime <= request.StartTime)
@@ -405,11 +470,7 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("The end time must be later than the start time.");
         }
 
-        return await _accounts.CreateScheduleAsync(request with
-        {
-            SubjectName = request.SubjectName.Trim(),
-            ScheduleKind = request.ScheduleKind.Trim()
-        });
+        return await _accounts.MoveScheduleAsync(request);
     }
 
     public async Task<OperationResult> DeleteScheduleAsync(long scheduleId)
@@ -457,10 +518,16 @@ public sealed class AuthService : IAuthService
             : await _accounts.UnenrollTeacherFromSemesterAsync(teacherAccountId, semesterId);
     }
 
-    public Task<TeacherProfileEntry?> GetMyTeacherProfileAsync() =>
-        _currentUser?.Role == UserRole.Teacher
-            ? _accounts.GetTeacherProfileAsync(_currentUser.Id)
-            : Task.FromResult<TeacherProfileEntry?>(null);
+    public async Task<TeacherProfileEntry?> GetMyTeacherProfileAsync()
+    {
+        if (_currentUser?.Role != UserRole.Teacher)
+        {
+            return null;
+        }
+
+        var profile = await _accounts.GetTeacherProfileAsync(_currentUser.Id);
+        return profile is { IsActive: true } ? profile : null;
+    }
 
     public async Task<OperationResult> UpdateMyTeacherProfileAsync(UpdateTeacherProfileRequest request)
     {
@@ -470,9 +537,19 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("Only a signed-in teacher can update this profile.");
         }
 
-        if (string.IsNullOrWhiteSpace(request.DisplayName) || request.DisplayName.Trim().Length > 160 || !new EmailAddressAttribute().IsValid(request.Email))
+        if (string.IsNullOrWhiteSpace(request.DisplayName) || request.DisplayName.Trim().Length > 160)
         {
-            return OperationResult.Failure("Enter a valid name and email address.");
+            return OperationResult.Failure("Enter a valid teacher name.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Email) && !new EmailAddressAttribute().IsValid(request.Email.Trim()))
+        {
+            return OperationResult.Failure("Enter a valid email address, or leave it blank.");
+        }
+
+        if (!MobilePhones.IsValid(request.Phone))
+        {
+            return OperationResult.Failure(MobilePhones.RequirementMessage);
         }
 
         if (!string.IsNullOrEmpty(request.NewPassword) && !PasswordPolicy.MeetsRequirements(request.NewPassword))
@@ -490,15 +567,15 @@ public sealed class AuthService : IAuthService
             request with
             {
                 DisplayName = request.DisplayName.Trim(),
-                Email = request.Email.Trim(),
-                Phone = string.IsNullOrWhiteSpace(request.Phone) ? null : request.Phone.Trim(),
+                Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim(),
+                Phone = MobilePhones.Normalize(request.Phone),
                 DevicePin = DevicePinCodes.Normalize(request.DevicePin)
             },
             string.IsNullOrEmpty(request.NewPassword) ? null : _passwordHasher.Hash(request.NewPassword));
 
         if (result.Succeeded)
         {
-            _currentUser = teacher with { DisplayName = request.DisplayName.Trim(), Email = request.Email.Trim() };
+            _currentUser = teacher with { DisplayName = request.DisplayName.Trim(), Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim() };
         }
 
         return result;
@@ -688,6 +765,19 @@ public sealed class AuthService : IAuthService
             ? authorization
             : await _accounts.CreateBiometricDeviceAsync(request);
     }
+
+    public async Task<OperationResult> RequestClearAllFingerprintDevicesAsync()
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null)
+        {
+            return authorization;
+        }
+
+        return await _accounts.RequestClearAllFingerprintDevicesAsync();
+    }
+
+    public Task<int> CountFingerprintTemplatesAsync() => _accounts.CountFingerprintTemplatesAsync();
 
     public async Task<OperationResult> ResetSystemToFirstAccessAsync(string currentPassword)
     {

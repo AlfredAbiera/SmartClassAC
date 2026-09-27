@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 
 namespace SmartClassAC.Services;
 
@@ -127,9 +128,9 @@ public sealed record OperationResult(bool Succeeded, string? Error = null)
     public static OperationResult Failure(string error) => new(false, error);
 }
 
-public sealed record CreateTeacherRequest(string DisplayName, string Username, string EmployeeNumber, string Email, string Password, string? DevicePin = null);
-public sealed record UpdateAdminTeacherRequest(long AccountId, string DisplayName, string Username, string EmployeeNumber, string Email, string? DevicePin, string? NewPassword);
-public sealed record TeacherDirectoryEntry(long Id, string DisplayName, string Username, string? EmployeeNumber, string Email, int FingerprintTemplateCount);
+public sealed record CreateTeacherRequest(string DisplayName, string Username, string EmployeeNumber, string? Email, string Phone, string Password, string? DevicePin = null, string? RegistrationOtp = null);
+public sealed record UpdateAdminTeacherRequest(long AccountId, string DisplayName, string Username, string EmployeeNumber, string? Email, string Phone, string? DevicePin, string? NewPassword);
+public sealed record TeacherDirectoryEntry(long Id, string DisplayName, string Username, string? EmployeeNumber, string? Email, string? Phone, int FingerprintTemplateCount, bool IsActive);
 public sealed record ClassroomEntry(long Id, string Name, int Capacity, int TargetTemperature, decimal? CurrentTemperature, string AcStatus, bool IsActive);
 public sealed record CreateClassroomRequest(string Name, int Capacity, int TargetTemperature);
 public sealed record UpdateClassroomRequest(long Id, string Name, int Capacity, int TargetTemperature, bool IsActive);
@@ -142,7 +143,22 @@ public sealed record CreateScheduleRequest(
     string SubjectName,
     DateOnly ScheduleDate,
     TimeOnly StartTime,
-    TimeOnly EndTime);
+    TimeOnly EndTime,
+    string RecurrencePattern = ScheduleRecurrence.None,
+    IReadOnlyList<DayOfWeek>? CustomWeekdays = null);
+
+public sealed record CreateSchedulesResult(bool Succeeded, string? Error = null, int CreatedCount = 0, int SkippedCount = 0)
+{
+    public static CreateSchedulesResult Success(int created, int skipped) => new(true, null, created, skipped);
+    public static CreateSchedulesResult Failure(string error) => new(false, error);
+
+    public string Summary =>
+        SkippedCount <= 0
+            ? $"Created {CreatedCount} schedule(s)."
+            : $"Created {CreatedCount} schedule(s); skipped {SkippedCount} conflict(s).";
+}
+
+public sealed record MoveScheduleRequest(long ScheduleId, DateOnly ScheduleDate, TimeOnly StartTime, TimeOnly EndTime);
 
 public sealed record ScheduleDirectoryEntry(
     long Id,
@@ -176,8 +192,108 @@ public static class ScheduleKinds
         !string.IsNullOrWhiteSpace(kind) && All.Contains(kind, StringComparer.Ordinal);
 }
 
-public sealed record TeacherProfileEntry(long AccountId, string DisplayName, string Username, string? EmployeeNumber, string Email, string? Phone, string? DevicePin, int FingerprintTemplateCount);
-public sealed record UpdateTeacherProfileRequest(string DisplayName, string Email, string? Phone, string? DevicePin, string? NewPassword);
+public static class ScheduleRecurrence
+{
+    public const string None = "None";
+    public const string Weekly = "Weekly";
+    public const string MonWed = "MonWed";
+    public const string TueThu = "TueThu";
+    public const string MWF = "MWF";
+    public const string TTH = "TTH";
+    public const string Custom = "Custom";
+
+    public static readonly (string Value, string Label)[] Patterns =
+    {
+        (None, "Does not repeat"),
+        (Weekly, "Weekly (same weekday)"),
+        (MonWed, "Mon–Wed"),
+        (TueThu, "Tue–Thu"),
+        (MWF, "MWF"),
+        (TTH, "TTH"),
+        (Custom, "Custom weekdays")
+    };
+
+    public static bool IsValid(string? pattern) =>
+        Patterns.Any(item => string.Equals(item.Value, pattern, StringComparison.Ordinal));
+
+    public static IReadOnlyList<DayOfWeek> ResolveWeekdays(string pattern, DateOnly startDate, IReadOnlyList<DayOfWeek>? customWeekdays)
+    {
+        return pattern switch
+        {
+            None => Array.Empty<DayOfWeek>(),
+            Weekly => new[] { startDate.DayOfWeek },
+            MonWed => new[] { DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday },
+            TueThu => new[] { DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday },
+            MWF => new[] { DayOfWeek.Monday, DayOfWeek.Wednesday, DayOfWeek.Friday },
+            TTH => new[] { DayOfWeek.Tuesday, DayOfWeek.Thursday },
+            Custom => (customWeekdays ?? Array.Empty<DayOfWeek>())
+                .Where(day => day is >= DayOfWeek.Monday and <= DayOfWeek.Friday)
+                .Distinct()
+                .OrderBy(day => day == DayOfWeek.Sunday ? 7 : (int)day)
+                .ToArray(),
+            _ => Array.Empty<DayOfWeek>()
+        };
+    }
+
+    public static IReadOnlyList<DateOnly> ExpandDates(DateOnly startDate, DateOnly semesterEndDate, string pattern, IReadOnlyList<DayOfWeek>? customWeekdays)
+    {
+        if (startDate > semesterEndDate)
+        {
+            return Array.Empty<DateOnly>();
+        }
+
+        if (pattern is None or null || string.IsNullOrWhiteSpace(pattern) || pattern == None)
+        {
+            return new[] { startDate };
+        }
+
+        var weekdays = ResolveWeekdays(pattern, startDate, customWeekdays);
+        if (weekdays.Count == 0)
+        {
+            return Array.Empty<DateOnly>();
+        }
+
+        var dates = new List<DateOnly>();
+        for (var date = startDate; date <= semesterEndDate; date = date.AddDays(1))
+        {
+            if (weekdays.Contains(date.DayOfWeek))
+            {
+                dates.Add(date);
+            }
+        }
+
+        return dates;
+    }
+
+    public static string Describe(string pattern, DateOnly startDate, IReadOnlyList<DayOfWeek>? customWeekdays)
+    {
+        return pattern switch
+        {
+            None => "One-time",
+            Weekly => $"Weekly {startDate:dddd}",
+            MonWed => "Mon–Wed",
+            TueThu => "Tue–Thu",
+            MWF => "MWF",
+            TTH => "TTH",
+            Custom => string.Join(", ", ResolveWeekdays(Custom, startDate, customWeekdays).Select(ShortDay)),
+            _ => pattern
+        };
+    }
+
+    public static string ShortDay(DayOfWeek day) => day switch
+    {
+        DayOfWeek.Monday => "Mon",
+        DayOfWeek.Tuesday => "Tue",
+        DayOfWeek.Wednesday => "Wed",
+        DayOfWeek.Thursday => "Thu",
+        DayOfWeek.Friday => "Fri",
+        DayOfWeek.Saturday => "Sat",
+        _ => "Sun"
+    };
+}
+
+public sealed record TeacherProfileEntry(long AccountId, string DisplayName, string Username, string? EmployeeNumber, string? Email, string? Phone, string? DevicePin, int FingerprintTemplateCount, bool IsActive = true);
+public sealed record UpdateTeacherProfileRequest(string DisplayName, string? Email, string Phone, string? DevicePin, string? NewPassword);
 
 public sealed record AttendanceLogEntry(
     long Id,
@@ -270,7 +386,8 @@ public sealed record DeviceRoomStatusResult(
     bool SessionActive = false,
     long? TeacherAccountId = null,
     string? TeacherDisplayName = null,
-    long? ScheduleId = null);
+    long? ScheduleId = null,
+    bool ClearFingerprints = false);
 
 public sealed record DeviceFingerprintEnrollResult(
     bool Ok,
@@ -340,6 +457,28 @@ public static class DevicePinCodes
     }
 }
 
+public static class MobilePhones
+{
+    public const string RequirementMessage = "Enter a valid mobile number in the format 09xxxxxxxxx.";
+    private static readonly Regex Pattern = new(@"^09\d{9}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    public static bool IsValid(string? phone) =>
+        !string.IsNullOrWhiteSpace(phone) && Pattern.IsMatch(phone.Trim());
+
+    public static string Normalize(string phone) => phone.Trim();
+}
+
+public static class RegistrationOtp
+{
+    /// <summary>Stub OTP accepted for all teacher registrations until real SMS delivery is wired.</summary>
+    public const string StubCode = "0000";
+    public const string RequirementMessage = "Enter the 4-digit OTP sent to the teacher's mobile number.";
+    public const string SentHelpMessage = "An OTP was sent to the mobile number. For development, use 0000.";
+
+    public static bool Matches(string? otp) =>
+        string.Equals(otp?.Trim(), StubCode, StringComparison.Ordinal);
+}
+
 public interface IUserAccountRepository
 {
     Task InitializeAsync(DefaultAdminOptions defaultAdmin, string passwordHash, CancellationToken cancellationToken);
@@ -354,12 +493,15 @@ public interface IUserAccountRepository
     Task<OperationResult> SetTeacherDevicePinByEmployeeNumberAsync(string employeeNumber, string pinCode, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TeacherDirectoryEntry>> GetTeachersAsync(CancellationToken cancellationToken = default);
     Task<OperationResult> DeleteTeacherAsync(long accountId, CancellationToken cancellationToken = default);
+    Task<OperationResult> SetTeacherActiveAsync(long accountId, bool isActive, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ClassroomEntry>> GetClassroomsAsync(CancellationToken cancellationToken = default);
     Task<OperationResult> CreateClassroomAsync(CreateClassroomRequest request, CancellationToken cancellationToken = default);
     Task<OperationResult> UpdateClassroomAsync(UpdateClassroomRequest request, CancellationToken cancellationToken = default);
     Task<OperationResult> DeleteClassroomAsync(long classroomId, CancellationToken cancellationToken = default);
     Task<OperationResult> CreateScheduleAsync(CreateScheduleRequest request, CancellationToken cancellationToken = default);
+    Task<CreateSchedulesResult> CreateSchedulesAsync(CreateScheduleRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ScheduleDirectoryEntry>> GetSchedulesAsync(CancellationToken cancellationToken = default);
+    Task<OperationResult> MoveScheduleAsync(MoveScheduleRequest request, CancellationToken cancellationToken = default);
     Task<OperationResult> DeleteScheduleAsync(long scheduleId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SemesterEntry>> GetSemestersAsync(CancellationToken cancellationToken = default);
     Task<OperationResult> CreateSemesterAsync(CreateSemesterRequest request, CancellationToken cancellationToken = default);
@@ -395,8 +537,14 @@ public interface IUserAccountRepository
     Task<DeviceRoomStatusResult> GetDeviceRoomStatusAsync(string deviceCode, DateOnly schoolDate, TimeOnly schoolTime, CancellationToken cancellationToken = default);
     /// <summary>
     /// Ends any active attendance in this device's classroom and sets AC Off (e.g. after sensor DELETEALL).
+    /// Also clears any pending remote fingerprint-wipe flag for the device.
     /// </summary>
     Task<OperationResult> ClearRoomSessionByDeviceCodeAsync(string deviceCode, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Deletes all enrolled fingerprint template rows and marks every active scanner to wipe its sensor on next status poll.
+    /// </summary>
+    Task<OperationResult> RequestClearAllFingerprintDevicesAsync(CancellationToken cancellationToken = default);
+    Task<int> CountFingerprintTemplatesAsync(CancellationToken cancellationToken = default);
     Task<bool> HasActiveAttendanceAsync(long teacherAccountId, CancellationToken cancellationToken = default);
     Task<long?> GetActiveAttendanceClassroomIdAsync(long teacherAccountId, CancellationToken cancellationToken = default);
     Task<long?> FindInWindowScheduleIdAsync(long teacherAccountId, long classroomId, DateOnly schoolDate, TimeOnly schoolTime, CancellationToken cancellationToken = default);
@@ -421,12 +569,15 @@ public interface IAuthService
     Task<IReadOnlyList<TeacherDirectoryEntry>> GetTeachersAsync();
     Task<TeacherProfileEntry?> GetTeacherProfileForAdminAsync(long accountId);
     Task<OperationResult> DeleteTeacherAsync(long accountId);
+    Task<OperationResult> SetTeacherActiveAsync(long accountId, bool isActive);
     Task<IReadOnlyList<ClassroomEntry>> GetClassroomsAsync();
     Task<OperationResult> CreateClassroomAsync(CreateClassroomRequest request);
     Task<OperationResult> UpdateClassroomAsync(UpdateClassroomRequest request);
     Task<OperationResult> DeleteClassroomAsync(long classroomId);
     Task<OperationResult> CreateScheduleAsync(CreateScheduleRequest request);
+    Task<CreateSchedulesResult> CreateSchedulesAsync(CreateScheduleRequest request);
     Task<IReadOnlyList<ScheduleDirectoryEntry>> GetSchedulesAsync();
+    Task<OperationResult> MoveScheduleAsync(MoveScheduleRequest request);
     Task<OperationResult> DeleteScheduleAsync(long scheduleId);
     Task<IReadOnlyList<SemesterEntry>> GetSemestersAsync();
     Task<OperationResult> CreateSemesterAsync(CreateSemesterRequest request);
@@ -452,5 +603,7 @@ public interface IAuthService
     Task<OperationResult> SetTemperatureAsync(SetTemperatureRequest request);
     Task<IReadOnlyList<BiometricDeviceEntry>> GetBiometricDevicesAsync();
     Task<OperationResult> CreateBiometricDeviceAsync(CreateBiometricDeviceRequest request);
+    Task<OperationResult> RequestClearAllFingerprintDevicesAsync();
+    Task<int> CountFingerprintTemplatesAsync();
     Task<OperationResult> ResetSystemToFirstAccessAsync(string currentPassword);
 }

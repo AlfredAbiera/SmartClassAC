@@ -192,8 +192,8 @@ public sealed class DemoDataSeeder
 
     private static readonly CreateTeacherRequest[] DemoTeachers =
     {
-        new("Maria Santos", "msantos", "EMP-1001", "maria.santos@school.test", SharedTeacherPassword, "1001"),
-        new("John Reyes", "jreyes", "EMP-1002", "john.reyes@school.test", SharedTeacherPassword, "1002"),
-        new("Ana Cruz", "acruz", "EMP-1003", "ana.cruz@school.test", SharedTeacherPassword, "1003")
+        new("Maria Santos", "msantos", "EMP-1001", "maria.santos@school.test", "09111111111", SharedTeacherPassword, "1001"),
+        new("John Reyes", "jreyes", "EMP-1002", "john.reyes@school.test", "09222222222", SharedTeacherPassword, "1002"),
+        new("Ana Cruz", "acruz", "EMP-1003", "ana.cruz@school.test", "09333333333", SharedTeacherPassword, "1003")
     };
 }

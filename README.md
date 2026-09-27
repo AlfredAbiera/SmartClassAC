@@ -1,6 +1,6 @@
 # SmartClass AC
 
-SmartClass AC is a **Blazor Server** web application for managing smart classroom air-conditioning. Administrators and teachers manage classrooms, schedules, attendance, leave/overtime requests, support tickets, and temperature commands. All persistent data is stored in **MariaDB** (local XAMPP by default).
+SmartClass AC is a **Blazor Server** web application for managing smart classroom air-conditioning. Administrators and teachers manage classrooms, schedules, attendance, and temperature commands. All persistent data is stored in **MariaDB** (local XAMPP by default).
 
 Fingerprint terminals (ESP32 + Adafruit sensor) enroll and identify teachers through a **device HTTP API**, using each teacher’s **device PIN** and a numeric sensor template ID.
 
@@ -95,7 +95,7 @@ Open **http://localhost:5062**. Health: **http://localhost:5062/health**.
 
 ## MariaDB / XAMPP setup
 
-SmartClass stores accounts, classrooms, schedules, attendance, requests, tickets, temperature logs, and fingerprint templates in **MariaDB**. The app uses MySqlConnector and applies schema via versioned migrations on startup.
+SmartClass stores accounts, classrooms, schedules, attendance, temperature logs, and fingerprint templates in **MariaDB**. The app uses MySqlConnector and applies schema via versioned migrations on startup.
 
 ### Local defaults (setup helper)
 
@@ -161,7 +161,7 @@ Env vars use double underscores (e.g. `ConnectionStrings__SmartClassMariaDb`).
 
 Set `SchoolTime:TimeZoneId` to the school’s zone so schedule windows **and all recorded timestamps** use that wall clock (`Singapore Standard Time`, `Asia/Singapore`, `Asia/Manila`, etc.). Defaults to `Singapore Standard Time` (UTC+8). Leave empty only to use the server OS local zone.
 
-User-visible records (attendance time-in/out, temperature logs, request/ticket created/reviewed times) are **stored and displayed as school local time** — they are not converted with `ToLocalTime()` / UTC round-trips. Password-reset expiry remains UTC.
+User-visible records (attendance time-in/out and temperature logs) are **stored and displayed as school local time** — they are not converted with `ToLocalTime()` / UTC round-trips. Password-reset expiry remains UTC.
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
@@ -183,8 +183,10 @@ SQL in [`Migrations/`](Migrations/) is applied in order by `DatabaseMigrationRun
 | `005_semesters_and_schedule_kinds.sql` | `semesters`, `teacher_semesters`, `class_schedules.semester_id` + `schedule_kind` (Regular/Makeup) |
 | `006_biometric_devices.sql` | One fingerprint scanner per classroom (`device_code`); required on enroll/scan |
 | `007_attendance_outcomes.sql` | `attendance_logs.outcome` (OnTime / Late / Absent / MissingTimeOut) |
+| `008_teacher_mobile_phone.sql` | Unique `phone` on teachers; backfills missing mobiles |
+| `009_pending_clear_fingerprints.sql` | `biometric_devices.pending_clear_fingerprints` for Admin remote sensor wipe |
 
-Fresh installs also define `employee_number` / `device_pin` in `001`; later migrations stay safe for older databases.
+Fresh installs also define `employee_number` / `device_pin` / unique `phone` in `001`; later migrations stay safe for older databases.
 
 If a migration fails: fix SQL or add a new numbered file; do not mark a failed version in `schema_versions` until it succeeds.
 
@@ -200,18 +202,20 @@ Hardware (or Bruno) calls these endpoints with header **`X-Device-Api-Key`** = `
 |--------|------|------|----------|
 | `POST` | `/api/device/fingerprint/enroll` | `{ "pinCode", "templateId", "deviceCode" }` | Validate room scanner; resolve teacher by PIN; store template |
 | `POST` | `/api/device/fingerprint/scan` | `{ "templateId", "deviceCode" }` | Match finger **in that room**; `started` / `ended` / `ac_on` / `ac_off` / `unknown` / `unknown_device` / `wrong_room` / `no_schedule` |
-| `POST` | `/api/device/status` | `{ "deviceCode" }` | Room AC on/off (`acOn`), `acStatus`, teacher, `sessionActive` — power-loss recovery and Admin remote AC sync |
-| `POST` | `/api/device/clear-session` | `{ "deviceCode" }` | End active attendance in that room + set AC Off (used by Serial `DELETEALL`) |
+| `POST` | `/api/device/status` | `{ "deviceCode" }` | Room AC/teacher snapshot, remote AC sync, and `clearFingerprints` when Admin queued a sensor wipe |
+| `POST` | `/api/device/clear-session` | `{ "deviceCode" }` | End active attendance in that room + set AC Off; clears pending fingerprint wipe (used by Serial `DELETEALL` / remote clear) |
 
 Every room has its own ESP32. Shared header `X-Device-Api-Key` authenticates the fleet; **`deviceCode`** (e.g. `ROOM-101`) selects the classroom. Scan only starts a schedule for that classroom; ending must happen on the same room’s scanner.
 
 **Power-loss recovery:** after WiFi connects (boot or reconnect), firmware `1.2.5+` calls `/api/device/status` with its `deviceCode`, restores the relay from `acOn`, and shows `teacherDisplayName` on the LCD when AC is on. Serial `STATUS` also refreshes from the server.
 
-**Remote AC from Admin:** **Admin → AC control** can **Turn AC on** (`RemoteOn` → status `Remote`) or **Turn AC off** (`RemoteOff` → `Off`). That updates MariaDB desired state; firmware `1.2.12+` polls `/api/device/status` about every 30s (with `/health`) and applies `acOn` without a fingerprint scan. Firmware `1.2.13+` keeps the idle LCD on **Ready to scan** if a status sync blip fails (health still drives online/offline). Remote / Override stay on until an explicit Off (portal, hard shutdown, scan end, or clear-session); schedule-window auto-off only clears session-tied `Cooling`.
+**Remote AC from Admin:** **Admin → AC control** uses per-room **On** / **Off** in the status table (`RemoteOn` → `Remote`, `RemoteOff` → `Off`). That updates MariaDB desired state; firmware `1.2.12+` polls `/api/device/status` about every 30s (with `/health`) and applies `acOn` without a fingerprint scan. Firmware `1.2.13+` keeps the idle LCD on **Ready to scan** if a status sync blip fails (health still drives online/offline). Remote / Override stay on until an explicit Off (portal, hard shutdown, scan end, or clear-session); schedule-window auto-off only clears session-tied `Cooling`.
+
+**Clear fingerprints from Admin:** **Admin → Settings → Clear fingerprint device data** deletes all `fingerprint_templates` rows and sets `pending_clear_fingerprints` on every active scanner. Firmware `1.2.15+` reads `clearFingerprints: true` from `/status`, runs `emptyDatabase()` on the sensor, then `POST /api/device/clear-session` (AC off + clears the pending flag). Teachers must re-enroll afterward.
 
 **Server health:** firmware `1.2.9+` polls `GET /health` every 30s (and on boot / WiFi reconnect / Serial `HEALTH`). Idle LCD (firmware `1.2.14+`) keeps **Ready to scan** on row 1 and shows **Offline** on row 2 when WiFi is up but SmartClass is unreachable (or WiFi is down); fingerprint scans are blocked until health returns Healthy (HTTP 200).
 
-**Attendance vs AC re-entry:** the first in-window scan creates one attendance session (`started` → AC Cooling). A second scan ends it (`ended` → sets **time-out**, AC Off). Further scans **in the same schedule window** reuse that attendance row: `ac_on` reopens it (clears time-out, status Active, AC on); the next scan is `ended` again and **updates time-out** to now. Outside the window, scans return `no_schedule`. When the window ends, reconcile turns `Cooling` rooms Off if no active session remains (does not auto-clear `Remote` / `Override`).
+**Attendance vs AC re-entry:** the first in-window scan creates one attendance session (`started` → AC Cooling). A second scan ends it (`ended` → sets **time-out**, AC Off). Further scans **in the same schedule window** reuse that attendance row: `ac_on` reopens it (clears time-out, status Active, AC on); the next scan is `ended` again and **updates time-out** to now. Outside the window, scans return `no_schedule`. When the window ends, reconcile turns `Cooling` rooms **Off immediately** unless another schedule for that room is still in-window (does not auto-clear `Remote` / `Override`). Open attendance without logout is still force-closed later as **Missing time-out** after `MissingTimeOutGraceMinutes`.
 
 ### Device PIN
 
@@ -407,11 +411,11 @@ Shared teacher password meets app policy (≥10 chars, upper, lower, digit).
 
 ### Teachers & schedules
 
-| Employee # | PIN | Username | Fingerprints | Schedules |
-|------------|-----|----------|--------------|-----------|
-| EMP-1001 | 1001 | `msantos` | **1**, **2** | Today in-window Math (Room 101); tomorrow Math; today afternoon Science Lab |
-| EMP-1002 | 1002 | `jreyes` | none | Today in-window English (Room 202); yesterday English |
-| EMP-1003 | 1003 | `acruz` | none | **None** |
+| Employee # | PIN | Mobile | Username | Fingerprints | Schedules |
+|------------|-----|--------|----------|--------------|-----------|
+| EMP-1001 | 1001 | `09111111111` | `msantos` | **1**, **2** | Today in-window Math (Room 101); tomorrow Math; today afternoon Science Lab |
+| EMP-1002 | 1002 | `09222222222` | `jreyes` | none | Today in-window English (Room 202); yesterday English |
+| EMP-1003 | 1003 | `09333333333` | `acruz` | none | **None** |
 
 In-window start/end at seed time ≈ **now − 1h** through **now + 2h** so fingerprint **start class** works the day you seed.
 
@@ -425,7 +429,7 @@ In-window start/end at seed time ≈ **now − 1h** through **now + 2h** so fing
 6. Scan `1` in Maria’s window → `started`; scan again → `ended`; scan again while still in window → `ac_on` (AC only).
 7. Scan `9999` → `unknown`.
 8. Admin AC target on Computer Lab → temperature log row.
-9. Leave + substitute (Maria → John) — watch schedule overlap.
+9. Admin add teacher — mobile `09xxxxxxxxx` required; email optional; registration OTP step accepts **0000**.
 
 ---
 
@@ -516,9 +520,9 @@ Companion hardware: `SmartClassAC-ESP32/smartclass/`.
 
 ## Admin and teacher workflow
 
-**Admin:** create/edit teachers (name, employee number, username, email, optional device PIN and password), **semesters** (enroll teachers), classrooms, schedules with **Regular/Makeup** kind (teacher must be enrolled; overlaps rejected); system reset (`RESET`) / delete.
+**Admin:** create/edit teachers (name, employee number, username, **required mobile** `09xxxxxxxxx`, optional email, optional device PIN and password; **active/inactive** status — only active teachers appear when creating schedules or enrolling in a semester; **new teachers** confirm a registration OTP — stub code **0000** until SMS is wired), **semesters** (enroll teachers), classrooms, schedules with **Regular/Makeup** kind and optional **repeat through semester end** (None / Weekly / Mon–Wed / Tue–Thu / MWF / TTH / Custom weekdays — expands to one `class_schedules` row per date; conflicts are skipped and reported); **move** a single schedule to another date/time; system reset (`RESET`) / delete.
 
-**Teacher:** schedule (shows semester + kind), profile (PIN), attendance, requests, tickets, assigned rooms. Enroll fingerprints on the terminal with the PIN; daily start/end via scan when a schedule window is active in an **active semester**.
+**Teacher:** schedule (shows semester + kind), profile (PIN), attendance, assigned rooms, and active class start/end. Enroll fingerprints on the terminal with the PIN; daily start/end via scan when a schedule window is active in an **active semester**.
 
 ### Required domain flow (status)
 
@@ -558,9 +562,9 @@ AC ON / AC OFF
 
 | Step | Status | Notes |
 |------|--------|-------|
-| **TEACHER** | Done | Create/edit; employee #; device PIN; fingerprints |
+| **TEACHER** | Done | Create/edit; employee #; device PIN; fingerprints; active/inactive (schedule eligibility) |
 | **TEACHER_SEMESTER** | Done | Semesters + enroll/unenroll; schedules require enrollment |
-| **REGULAR / MAKEUP** | Done | `schedule_kind`; Makeup preferred when overlapping |
+| **REGULAR / MAKEUP** | Done | `schedule_kind`; Makeup preferred when overlapping; expand-on-create recurrence through semester end |
 | **CLASSROOM** | Done | Rooms, capacity, target temperature |
 | **BIOMETRIC_DEVICE** | Done | Per-room `deviceCode`; required on enroll/scan |
 | **AC_UNIT** | Done | Room `ac_status` + Admin remote on/off; ESP polls `/status` (~30s) |
@@ -570,16 +574,16 @@ AC ON / AC OFF
 | **ABSENT** | Done | Schedule ended with no punch |
 | **MISSING TIME-OUT** | Done | Open past end + grace → auto-close, AC off |
 | **ON TIME** | Done | Stored as `OnTime` (extra vs original list) |
-| **EARLY DISMISSAL** | Not yet | `EarlyOut` request type exists; not derived from punches |
-| **OVERTIME MINUTES** | Not yet | `Overtime` request type exists; not derived from punches |
-| **ON LEAVE** | Partial | Leave requests exist; not auto-linked to attendance outcome |
+| **EARLY DISMISSAL** | Not yet | Not derived from punches |
+| **OVERTIME MINUTES** | Not yet | Not derived from punches |
+| **ON LEAVE** | Not yet | No leave workflow in the UI |
 | **AC ON / OFF** | Done | Class start → Cooling; end / missing timeout → Off (+ temperature logs) |
 | **ATTENDANCE_EXCEPTION** | Not yet | No exception table / workflow |
 | **NOTIFICATION / SMS** | Not yet | Deferred by design |
 
 **Live spine today:** Teacher → semester → Regular/Makeup schedule → room scanner → punch → attendance (On time / Late / Absent / Missing time-out) → AC on/off.
 
-**Natural next:** early dismissal / overtime from punches → wire leave → On Leave → exceptions → SMS.
+**Natural next:** early dismissal / overtime from punches → On Leave → exceptions → SMS.
 
 ### Semesters and schedule kinds
 
@@ -590,6 +594,8 @@ Teacher → TeacherSemester → RegularSchedule / MakeupClass → Classroom
 - **Semesters** — Admin → Semesters: create date-ranged terms, activate/deactivate, enroll teachers.
 - **Enrollment** — required in `teacher_semesters` before creating schedules for that semester.
 - **Schedule kind** — `Regular` or `Makeup`; date must fall inside the semester; when both are in window, **Makeup is preferred** for biometric/dashboard start.
+- **Recurring schedules** — Admin → Schedules → Add schedule: choose a start date, times, and a repeat pattern. Matching weekdays from the start date through the semester `end_date` are expanded into individual schedule rows (same subject/room/teacher/kind/times). Overlaps with existing teacher or classroom bookings are **skipped**; the toast reports how many were created vs skipped. Custom lets you pick Mon–Fri checkboxes. Makeup can still repeat, but the UI warns that makeups are usually one-off.
+- **Move schedule** — each row has a move action to change that single class’s date and times (teacher/room/subject/kind unchanged). Rejects overlaps, dates outside the semester, and schedules with an active attendance session.
 - Demo seed creates “Demo Semester {year}”, enrolls all demo teachers, and marks Science Lab as Makeup.
 
 ### Attendance outcomes
@@ -605,7 +611,7 @@ BiometricEvent → Attendance → Late | Absent | MissingTimeOut | OnTime
 | **Missing time-out** | Session still open after schedule end + `MissingTimeOutGraceMinutes` (auto-closed; AC off) |
 | **Absent** | Schedule ended with no time-in punch (system row) |
 
-Session lifecycle remains `Active` → `Completed` (**one attendance row per schedule**). After time-out, in-window re-login (`ac_on`) reopens that row (clears time-out); the next logout (`ended`) writes a fresh time-out. Reconciliation runs every minute and also before scan / dashboard attendance reads; it also turns AC Off when a room is Cooling with no active session and no schedule still in window.
+Session lifecycle remains `Active` → `Completed` (**one attendance row per schedule**). After time-out, in-window re-login (`ac_on`) reopens that row (clears time-out); the next logout (`ended`) writes a fresh time-out. Reconciliation runs every minute and also before scan / dashboard attendance reads; it turns AC Off when a room is Cooling and **no schedule is still in-window** for that room (even if the teacher has not logged out). If a back-to-back class for the same room is already in its window, Cooling stays on.
 
 ---
 
@@ -648,7 +654,7 @@ Document every shipped change here (newest first). Also update the relevant sect
 
 #### 2026-09-27 — Admin remote AC on/off to classroom devices
 
-- Admin **AC control**: Turn AC on (`RemoteOn` → `Remote`) / Turn AC off (`RemoteOff` → `Off`), plus per-room On/Off in the status table.
+- Admin **AC control**: per-room On/Off (`RemoteOn` → `Remote` / `RemoteOff` → `Off`).
 - Devices: ESP32 firmware `1.2.12` polls `POST /api/device/status` with the 30s health check and applies `acOn` when it changes.
 - Firmware `1.2.13`: a failed status sync no longer clears `serverOnline` (fixes idle LCD stuck on **No server** after remote control).
 - Reconcile auto-off only clears session-tied `Cooling` (not `Remote` / `Override`).
@@ -676,7 +682,7 @@ Document every shipped change here (newest first). Also update the relevant sect
 
 - After time-out for a schedule, further scans while still inside that schedule window reuse the same attendance row (`ac_on` / `ended`); a new attendance insert is not created.
 - ESP32 firmware `1.2.3` shows “AC resumed” / “AC off” for those actions.
-- Reconcile turns Cooling Off when the schedule window ends and no active session remains.
+- Reconcile turns Cooling Off when the schedule window ends unless another in-window schedule still uses that room (logout not required).
 
 #### 2026-09-27 — ESP32 firmware versioning
 
@@ -690,8 +696,31 @@ Document every shipped change here (newest first). Also update the relevant sect
 
 #### 2026-09-27 — School-local recorded timestamps
 
-- Attendance, temperature logs, requests, and tickets now write and display school wall-clock time via `SchoolTime:TimeZoneId` (default `Singapore Standard Time`).
+- Attendance, temperature logs now write and display school wall-clock time via `SchoolTime:TimeZoneId` (default `Singapore Standard Time`).
 - Removed `ToLocalTime()` display conversions that shifted already-local / mislabeled UTC values.
+
+#### 2026-09-27 — Remove request and support ticket pages
+
+- Admin and Teacher dashboards no longer expose leave/substitute requests, early-out/overtime requests, or support tickets.
+- Overview and navigation focus on classrooms, schedules, attendance, and AC control.
+
+#### 2026-09-27 — Teacher mobile + registration OTP
+
+- Teacher email is optional; mobile (`09xxxxxxxxx`) is required and unique.
+- Migration `008` backfills missing phones and adds `uq_user_accounts_phone`.
+- Admin create-teacher flow asks for OTP after the form (stub accepts **0000** for all registrations until real SMS delivery).
+- Teacher profile edit enforces the same mobile format.
+
+#### 2026-09-27 — Clear fingerprint devices from Settings
+
+- Admin Settings can wipe all MariaDB fingerprint templates and queue every active scanner to clear its sensor.
+- Migration `009`: `biometric_devices.pending_clear_fingerprints`.
+- `POST /api/device/status` returns `clearFingerprints`; firmware `1.2.15+` wipes the sensor and acknowledges via `clear-session`.
+
+#### 2026-09-27 — Teacher active / inactive status
+
+- Teachers list shows Active/Inactive status with activate/deactivate toggle and list filters (default: Active).
+- Only active teachers can be selected for schedules and semester enrollment; inactive teachers cannot sign in.
 
 #### 2026-09-27 — Attendance outcomes (Late / Absent / Missing time-out)
 

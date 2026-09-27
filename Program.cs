@@ -204,7 +204,8 @@ app.MapPost("/api/device/status", async (
             sessionActive = result.SessionActive,
             teacherAccountId = result.TeacherAccountId,
             teacherDisplayName = result.TeacherDisplayName,
-            scheduleId = result.ScheduleId
+            scheduleId = result.ScheduleId,
+            clearFingerprints = result.ClearFingerprints
         });
     }
     catch (Exception exception)

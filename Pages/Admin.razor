@@ -23,8 +23,6 @@
             <p class="nav-group-label">OPERATIONS</p>
             <button class='@NavClass("temperature")' @onclick='() => Navigate("temperature")'><i class="fas fa-temperature-half"></i>AC control</button>
             <button class='@NavClass("attendance")' @onclick='() => Navigate("attendance")'><i class="fas fa-clipboard-check"></i>Attendance</button>
-            <button class='@NavClass("requests")' @onclick='() => Navigate("requests")'><i class="fas fa-inbox"></i>Requests</button>
-            <button class='@NavClass("support")' @onclick='() => Navigate("support")'><i class="fas fa-life-ring"></i>Support tickets</button>
             <p class="nav-group-label">SYSTEM</p>
             <button class='@NavClass("settings")' @onclick='() => Navigate("settings")'><i class="fas fa-gear"></i>System settings</button>
         </nav>
@@ -33,15 +31,14 @@
     @if (sidebarOpen) { <button class="sidebar-scrim" aria-label="Close navigation" @onclick="ToggleSidebar"></button> }
 
     <main class="dashboard-main">
-        <header class="dashboard-topbar"><button class="icon-button mobile-nav-toggle" aria-label="Open navigation" @onclick="ToggleSidebar"><i class="fas fa-bars"></i></button><div class="topbar-title"><span class="eyebrow">SMARTCLASS AC / ADMIN</span><h1>@Title</h1></div><div class="topbar-actions"><span class="system-status"><i></i>System online</span><button class="profile-chip" @onclick='() => Navigate("settings")'><span>@AdminInitials</span><strong>@AdminName</strong><i class="fas fa-chevron-down"></i></button></div></header>
+        <header class="dashboard-topbar"><button class="icon-button mobile-nav-toggle" aria-label="Open navigation" @onclick="ToggleSidebar"><i class="fas fa-bars"></i></button><div class="topbar-title"><span class="eyebrow">SMARTCLASS AC / ADMIN</span><h1>@Title</h1></div><div class="topbar-actions"><button class="profile-chip" @onclick='() => Navigate("settings")'><span>@AdminInitials</span><strong>@AdminName</strong><i class="fas fa-chevron-down"></i></button></div></header>
         <section class="dashboard-content">
             @if (!string.IsNullOrEmpty(message)) { <div class="dashboard-toast" role="status"><i class="fas fa-circle-check"></i>@message<button @onclick='() => message = string.Empty' aria-label="Dismiss"><i class="fas fa-xmark"></i></button></div> }
             @if (isLoading) { <article class="panel"><p class="form-help">Loading records…</p></article> }
             else if (active == "overview")
             {
-                <div class="page-intro split-intro"><div><p>ADMIN DASHBOARD</p><h2>Welcome, @AdminName.</h2><span>Teachers, classrooms, schedules, requests, logs, and tickets are stored in MariaDB.</span></div><button class="primary-button" @onclick='() => Navigate("schedules")'><i class="fas fa-calendar-days"></i>Manage schedules</button></div>
-                <div class="metric-grid"><article class="metric-card blue"><span class="metric-icon"><i class="fas fa-person-chalkboard"></i></span><div><small>TEACHER ACCOUNTS</small><strong>@teachers.Count</strong><p>Biometric teacher records</p></div></article><article class="metric-card violet"><span class="metric-icon"><i class="fas fa-door-open"></i></span><div><small>CLASSROOMS</small><strong>@classrooms.Count</strong><p>Connected room records</p></div></article><article class="metric-card teal"><span class="metric-icon"><i class="fas fa-calendar-days"></i></span><div><small>SCHEDULES TODAY</small><strong>@schedules.Count(schedule => schedule.ScheduleDate == Today)</strong><p>Conflict protected</p></div></article><article class="metric-card amber"><span class="metric-icon"><i class="fas fa-inbox"></i></span><div><small>PENDING REQUESTS</small><strong>@requests.Count(request => request.Status == "Pending")</strong><p>Ready for review</p></div></article></div>
-                <div class="dashboard-grid overview-grid"><article class="panel live-panel"><div class="panel-heading"><div><span class="eyebrow">LIVE ENVIRONMENT</span><h3>Classroom climate</h3></div><button class="text-button" @onclick='() => Navigate("temperature")'>View all <i class="fas fa-arrow-right"></i></button></div><div class="room-climate-list">@if (classrooms.Count == 0) { <p class="form-help">Add classrooms before creating schedules.</p> } @foreach (var room in classrooms.Take(4)) { <div class="room-climate-row"><span class="room-avatar"><i class="fas fa-building"></i></span><div><strong>@room.Name</strong><small>@room.Capacity seats</small></div><span class="mini-temp"><i class="fas fa-temperature-half"></i>@(room.CurrentTemperature ?? room.TargetTemperature)°C</span><span class='room-status @AcStatusTone(room.AcStatus)'>@AcStatusLabel(room.AcStatus)</span></div> }</div></article><article class="panel attendance-panel"><span class="eyebrow">AUTOMATED LOGS</span><h3>Today's attendance</h3><div class="attendance-ring"><div><strong>@attendance.Count(item => DateOnly.FromDateTime(item.TimeIn) == Today)</strong><small>time-ins</small></div></div><p class="form-help">Class start and end operations write the attendance log.</p></article><article class="panel request-panel"><div class="panel-heading"><div><span class="eyebrow">ACTION CENTRE</span><h3>Requests needing review</h3></div><button class="text-button" @onclick='() => Navigate("requests")'>Open inbox <i class="fas fa-arrow-right"></i></button></div>@foreach (var request in requests.Where(item => item.Status == "Pending").Take(3)) { <div class="request-summary"><span class="request-type-icon"><i class="fas fa-inbox"></i></span><div><strong>@request.TeacherDisplayName</strong><small>@request.RequestType · @request.RequestDate.ToString("MMM d")</small></div></div> }</article></div>
+                <div class="metric-grid"><article class="metric-card blue"><span class="metric-icon"><i class="fas fa-person-chalkboard"></i></span><div><small>TEACHER ACCOUNTS</small><strong>@teachers.Count(teacher => teacher.IsActive)</strong><p>Active biometric teachers</p></div></article><article class="metric-card violet"><span class="metric-icon"><i class="fas fa-door-open"></i></span><div><small>CLASSROOMS</small><strong>@classrooms.Count</strong><p>Connected room records</p></div></article><article class="metric-card teal"><span class="metric-icon"><i class="fas fa-calendar-days"></i></span><div><small>SCHEDULES TODAY</small><strong>@schedules.Count(schedule => schedule.ScheduleDate == Today)</strong><p>Conflict protected</p></div></article><article class="metric-card amber"><span class="metric-icon"><i class="fas fa-clipboard-check"></i></span><div><small>ATTENDANCE TODAY</small><strong>@attendance.Count(item => DateOnly.FromDateTime(item.TimeIn) == Today)</strong><p>Time-in records</p></div></article></div>
+                <div class="dashboard-grid overview-grid"><article class="panel live-panel"><div class="panel-heading"><div><span class="eyebrow">LIVE ENVIRONMENT</span><h3>Classroom climate</h3></div><button class="text-button" @onclick='() => Navigate("temperature")'>View all <i class="fas fa-arrow-right"></i></button></div><div class="room-climate-list">@if (classrooms.Count == 0) { <p class="form-help">Add classrooms before creating schedules.</p> } @foreach (var room in classrooms.Take(4)) { <div class="room-climate-row"><span class="room-avatar"><i class="fas fa-building"></i></span><div><strong>@room.Name</strong><small>@room.Capacity seats</small></div><span class="mini-temp"><i class="fas fa-temperature-half"></i>@(room.CurrentTemperature ?? room.TargetTemperature)°C</span><span class='room-status @AcStatusTone(room.AcStatus)'>@AcStatusLabel(room.AcStatus)</span></div> }</div></article><article class="panel attendance-panel"><div class="panel-heading"><div><span class="eyebrow">AUTOMATED LOGS</span><h3>Today's attendance</h3></div><button class="text-button" @onclick='() => Navigate("attendance")'>View all <i class="fas fa-arrow-right"></i></button></div><div class="attendance-ring"><div><strong>@attendance.Count(item => DateOnly.FromDateTime(item.TimeIn) == Today)</strong><small>time-ins</small></div></div><p class="form-help">Class start and end operations write the attendance log.</p></article></div>
             }
             else if (active == "teachers")
             {
@@ -50,7 +47,9 @@
                         <div><span>Create or update a teacher account, then enroll fingerprint IDs from the scanner device API using their device PIN.</span></div>
                         <div class="intro-actions">
                             <button class="primary-button intro-add-button" @onclick="OpenAddTeacher"><i class="fas fa-plus"></i>Add teacher</button>
-                            <select class="intro-filter" @bind="teacherFilter" aria-label="Filter teachers">
+                            <select class="intro-filter" @bind="teacherFilter" @bind:after="ResetTeacherPage" aria-label="Filter teachers">
+                                <option value="active">Active</option>
+                                <option value="inactive">Inactive</option>
                                 <option value="all">All teachers</option>
                                 <option value="prints">With fingerprints</option>
                                 <option value="no-prints">Without fingerprints</option>
@@ -59,26 +58,35 @@
                             </select>
                         </div>
                     </div>
-                    <label class="intro-search"><i class="fas fa-magnifying-glass"></i><input type="search" @bind="teacherSearch" @bind:event="oninput" placeholder="Search teachers" aria-label="Search teachers" /></label>
+                    <label class="intro-search"><i class="fas fa-magnifying-glass"></i><input type="search" @bind="teacherSearch" @bind:event="oninput" @bind:after="ResetTeacherPage" placeholder="Search teachers" aria-label="Search teachers" /></label>
                 </div>
                 <article class="panel list-view">
                     <div class="data-table-wrap"><table class="data-table">
-                        <thead><tr><th>Teacher</th><th>Employee #</th><th>Email</th><th>Fingerprints</th><th>Schedule today</th><th>Actions</th></tr></thead>
+                        <thead><tr><th>Teacher</th><th>Employee #</th><th>Mobile</th><th>Email</th><th>Fingerprints</th><th>Status</th><th>Schedule today</th><th>Actions</th></tr></thead>
                         <tbody>
-                            @if (FilteredTeachers.Count == 0) { <tr><td colspan="6">@(teachers.Count == 0 ? "No teacher accounts have been created yet." : "No teachers match this search or filter.")</td></tr> }
-                            @foreach (var teacher in FilteredTeachers)
+                            @if (FilteredTeachers.Count == 0) { <tr><td colspan="8">@(teachers.Count == 0 ? "No teacher accounts have been created yet." : "No teachers match this search or filter.")</td></tr> }
+                            @foreach (var teacher in PagedTeachers)
                             {
                                 <tr>
-                                    <td><span class="table-avatar">@Initials(teacher.DisplayName)</span><strong>@teacher.DisplayName</strong><small>@teacher.Username</small></td>
+                                    <td><div class="table-person"><span class="table-avatar">@Initials(teacher.DisplayName)</span><div><strong>@teacher.DisplayName</strong><small>@teacher.Username</small></div></div></td>
                                     <td>@(teacher.EmployeeNumber ?? "—")</td>
-                                    <td>@teacher.Email</td>
+                                    <td>@(teacher.Phone ?? "—")</td>
+                                    <td>@(string.IsNullOrWhiteSpace(teacher.Email) ? "—" : teacher.Email)</td>
                                     <td><span class='status-badge @(teacher.FingerprintTemplateCount > 0 ? "active" : "neutral")'>@teacher.FingerprintTemplateCount / 10</span></td>
+                                    <td><span class='status-badge @(teacher.IsActive ? "active" : "neutral")'>@(teacher.IsActive ? "Active" : "Inactive")</span></td>
                                     <td>@ScheduleTodayFor(teacher.Id)</td>
-                                    <td class="table-actions"><button class="secondary-button" @onclick='() => EditTeacher(teacher.Id)'>Edit</button><button class="danger-outline-button" @onclick='() => OpenDelete("teacher", teacher.Id, teacher.DisplayName)'>Remove</button></td>
+                                    <td class="table-actions">
+                                        <div class="table-action-group">
+                                            <button type="button" class="table-action" title="Edit" aria-label="Edit teacher" @onclick='() => EditTeacher(teacher.Id)'><i class="fas fa-pen"></i></button>
+                                            <button type="button" class='table-action @(teacher.IsActive ? "danger" : string.Empty)' title="@(teacher.IsActive ? "Deactivate" : "Activate")" aria-label="@(teacher.IsActive ? "Deactivate teacher" : "Activate teacher")" @onclick='() => ToggleTeacherActive(teacher)'><i class='fas @(teacher.IsActive ? "fa-toggle-off" : "fa-toggle-on")'></i></button>
+                                            <button type="button" class="table-action danger" title="Remove" aria-label="Remove teacher" @onclick='() => OpenDelete("teacher", teacher.Id, teacher.DisplayName)'><i class="fas fa-trash"></i></button>
+                                        </div>
+                                    </td>
                                 </tr>
                             }
                         </tbody>
                     </table></div>
+                    <ListPager State="teacherPager" TotalCount="FilteredTeachers.Count" />
                 </article>
             }
             else if (active == "semesters")
@@ -88,21 +96,21 @@
                         <div><span>Create a semester, enroll teachers, then assign Regular or Makeup schedules under that semester.</span></div>
                         <div class="intro-actions">
                             <button class="primary-button intro-add-button" @onclick="OpenAddSemester"><i class="fas fa-plus"></i>Add semester</button>
-                            <select class="intro-filter" @bind="semesterFilter" aria-label="Filter semesters">
+                            <select class="intro-filter" @bind="semesterFilter" @bind:after="ResetSemesterPage" aria-label="Filter semesters">
                                 <option value="all">All semesters</option>
                                 <option value="active">Active</option>
                                 <option value="inactive">Inactive</option>
                             </select>
                         </div>
                     </div>
-                    <label class="intro-search"><i class="fas fa-magnifying-glass"></i><input type="search" @bind="semesterSearch" @bind:event="oninput" placeholder="Search semesters" aria-label="Search semesters" /></label>
+                    <label class="intro-search"><i class="fas fa-magnifying-glass"></i><input type="search" @bind="semesterSearch" @bind:event="oninput" @bind:after="ResetSemesterPage" placeholder="Search semesters" aria-label="Search semesters" /></label>
                 </div>
                 <article class="panel list-view">
                     <div class="data-table-wrap"><table class="data-table">
                         <thead><tr><th>Name</th><th>Dates</th><th>Status</th><th>Enrolled</th><th>Actions</th></tr></thead>
                         <tbody>
                             @if (FilteredSemesters.Count == 0) { <tr><td colspan="5">@(semesters.Count == 0 ? "No semesters have been created yet." : "No semesters match this search or filter.")</td></tr> }
-                            @foreach (var semester in FilteredSemesters)
+                            @foreach (var semester in PagedSemesters)
                             {
                                 <tr>
                                     <td><strong>@semester.Name</strong></td>
@@ -110,36 +118,41 @@
                                     <td><span class='status-badge @(semester.IsActive ? "active" : "neutral")'>@(semester.IsActive ? "Active" : "Inactive")</span></td>
                                     <td>@teacherSemesters.Count(item => item.SemesterId == semester.Id)</td>
                                     <td class="table-actions">
-                                        <button class="secondary-button" @onclick='() => SelectSemesterForEnrollment(semester.Id)'>Enroll</button>
-                                        <button class='@(semester.IsActive ? "danger-outline-button" : "secondary-button")' @onclick='() => ToggleSemester(semester)'>@(semester.IsActive ? "Deactivate" : "Activate")</button>
+                                        <div class="table-action-group">
+                                            <button type="button" class="table-action" title="Enroll teachers" aria-label="Enroll teachers" @onclick='() => SelectSemesterForEnrollment(semester.Id)'><i class="fas fa-user-plus"></i></button>
+                                            <button type="button" class='table-action @(semester.IsActive ? "danger" : string.Empty)' title="@(semester.IsActive ? "Deactivate" : "Activate")" aria-label="@(semester.IsActive ? "Deactivate semester" : "Activate semester")" @onclick='() => ToggleSemester(semester)'><i class='fas @(semester.IsActive ? "fa-toggle-off" : "fa-toggle-on")'></i></button>
+                                        </div>
                                     </td>
                                 </tr>
                             }
                         </tbody>
                     </table></div>
+                    <ListPager State="semesterPager" TotalCount="FilteredSemesters.Count" />
                 </article>
                 @if (enrollSemesterId > 0)
                 {
                     var selected = semesters.FirstOrDefault(item => item.Id == enrollSemesterId);
                     var enrolled = teacherSemesters.Where(item => item.SemesterId == enrollSemesterId).ToList();
+                    var pagedEnrolled = enrollmentPager.Slice(enrolled);
                     <article class="panel enrollment-panel">
                         <div class="panel-heading"><div><span class="eyebrow">ENROLL TEACHERS</span><h3>@(selected?.Name ?? "Semester")</h3></div></div>
-                        <div class="form-grid"><label>Teacher<select @bind="enrollTeacherId"><option value="0">Select a teacher</option>@foreach (var teacher in teachers) { <option value="@teacher.Id">@teacher.DisplayName</option> }</select></label></div>
+                        <div class="form-grid"><label>Teacher<select @bind="enrollTeacherId"><option value="0">Select a teacher</option>@foreach (var teacher in teachers.Where(item => item.IsActive)) { <option value="@teacher.Id">@teacher.DisplayName</option> }</select></label></div>
                         <div class="form-actions"><button class="primary-button" disabled="@(enrollTeacherId == 0)" @onclick="EnrollTeacher">Enroll</button></div>
                         <div class="data-table-wrap"><table class="data-table">
                             <thead><tr><th>Teacher</th><th>Employee #</th><th>Actions</th></tr></thead>
                             <tbody>
                                 @if (enrolled.Count == 0) { <tr><td colspan="3">No teachers are enrolled in this semester yet.</td></tr> }
-                                @foreach (var enrollment in enrolled)
+                                @foreach (var enrollment in pagedEnrolled)
                                 {
                                     <tr>
                                         <td><span class="table-avatar">@Initials(enrollment.TeacherDisplayName)</span><strong>@enrollment.TeacherDisplayName</strong></td>
                                         <td>@(enrollment.EmployeeNumber ?? "—")</td>
-                                        <td class="table-actions"><button class="danger-outline-button" @onclick='() => UnenrollTeacher(enrollment.TeacherAccountId, enrollment.SemesterId)'>Unenroll</button></td>
+                                        <td class="table-actions"><div class="table-action-group"><button type="button" class="table-action danger" title="Unenroll" aria-label="Unenroll teacher" @onclick='() => UnenrollTeacher(enrollment.TeacherAccountId, enrollment.SemesterId)'><i class="fas fa-user-minus"></i></button></div></td>
                                     </tr>
                                 }
                             </tbody>
                         </table></div>
+                        <ListPager State="enrollmentPager" TotalCount="enrolled.Count" />
                     </article>
                 }
             }
@@ -150,7 +163,7 @@
                         <div><span>Each classroom gets a biometric scanner <code>deviceCode</code> (from the room name). ESP32 must send that code on every enroll/scan.</span></div>
                         <div class="intro-actions">
                             <button class="primary-button intro-add-button" @onclick="OpenAddClassroom"><i class="fas fa-plus"></i>Add classroom</button>
-                            <select class="intro-filter" @bind="classroomFilter" aria-label="Filter classrooms">
+                            <select class="intro-filter" @bind="classroomFilter" @bind:after="ResetClassroomPage" aria-label="Filter classrooms">
                                 <option value="all">All classrooms</option>
                                 <option value="on">AC on</option>
                                 <option value="off">AC off</option>
@@ -159,14 +172,14 @@
                             </select>
                         </div>
                     </div>
-                    <label class="intro-search"><i class="fas fa-magnifying-glass"></i><input type="search" @bind="classroomSearch" @bind:event="oninput" placeholder="Search classrooms" aria-label="Search classrooms" /></label>
+                    <label class="intro-search"><i class="fas fa-magnifying-glass"></i><input type="search" @bind="classroomSearch" @bind:event="oninput" @bind:after="ResetClassroomPage" placeholder="Search classrooms" aria-label="Search classrooms" /></label>
                 </div>
                 <article class="panel list-view">
                     <div class="data-table-wrap"><table class="data-table">
                         <thead><tr><th>Room</th><th>Capacity</th><th>Device code</th><th>Target temp</th><th>AC status</th><th>Actions</th></tr></thead>
                         <tbody>
                             @if (FilteredClassrooms.Count == 0) { <tr><td colspan="6">@(classrooms.Count == 0 ? "No classrooms have been created yet." : "No classrooms match this search or filter.")</td></tr> }
-                            @foreach (var room in FilteredClassrooms)
+                            @foreach (var room in PagedClassrooms)
                             {
                                 <tr>
                                     <td><strong>@room.Name</strong></td>
@@ -174,11 +187,12 @@
                                     <td>@(DeviceCodeForRoom(room.Id) ?? "—")</td>
                                     <td>@room.TargetTemperature°C</td>
                                     <td><span class='status-badge @AcStatusBadge(room.AcStatus)'>@AcStatusLabel(room.AcStatus)</span></td>
-                                    <td class="table-actions"><button class="secondary-button" @onclick='() => EditClassroom(room)'>Edit</button><button class="danger-outline-button" @onclick='() => OpenDelete("classroom", room.Id, room.Name)'>Remove</button></td>
+                                    <td class="table-actions"><div class="table-action-group"><button type="button" class="table-action" title="Edit" aria-label="Edit classroom" @onclick='() => EditClassroom(room)'><i class="fas fa-pen"></i></button><button type="button" class="table-action danger" title="Remove" aria-label="Remove classroom" @onclick='() => OpenDelete("classroom", room.Id, room.Name)'><i class="fas fa-trash"></i></button></div></td>
                                 </tr>
                             }
                         </tbody>
                     </table></div>
+                    <ListPager State="classroomPager" TotalCount="FilteredClassrooms.Count" />
                 </article>
             }
             else if (active == "schedules")
@@ -188,24 +202,29 @@
                         <div><span>Teachers must be enrolled in the semester. Overlaps for the same teacher or classroom are rejected. Makeup sessions take priority when both are in window.</span></div>
                         <div class="intro-actions">
                             <button class="primary-button intro-add-button" @onclick="OpenAddSchedule"><i class="fas fa-plus"></i>Add schedule</button>
-                            <select class="intro-filter" @bind="scheduleFilter" aria-label="Filter schedules">
+                            <select class="intro-filter" @bind="scheduleFilter" @bind:after="OnScheduleFilterChanged" aria-label="Filter schedules">
                                 <option value="all">All schedules</option>
                                 <option value="today">Today</option>
+                                <option value="date">On date…</option>
                                 <option value="upcoming">Upcoming</option>
                                 <option value="past">Past</option>
                                 <option value="regular">Regular</option>
                                 <option value="makeup">Makeup</option>
                             </select>
+                            @if (scheduleFilter == "date")
+                            {
+                                <label class="intro-date"><span class="visually-hidden">Schedule date</span><input type="date" @bind="scheduleFilterDate" @bind:after="ResetSchedulePage" aria-label="Choose schedule date" /></label>
+                            }
                         </div>
                     </div>
-                    <label class="intro-search"><i class="fas fa-magnifying-glass"></i><input type="search" @bind="scheduleSearch" @bind:event="oninput" placeholder="Search schedules" aria-label="Search schedules" /></label>
+                    <label class="intro-search"><i class="fas fa-magnifying-glass"></i><input type="search" @bind="scheduleSearch" @bind:event="oninput" @bind:after="ResetSchedulePage" placeholder="Search schedules" aria-label="Search schedules" /></label>
                 </div>
                 <article class="panel list-view">
                     <div class="data-table-wrap"><table class="data-table">
                         <thead><tr><th>Teacher</th><th>Semester</th><th>Kind</th><th>Classroom</th><th>Subject</th><th>Date</th><th>Time</th><th>Actions</th></tr></thead>
                         <tbody>
                             @if (FilteredSchedules.Count == 0) { <tr><td colspan="8">@(schedules.Count == 0 ? "No schedules have been stored yet." : "No schedules match this search or filter.")</td></tr> }
-                            @foreach (var schedule in FilteredSchedules)
+                            @foreach (var schedule in PagedSchedules)
                             {
                                 <tr>
                                     <td><strong>@schedule.TeacherDisplayName</strong></td>
@@ -215,81 +234,82 @@
                                     <td>@schedule.SubjectName</td>
                                     <td>@schedule.ScheduleDate.ToString("MMM d, yyyy")</td>
                                     <td>@schedule.StartTime.ToString("HH:mm") – @schedule.EndTime.ToString("HH:mm")</td>
-                                    <td class="table-actions"><button class="danger-outline-button" @onclick='() => OpenDelete("schedule", schedule.Id, $"{schedule.SubjectName} · {schedule.ClassroomName}")'>Delete</button></td>
+                                    <td class="table-actions"><div class="table-action-group"><button type="button" class="table-action" title="Move" aria-label="Move schedule" @onclick='() => OpenMoveSchedule(schedule)'><i class="fas fa-calendar-day"></i></button><button type="button" class="table-action danger" title="Delete" aria-label="Delete schedule" @onclick='() => OpenDelete("schedule", schedule.Id, $"{schedule.SubjectName} · {schedule.ClassroomName}")'><i class="fas fa-trash"></i></button></div></td>
                                 </tr>
                             }
                         </tbody>
                     </table></div>
+                    <ListPager State="schedulePager" TotalCount="FilteredSchedules.Count" />
                 </article>
             }
             else if (active == "temperature")
             {
-                var selectedRoom = classrooms.FirstOrDefault(room => room.Id == temperatureClassroomId);
-                <div class="page-intro"><span>Turn AC on or off remotely for a room’s scanner. Devices poll room status about every 30 seconds and apply the command.</span></div>
-                <article class="panel">
-                    <div class="panel-heading"><div><span class="eyebrow">REMOTE AC</span><h3>Send on/off to the classroom device</h3></div></div>
-                    <div class="form-grid">
-                        <label>Classroom<select @bind="temperatureClassroomId"><option value="0">Select a classroom</option>@foreach (var room in classrooms) { <option value="@room.Id">@room.Name</option> }</select></label>
-                        <label>Target temperature<input type="number" min="16" max="30" @bind="temperatureTarget" /></label>
-                    </div>
-                    @if (selectedRoom is not null)
-                    {
-                        <div class="inline-notice @(AcIsOn(selectedRoom.AcStatus) ? "success" : "danger")" style="margin-top:1rem">
-                            <i class='fas @(AcIsOn(selectedRoom.AcStatus) ? "fa-snowflake" : "fa-power-off")'></i>
-                            <span><strong>@selectedRoom.Name</strong> is currently <strong>@AcStatusLabel(selectedRoom.AcStatus)</strong>@(DeviceCodeForRoom(selectedRoom.Id) is null ? "" : $" · device {DeviceCodeForRoom(selectedRoom.Id)}")</span>
-                        </div>
-                    }
-                    <div class="form-actions">
-                        <button class="primary-button" disabled="@(temperatureClassroomId == 0)" @onclick='() => SaveTemperature("RemoteOn")'><i class="fas fa-power-off"></i>Turn AC on</button>
-                        <button class="danger-outline-button" disabled="@(temperatureClassroomId == 0)" @onclick='() => SaveTemperature("RemoteOff")'><i class="fas fa-ban"></i>Turn AC off</button>
-                        <button class="secondary-button" disabled="@(temperatureClassroomId == 0)" @onclick='() => SaveTemperature("TargetSet")'>Set target</button>
-                        <button class="danger-button" disabled="@(temperatureClassroomId == 0)" @onclick='() => SaveTemperature("EmergencyOverride")'>Emergency override</button>
-                    </div>
-                </article>
+                <div class="page-intro"><span>Toggle AC on each room row. Devices poll room status about every 30 seconds and apply the command.</span></div>
                 <article class="panel">
                     <div class="panel-heading"><div><span class="eyebrow">ROOM STATUS</span><h3>All classrooms</h3></div></div>
                     <div class="data-table-wrap"><table class="data-table">
                         <thead><tr><th>Classroom</th><th>Device</th><th>Target</th><th>AC status</th><th>Actions</th></tr></thead>
                         <tbody>
                             @if (classrooms.Count == 0) { <tr><td colspan="5">Add a classroom before sending AC commands.</td></tr> }
-                            @foreach (var room in classrooms)
+                            @foreach (var room in PagedAcRooms)
                             {
+                                var acOn = AcIsOn(room.AcStatus);
                                 <tr>
                                     <td><strong>@room.Name</strong></td>
                                     <td>@(DeviceCodeForRoom(room.Id) ?? "—")</td>
                                     <td>@room.TargetTemperature°C</td>
                                     <td><span class='status-badge @AcStatusBadge(room.AcStatus)'>@AcStatusLabel(room.AcStatus)</span></td>
                                     <td class="table-actions">
-                                        <button class="secondary-button" @onclick='() => SelectTemperatureRoom(room.Id)'>Select</button>
-                                        <button class="primary-button" @onclick='() => RemoteAc(room.Id, true)'>On</button>
-                                        <button class="danger-outline-button" @onclick='() => RemoteAc(room.Id, false)'>Off</button>
+                                        <div class="table-action-group">
+                                            <button type="button" class='table-action @(acOn ? "danger" : string.Empty)' title="@(acOn ? "Turn AC off" : "Turn AC on")" aria-label="@(acOn ? $"Turn off AC for {room.Name}" : $"Turn on AC for {room.Name}")" @onclick='() => RemoteAc(room.Id, !acOn)'><i class='fas @(acOn ? "fa-toggle-off" : "fa-toggle-on")'></i></button>
+                                        </div>
                                     </td>
                                 </tr>
                             }
                         </tbody>
                     </table></div>
+                    <ListPager State="acRoomPager" TotalCount="classrooms.Count" />
                 </article>
-                <article class="panel"><div class="panel-heading"><div><span class="eyebrow">COMMAND LOG</span><h3>Recent temperature events</h3></div></div><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Classroom</th><th>Event</th><th>Target</th><th>Recorded</th></tr></thead><tbody>@if (temperatureLogs.Count == 0) { <tr><td colspan="4">No temperature commands have been logged.</td></tr> } @foreach (var log in temperatureLogs.Take(20)) { <tr><td>@log.ClassroomName</td><td>@log.EventType</td><td>@(log.TargetTemperature is null ? "—" : $"{log.TargetTemperature}°C")</td><td>@SchoolClock.Format(log.RecordedAt, "MMM d HH:mm")</td></tr> }</tbody></table></div></article>
+                <article class="panel"><div class="panel-heading"><div><span class="eyebrow">COMMAND LOG</span><h3>Recent temperature events</h3></div></div><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Classroom</th><th>Event</th><th>Target</th><th>Recorded</th></tr></thead><tbody>@if (temperatureLogs.Count == 0) { <tr><td colspan="4">No temperature commands have been logged.</td></tr> } @foreach (var log in PagedTemperatureLogs) { <tr><td>@log.ClassroomName</td><td>@log.EventType</td><td>@(log.TargetTemperature is null ? "—" : $"{log.TargetTemperature}°C")</td><td>@SchoolClock.Format(log.RecordedAt, "MMM d HH:mm")</td></tr> }</tbody></table></div><ListPager State="temperatureLogPager" TotalCount="temperatureLogs.Count" /></article>
             }
             else if (active == "attendance")
             {
                 <div class="page-intro"><span>Outcomes are derived from punches vs the schedule window: On time, Late, Absent, or Missing time-out.</span></div>
-                <article class="panel"><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Teacher</th><th>Classroom</th><th>Time in</th><th>Time out</th><th>Verification</th><th>Outcome</th></tr></thead><tbody>@if (attendance.Count == 0) { <tr><td colspan="6">No attendance logs have been recorded.</td></tr> } @foreach (var item in attendance) { <tr><td><strong>@item.TeacherDisplayName</strong></td><td>@item.ClassroomName</td><td>@(item.Outcome == AttendanceOutcomes.Absent ? "—" : SchoolClock.Format(item.TimeIn, "MMM d HH:mm"))</td><td>@(item.Outcome == AttendanceOutcomes.Absent ? "—" : SchoolClock.Format(item.TimeOut, "MMM d HH:mm"))</td><td>@item.VerificationMethod</td><td><span class='status-badge @AttendanceOutcomes.BadgeClass(item.Outcome, item.Status)'>@AttendanceOutcomes.Display(item.Outcome, item.Status)</span></td></tr> }</tbody></table></div></article>
-            }
-            else if (active == "requests")
-            {
-                <div class="page-intro"><span>Approved leave requests can reassign the original schedule to a substitute teacher after conflict validation.</span></div>
-                <div class="request-inbox">@if (requests.Count == 0) { <article class="panel"><p class="form-help">No teacher requests have been submitted.</p></article> } @foreach (var request in requests) { <article class="request-card"><div class="request-card-heading"><span class="request-type-icon"><i class="fas fa-inbox"></i></span><div><span class="eyebrow">@request.RequestType REQUEST</span><h3>@request.TeacherDisplayName</h3><p>@request.RequestDate.ToString("MMM d, yyyy") · Submitted @SchoolClock.Format(request.CreatedAt, "MMM d HH:mm")</p></div><span class='status-badge @(request.Status == "Pending" ? "pending" : request.Status == "Approved" ? "active" : "rejected")'>@request.Status</span></div><p class="request-reason">@request.Reason</p>@if (request.Status == "Pending") { @if (request.RequestType == "Leave" && request.NeedsSubstitute) { <label class="inline-select">Assign substitute<select @bind="substituteSelections[request.Id]"><option value="0">Select a teacher</option>@foreach (var teacher in teachers.Where(teacher => teacher.Id != request.TeacherAccountId)) { <option value="@teacher.Id">@teacher.DisplayName</option> }</select></label> }<div class="request-card-actions"><button class="secondary-button" @onclick='() => ReviewRequest(request, "Rejected")'>Reject</button><button class="primary-button" @onclick='() => ReviewRequest(request, "Approved")'>Approve</button></div> } else if (!string.IsNullOrWhiteSpace(request.AdminResponse)) { <div class="request-resolution">@request.AdminResponse</div> }</article> }</div>
-            }
-            else if (active == "support")
-            {
-                <div class="page-intro"><span>Resolve or dismiss tickets and retain the decision in MariaDB.</span></div>
-                <div class="ticket-grid">@if (tickets.Count == 0) { <article class="panel"><p class="form-help">No support tickets have been submitted.</p></article> } @foreach (var ticket in tickets) { <article class="ticket-card"><div><span class="ticket-id">#@ticket.Id</span><span class='status-badge @(ticket.Status == "Open" ? "pending" : "neutral")'>@ticket.Status</span></div><h3>@ticket.Category</h3><p>@ticket.Details</p><small><i class="fas fa-user"></i>@ticket.TeacherDisplayName · @SchoolClock.Format(ticket.CreatedAt, "MMM d HH:mm")</small>@if (ticket.Status == "Open") { <div class="ticket-actions"><button class="secondary-button" @onclick='() => ReviewTicket(ticket, "Dismissed")'>Dismiss</button><button class="primary-button" @onclick='() => ReviewTicket(ticket, "Resolved")'>Resolve</button></div> } else if (!string.IsNullOrWhiteSpace(ticket.AdminResponse)) { <p class="form-help">@ticket.AdminResponse</p> }</article> }</div>
+                <article class="panel"><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Teacher</th><th>Classroom</th><th>Time in</th><th>Time out</th><th>Verification</th><th>Outcome</th></tr></thead><tbody>@if (attendance.Count == 0) { <tr><td colspan="6">No attendance logs have been recorded.</td></tr> } @foreach (var item in PagedAttendance) { <tr><td><strong>@item.TeacherDisplayName</strong></td><td>@item.ClassroomName</td><td>@(item.Outcome == AttendanceOutcomes.Absent ? "—" : SchoolClock.Format(item.TimeIn, "MMM d HH:mm"))</td><td>@(item.Outcome == AttendanceOutcomes.Absent ? "—" : SchoolClock.Format(item.TimeOut, "MMM d HH:mm"))</td><td>@item.VerificationMethod</td><td><span class='status-badge @AttendanceOutcomes.BadgeClass(item.Outcome, item.Status)'>@AttendanceOutcomes.Display(item.Outcome, item.Status)</span></td></tr> }</tbody></table></div><ListPager State="attendancePager" TotalCount="attendance.Count" /></article>
             }
             else
             {
-                <div class="page-intro"><p>SYSTEM SETTINGS PROCESS</p><h2>Administration & recovery</h2><span>Manage the default administrator or reset all SmartClass data to the first-access state.</span></div>
-                <div class="settings-grid"><article class="panel"><span class="eyebrow">ADMIN CREDENTIALS</span><h3>Account contact</h3><div class="form-stack"><label>Current password<input type="password" @bind="adminCurrentPassword" autocomplete="current-password" /></label><label>Registered admin email<input type="email" @bind="adminEmail" /></label><label>New password<input type="password" @bind="adminNewPassword" placeholder="Leave blank to keep current password" autocomplete="new-password" /></label></div><button class="primary-button" @onclick="SaveAdminSettings">Save settings</button></article><article class="panel"><span class="eyebrow">FRESH START</span><h3>Reset system to first access</h3><p class="form-help">This permanently clears teachers, classrooms, schedules, attendance, requests, tickets, and temperature logs; then it creates the configured default administrator with no email.</p><button class="danger-button" @onclick='() => resetOpen = true'>Reset all system data</button></article></div>
+                <div class="settings-grid">
+                    <article class="panel settings-panel">
+                        <div class="settings-panel-body">
+                            <span class="eyebrow">ADMIN CREDENTIALS</span>
+                            <h3>Account contact</h3>
+                            <div class="form-stack">
+                                <label>Current password<input type="password" @bind="adminCurrentPassword" autocomplete="current-password" /></label>
+                                <label>Registered admin email<input type="email" @bind="adminEmail" /></label>
+                                <label>New password<input type="password" @bind="adminNewPassword" placeholder="Leave blank to keep current password" autocomplete="new-password" /></label>
+                            </div>
+                        </div>
+                        <button class="primary-button" @onclick="SaveAdminSettings">Save settings</button>
+                    </article>
+                    <article class="panel settings-panel">
+                        <div class="settings-panel-body">
+                            <span class="eyebrow">FINGERPRINT DEVICES</span>
+                            <h3>Clear sensor fingerprints</h3>
+                            <p class="form-help">Deletes all enrolled fingerprint templates in MariaDB and queues every active scanner to wipe its sensor flash on the next status poll (~30s). Teachers must re-enroll on the device afterward.</p>
+                            <p class="form-help"><strong>@fingerprintTemplateCount</strong> template(s) currently stored · <strong>@biometricDevices.Count(device => device.IsActive)</strong> active scanner(s)</p>
+                        </div>
+                        <button class="danger-outline-button" @onclick='() => clearFingerprintsOpen = true'>Clear fingerprint device data</button>
+                    </article>
+                    <article class="panel settings-panel">
+                        <div class="settings-panel-body">
+                            <span class="eyebrow">FRESH START</span>
+                            <h3>Reset system to first access</h3>
+                            <p class="form-help">This permanently clears teachers, classrooms, schedules, attendance, and temperature logs; then it creates the configured default administrator with no email.</p>
+                        </div>
+                        <button class="danger-button" @onclick='() => resetOpen = true'>Reset all system data</button>
+                    </article>
+                </div>
             }
         </section>
     </main>
@@ -299,20 +319,37 @@
 {
     <div class="modal-backdrop" @onclick="ClearTeacherForm">
         <section class="dialog-card form-dialog" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
-            <span class="eyebrow">@(editingTeacherId == 0 ? "ADD TEACHER" : "EDIT TEACHER")</span>
-            <h2>@(editingTeacherId == 0 ? "New teacher account" : "Update teacher account")</h2>
-            <div class="form-grid">
-                <label>Teacher name<input @bind="newTeacherName" autocomplete="name" /></label>
-                <label>Employee number<input @bind="newTeacherEmployeeNumber" placeholder="e.g. EMP-1042" /></label>
-                <label>Username<input @bind="newTeacherUsername" autocomplete="username" /></label>
-                <label>School email<input @bind="newTeacherEmail" type="email" autocomplete="email" /></label>
-                <label>Device PIN<input @bind="newTeacherDevicePin" maxlength="6" placeholder="4–6 digits" inputmode="numeric" pattern="[0-9]*" /><small class="form-help">@(editingTeacherId == 0 ? "Optional; auto-assigned if blank." : "Leave blank to keep the current PIN.")</small></label>
-                <label>@(editingTeacherId == 0 ? "Login password" : "New password")<input @bind="newTeacherPassword" type="password" placeholder="@(editingTeacherId == 0 ? string.Empty : "Leave blank to keep current password")" autocomplete="new-password" />@if (editingTeacherId != 0) { <small class="form-help">Leave blank to keep the current password.</small> }</label>
-            </div>
-            <div class="dialog-actions">
-                <button class="secondary-button" @onclick="ClearTeacherForm">Cancel</button>
-                <button class="primary-button" @onclick="SaveTeacher">@(editingTeacherId == 0 ? "Save teacher" : "Update teacher")</button>
-            </div>
+            @if (editingTeacherId == 0 && teacherOtpStep)
+            {
+                <span class="eyebrow">VERIFY MOBILE</span>
+                <h2>Enter registration OTP</h2>
+                <p class="form-help">OTP was sent to <strong>@newTeacherPhone</strong>. @RegistrationOtp.SentHelpMessage</p>
+                <div class="form-grid">
+                    <label>One-time password<input @bind="teacherRegistrationOtp" maxlength="4" inputmode="numeric" pattern="[0-9]*" placeholder="0000" autocomplete="one-time-code" /></label>
+                </div>
+                <div class="dialog-actions">
+                    <button class="secondary-button" @onclick="BackFromTeacherOtp">Back</button>
+                    <button class="primary-button" @onclick="SaveTeacher">Verify &amp; save teacher</button>
+                </div>
+            }
+            else
+            {
+                <span class="eyebrow">@(editingTeacherId == 0 ? "ADD TEACHER" : "EDIT TEACHER")</span>
+                <h2>@(editingTeacherId == 0 ? "New teacher account" : "Update teacher account")</h2>
+                <div class="form-grid">
+                    <label>Teacher name<input @bind="newTeacherName" autocomplete="name" /></label>
+                    <label>Employee number<input @bind="newTeacherEmployeeNumber" placeholder="e.g. EMP-1042" /></label>
+                    <label>Username<input @bind="newTeacherUsername" autocomplete="username" /></label>
+                    <label>Mobile number<input @bind="newTeacherPhone" maxlength="11" inputmode="numeric" pattern="09[0-9]{9}" placeholder="09xxxxxxxxx" autocomplete="tel" /><small class="form-help">Required. Format: 09xxxxxxxxx</small></label>
+                    <label>School email<input @bind="newTeacherEmail" type="email" autocomplete="email" /><small class="form-help">Optional</small></label>
+                    <label>Device PIN<input @bind="newTeacherDevicePin" maxlength="6" placeholder="4–6 digits" inputmode="numeric" pattern="[0-9]*" /><small class="form-help">@(editingTeacherId == 0 ? "Optional; auto-assigned if blank." : "Leave blank to keep the current PIN.")</small></label>
+                    <label>@(editingTeacherId == 0 ? "Login password" : "New password")<input @bind="newTeacherPassword" type="password" placeholder="@(editingTeacherId == 0 ? string.Empty : "Leave blank to keep current password")" autocomplete="new-password" />@if (editingTeacherId != 0) { <small class="form-help">Leave blank to keep the current password.</small> }</label>
+                </div>
+                <div class="dialog-actions">
+                    <button class="secondary-button" @onclick="ClearTeacherForm">Cancel</button>
+                    <button class="primary-button" @onclick="SaveTeacher">@(editingTeacherId == 0 ? "Continue" : "Update teacher")</button>
+                </div>
+            }
         </section>
     </div>
 }
@@ -362,18 +399,56 @@
             <span class="eyebrow">NEW SCHEDULE</span>
             <h2>Add schedule</h2>
             <div class="form-grid">
-                <label>Semester<select @bind="scheduleSemesterId"><option value="0">Select a semester</option>@foreach (var semester in semesters.Where(item => item.IsActive)) { <option value="@semester.Id">@semester.Name</option> }</select></label>
+                <label>Semester<select @bind="scheduleSemesterId" @bind:after="RefreshSchedulePreview"><option value="0">Select a semester</option>@foreach (var semester in semesters.Where(item => item.IsActive)) { <option value="@semester.Id">@semester.Name</option> }</select></label>
                 <label>Kind<select @bind="scheduleKind"><option value="Regular">Regular</option><option value="Makeup">Makeup</option></select></label>
                 <label>Teacher<select @bind="scheduleTeacherId"><option value="0">Select a teacher</option>@foreach (var teacher in TeachersForSelectedSemester) { <option value="@teacher.Id">@teacher.DisplayName</option> }</select></label>
                 <label>Classroom<select @bind="scheduleClassroomId"><option value="0">Select a classroom</option>@foreach (var room in classrooms) { <option value="@room.Id">@room.Name</option> }</select></label>
                 <label>Subject<input @bind="scheduleSubject" placeholder="Physics" /></label>
-                <label>Date<input type="date" @bind="scheduleDate" /></label>
+                <label>Start date<input type="date" @bind="scheduleDate" @bind:after="RefreshSchedulePreview" /></label>
                 <label>Start time<input type="time" @bind="scheduleStartTime" /></label>
                 <label>End time<input type="time" @bind="scheduleEndTime" /></label>
+                <label>Repeat<select @bind="scheduleRecurrence" @bind:after="OnScheduleRecurrenceChanged">@foreach (var pattern in ScheduleRecurrence.Patterns) { <option value="@pattern.Value">@pattern.Label</option> }</select></label>
+                <label>Until<input value="@(SelectedScheduleSemester is null ? "Select a semester" : SelectedScheduleSemester.EndDate.ToString("MMM d, yyyy") + " (semester end)")" readonly /></label>
             </div>
+            @if (scheduleRecurrence == ScheduleRecurrence.Custom)
+            {
+                <div class="weekday-picker" role="group" aria-label="Weekdays">
+                    @foreach (var day in ScheduleWeekdayChoices)
+                    {
+                        <label class="weekday-chip"><input type="checkbox" checked="@scheduleCustomDays.Contains(day.Day)" @onchange="e => ToggleScheduleWeekday(day.Day, e.Value is bool value && value)" /><span>@day.Label</span></label>
+                    }
+                </div>
+            }
+            <p class="form-help schedule-preview">@SchedulePreviewText</p>
+            @if (scheduleKind == ScheduleKinds.Makeup && scheduleRecurrence != ScheduleRecurrence.None)
+            {
+                <p class="form-help schedule-preview-warn">Makeup classes are usually one-off. Repeating will create a makeup session on every matching day.</p>
+            }
             <div class="dialog-actions">
                 <button class="secondary-button" @onclick="CloseScheduleModal">Cancel</button>
-                <button class="primary-button" disabled="@(teachers.Count == 0 || classrooms.Count == 0 || scheduleSemesterId == 0)" @onclick="SaveSchedule">Save schedule</button>
+                <button class="primary-button" disabled="@(!teachers.Any(teacher => teacher.IsActive) || classrooms.Count == 0 || scheduleSemesterId == 0 || SchedulePreviewCount == 0)" @onclick="SaveSchedule">@(SchedulePreviewCount <= 1 ? "Save schedule" : $"Save {SchedulePreviewCount} schedules")</button>
+            </div>
+        </section>
+    </div>
+}
+
+@if (moveScheduleModalOpen && moveScheduleTarget is not null)
+{
+    <div class="modal-backdrop" @onclick="CloseMoveScheduleModal">
+        <section class="dialog-card form-dialog" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+            <span class="eyebrow">MOVE SCHEDULE</span>
+            <h2>Reschedule class</h2>
+            <p class="form-help">@moveScheduleTarget.SubjectName · @moveScheduleTarget.TeacherDisplayName · @moveScheduleTarget.ClassroomName</p>
+            <div class="form-grid">
+                <label>New date<input type="date" @bind="moveScheduleDate" /></label>
+                <label>Semester window<input value="@(MoveScheduleSemester is null ? "—" : $"{MoveScheduleSemester.StartDate:MMM d, yyyy} – {MoveScheduleSemester.EndDate:MMM d, yyyy}")" readonly /></label>
+                <label>Start time<input type="time" @bind="moveScheduleStartTime" /></label>
+                <label>End time<input type="time" @bind="moveScheduleEndTime" /></label>
+            </div>
+            <p class="form-help schedule-preview">Teacher, classroom, subject, and kind stay the same. Overlaps with other bookings are rejected.</p>
+            <div class="dialog-actions">
+                <button class="secondary-button" @onclick="CloseMoveScheduleModal">Cancel</button>
+                <button class="primary-button" @onclick="SaveMoveSchedule">Save new time</button>
             </div>
         </section>
     </div>
@@ -384,19 +459,42 @@
     <div class="modal-backdrop"><section class="dialog-card" role="dialog" aria-modal="true"><span class="dialog-icon danger"><i class="fas fa-trash"></i></span><h2>Remove @deleteTargetType?</h2><p>@DeleteDescription Type <strong>DELETE</strong> to confirm removal of <strong>@deleteTargetName</strong>.</p><input @bind="deleteConfirmation" placeholder="Type DELETE" /><div class="dialog-actions"><button class="secondary-button" @onclick="CloseDelete">Cancel</button><button class="danger-button" @onclick="DeleteTarget">Remove</button></div></section></div>
 }
 
+@if (clearFingerprintsOpen)
+{
+    <div class="modal-backdrop"><section class="dialog-card" role="dialog" aria-modal="true"><span class="dialog-icon danger"><i class="fas fa-fingerprint"></i></span><h2>Clear fingerprint devices?</h2><p>This deletes all fingerprint template records and tells every active scanner to wipe its sensor. Type <strong>CLEAR</strong> to confirm.</p><input @bind="clearFingerprintsConfirmation" placeholder="Type CLEAR" /><div class="dialog-actions"><button class="secondary-button" @onclick='() => clearFingerprintsOpen = false'>Cancel</button><button class="danger-button" @onclick="ClearFingerprintDevices">Clear fingerprints</button></div></section></div>
+}
+
 @if (resetOpen)
 {
     <div class="modal-backdrop"><section class="dialog-card" role="dialog" aria-modal="true"><span class="dialog-icon danger"><i class="fas fa-triangle-exclamation"></i></span><h2>Reset SmartClass AC?</h2><p>This cannot be undone. Type <strong>RESET</strong> to delete all stored data and return to First Access.</p><label>Current administrator password<input type="password" @bind="adminCurrentPassword" autocomplete="current-password" /></label><input @bind="resetConfirmation" placeholder="Type RESET" /><div class="dialog-actions"><button class="secondary-button" @onclick='() => resetOpen = false'>Cancel</button><button class="danger-button" @onclick="ResetSystem">Reset system</button></div></section></div>
 }
 
 @code {
-    private string active = "overview", message = string.Empty, newTeacherName = string.Empty, newTeacherEmployeeNumber = string.Empty, newTeacherUsername = string.Empty, newTeacherEmail = string.Empty, newTeacherPassword = string.Empty, newTeacherDevicePin = string.Empty, classroomName = string.Empty, scheduleSubject = string.Empty, scheduleKind = ScheduleKinds.Regular, semesterName = string.Empty, adminEmail = string.Empty, adminCurrentPassword = string.Empty, adminNewPassword = string.Empty, resetConfirmation = string.Empty, deleteConfirmation = string.Empty, teacherFilter = "all", semesterFilter = "all", classroomFilter = "all", scheduleFilter = "all", teacherSearch = string.Empty, semesterSearch = string.Empty, classroomSearch = string.Empty, scheduleSearch = string.Empty;
-    private bool sidebarOpen, isLoading, resetOpen, teacherModalOpen, semesterModalOpen, classroomModalOpen, scheduleModalOpen;
-    private long editingTeacherId, editingClassroomId, scheduleTeacherId, scheduleClassroomId, scheduleSemesterId, enrollSemesterId, enrollTeacherId, temperatureClassroomId, deleteTargetId;
+    private string active = "overview", message = string.Empty, newTeacherName = string.Empty, newTeacherEmployeeNumber = string.Empty, newTeacherUsername = string.Empty, newTeacherEmail = string.Empty, newTeacherPhone = string.Empty, newTeacherPassword = string.Empty, newTeacherDevicePin = string.Empty, teacherRegistrationOtp = string.Empty, classroomName = string.Empty, scheduleSubject = string.Empty, scheduleKind = ScheduleKinds.Regular, scheduleRecurrence = ScheduleRecurrence.None, semesterName = string.Empty, adminEmail = string.Empty, adminCurrentPassword = string.Empty, adminNewPassword = string.Empty, resetConfirmation = string.Empty, clearFingerprintsConfirmation = string.Empty, deleteConfirmation = string.Empty, teacherFilter = "active", semesterFilter = "all", classroomFilter = "all", scheduleFilter = "all", teacherSearch = string.Empty, semesterSearch = string.Empty, classroomSearch = string.Empty, scheduleSearch = string.Empty;
+    private bool sidebarOpen, isLoading, resetOpen, clearFingerprintsOpen, teacherModalOpen, teacherOtpStep, classroomModalOpen, scheduleModalOpen, moveScheduleModalOpen, semesterModalOpen;
+    private long editingTeacherId, editingClassroomId, scheduleTeacherId, scheduleClassroomId, scheduleSemesterId, enrollSemesterId, enrollTeacherId, deleteTargetId;
     private string? deleteTargetType, deleteTargetName;
-    private int classroomCapacity = 40, classroomTargetTemperature = 22, temperatureTarget = 22;
-    private DateTime scheduleDate = DateTime.Today, semesterStartDate = DateTime.Today, semesterEndDate = DateTime.Today.AddMonths(4);
-    private TimeOnly scheduleStartTime = new(8, 0), scheduleEndTime = new(9, 30);
+    private int classroomCapacity = 40, classroomTargetTemperature = 22, fingerprintTemplateCount;
+    private DateTime scheduleDate = DateTime.Today, moveScheduleDate = DateTime.Today, scheduleFilterDate = DateTime.Today, semesterStartDate = DateTime.Today, semesterEndDate = DateTime.Today.AddMonths(4);
+    private TimeOnly scheduleStartTime = new(8, 0), scheduleEndTime = new(9, 30), moveScheduleStartTime = new(8, 0), moveScheduleEndTime = new(9, 30);
+    private ScheduleDirectoryEntry? moveScheduleTarget;
+    private readonly HashSet<DayOfWeek> scheduleCustomDays = new();
+    private static readonly (DayOfWeek Day, string Label)[] ScheduleWeekdayChoices =
+    {
+        (DayOfWeek.Monday, "Mon"),
+        (DayOfWeek.Tuesday, "Tue"),
+        (DayOfWeek.Wednesday, "Wed"),
+        (DayOfWeek.Thursday, "Thu"),
+        (DayOfWeek.Friday, "Fri")
+    };
+    private readonly ListPageState teacherPager = new();
+    private readonly ListPageState semesterPager = new();
+    private readonly ListPageState enrollmentPager = new();
+    private readonly ListPageState classroomPager = new();
+    private readonly ListPageState schedulePager = new();
+    private readonly ListPageState acRoomPager = new();
+    private readonly ListPageState temperatureLogPager = new();
+    private readonly ListPageState attendancePager = new();
     private AuthenticatedUser? currentUser;
     private List<TeacherDirectoryEntry> teachers = new();
     private List<ClassroomEntry> classrooms = new();
@@ -405,28 +503,72 @@
     private List<TeacherSemesterEntry> teacherSemesters = new();
     private List<BiometricDeviceEntry> biometricDevices = new();
     private List<AttendanceLogEntry> attendance = new();
-    private List<TeacherRequestEntry> requests = new();
-    private List<SupportTicketEntry> tickets = new();
     private List<TemperatureLogEntry> temperatureLogs = new();
-    private readonly Dictionary<long, long> substituteSelections = new();
     private CancellationTokenSource? liveRefreshCts;
 
     private DateOnly Today => SchoolClock.Today(SchoolTime.Value);
     private string AdminName => currentUser?.DisplayName ?? "Administrator";
     private string AdminInitials => Initials(AdminName);
     private static string Initials(string name) => string.Concat((name ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(word => char.ToUpperInvariant(word[0])));
-    private string Title => active switch { "teachers" => "Teacher management", "semesters" => "Semester management", "classrooms" => "Classroom management", "schedules" => "Schedule management", "temperature" => "AC control", "attendance" => "Attendance logs", "requests" => "Request inbox", "support" => "Support tickets", "settings" => "System settings", _ => "Dashboard overview" };
+    private string Title => active switch { "teachers" => "Teacher management", "semesters" => "Semester management", "classrooms" => "Classroom management", "schedules" => "Schedule management", "temperature" => "AC control", "attendance" => "Attendance logs", "settings" => "System settings", _ => "Dashboard overview" };
     private string NavClass(string section) => $"sc-nav-item {(active == section ? "active" : string.Empty)}";
     private IEnumerable<TeacherDirectoryEntry> TeachersForSelectedSemester =>
-        scheduleSemesterId <= 0
+        (scheduleSemesterId <= 0
             ? teachers
-            : teachers.Where(teacher => teacherSemesters.Any(item => item.SemesterId == scheduleSemesterId && item.TeacherAccountId == teacher.Id));
+            : teachers.Where(teacher => teacherSemesters.Any(item => item.SemesterId == scheduleSemesterId && item.TeacherAccountId == teacher.Id)))
+        .Where(teacher => teacher.IsActive);
+    private SemesterEntry? SelectedScheduleSemester => semesters.FirstOrDefault(item => item.Id == scheduleSemesterId);
+    private SemesterEntry? MoveScheduleSemester =>
+        moveScheduleTarget?.SemesterId is long semesterId
+            ? semesters.FirstOrDefault(item => item.Id == semesterId)
+            : null;
+    private IReadOnlyList<DateOnly> SchedulePreviewDates
+    {
+        get
+        {
+            var semester = SelectedScheduleSemester;
+            if (semester is null)
+            {
+                return Array.Empty<DateOnly>();
+            }
+
+            var start = DateOnly.FromDateTime(scheduleDate);
+            return ScheduleRecurrence.ExpandDates(start, semester.EndDate, scheduleRecurrence, scheduleCustomDays.ToList());
+        }
+    }
+    private int SchedulePreviewCount => SchedulePreviewDates.Count;
+    private string SchedulePreviewText
+    {
+        get
+        {
+            var semester = SelectedScheduleSemester;
+            if (semester is null)
+            {
+                return "Select a semester to preview repeating dates through semester end.";
+            }
+
+            var dates = SchedulePreviewDates;
+            if (dates.Count == 0)
+            {
+                return scheduleRecurrence == ScheduleRecurrence.Custom
+                    ? "Select at least one weekday to generate schedules through semester end."
+                    : "No dates fall between the start date and the semester end.";
+            }
+
+            var patternLabel = ScheduleRecurrence.Describe(scheduleRecurrence, DateOnly.FromDateTime(scheduleDate), scheduleCustomDays.ToList());
+            return dates.Count == 1
+                ? $"Creates 1 class on {dates[0]:MMM d, yyyy}."
+                : $"Creates {dates.Count} classes · {patternLabel} · {dates[0]:MMM d} – {dates[^1]:MMM d, yyyy} (through semester end {semester.EndDate:MMM d, yyyy}).";
+        }
+    }
     private IReadOnlyList<TeacherDirectoryEntry> FilteredTeachers
     {
         get
         {
             IEnumerable<TeacherDirectoryEntry> query = teacherFilter switch
             {
+                "active" => teachers.Where(teacher => teacher.IsActive),
+                "inactive" => teachers.Where(teacher => !teacher.IsActive),
                 "prints" => teachers.Where(teacher => teacher.FingerprintTemplateCount > 0),
                 "no-prints" => teachers.Where(teacher => teacher.FingerprintTemplateCount == 0),
                 "scheduled" => teachers.Where(teacher => schedules.Any(schedule => schedule.TeacherAccountId == teacher.Id && schedule.ScheduleDate == Today)),
@@ -440,13 +582,16 @@
                     ContainsIgnoreCase(teacher.DisplayName, term) ||
                     ContainsIgnoreCase(teacher.Username, term) ||
                     ContainsIgnoreCase(teacher.Email, term) ||
+                    ContainsIgnoreCase(teacher.Phone, term) ||
                     ContainsIgnoreCase(teacher.EmployeeNumber, term) ||
+                    ContainsIgnoreCase(teacher.IsActive ? "Active" : "Inactive", term) ||
                     ContainsIgnoreCase(ScheduleTodayFor(teacher.Id), term));
             }
 
             return query.ToList();
         }
     }
+    private IReadOnlyList<TeacherDirectoryEntry> PagedTeachers => teacherPager.Slice(FilteredTeachers);
     private IReadOnlyList<SemesterEntry> FilteredSemesters
     {
         get
@@ -470,6 +615,7 @@
             return query.ToList();
         }
     }
+    private IReadOnlyList<SemesterEntry> PagedSemesters => semesterPager.Slice(FilteredSemesters);
     private IReadOnlyList<ClassroomEntry> FilteredClassrooms
     {
         get
@@ -496,6 +642,7 @@
             return query.ToList();
         }
     }
+    private IReadOnlyList<ClassroomEntry> PagedClassrooms => classroomPager.Slice(FilteredClassrooms);
     private IReadOnlyList<ScheduleDirectoryEntry> FilteredSchedules
     {
         get
@@ -503,6 +650,7 @@
             IEnumerable<ScheduleDirectoryEntry> query = scheduleFilter switch
             {
                 "today" => schedules.Where(schedule => schedule.ScheduleDate == Today),
+                "date" => schedules.Where(schedule => schedule.ScheduleDate == DateOnly.FromDateTime(scheduleFilterDate)),
                 "upcoming" => schedules.Where(schedule => schedule.ScheduleDate > Today),
                 "past" => schedules.Where(schedule => schedule.ScheduleDate < Today),
                 "regular" => schedules.Where(schedule => schedule.ScheduleKind == ScheduleKinds.Regular),
@@ -525,6 +673,10 @@
             return query.ToList();
         }
     }
+    private IReadOnlyList<ScheduleDirectoryEntry> PagedSchedules => schedulePager.Slice(FilteredSchedules);
+    private IReadOnlyList<ClassroomEntry> PagedAcRooms => acRoomPager.Slice(classrooms);
+    private IReadOnlyList<TemperatureLogEntry> PagedTemperatureLogs => temperatureLogPager.Slice(temperatureLogs);
+    private IReadOnlyList<AttendanceLogEntry> PagedAttendance => attendancePager.Slice(attendance);
     private static bool ContainsIgnoreCase(string? value, string term) =>
         !string.IsNullOrWhiteSpace(value) && value.Contains(term, StringComparison.OrdinalIgnoreCase);
     private string? DeviceCodeForRoom(long classroomId) =>
@@ -570,10 +722,9 @@
             var teacherSemestersTask = AuthService.GetTeacherSemestersAsync();
             var devicesTask = AuthService.GetBiometricDevicesAsync();
             var attendanceTask = AuthService.GetAttendanceLogsAsync();
-            var requestsTask = AuthService.GetTeacherRequestsAsync();
-            var ticketsTask = AuthService.GetSupportTicketsAsync();
             var temperatureLogsTask = AuthService.GetTemperatureLogsAsync();
-            await Task.WhenAll(teachersTask, classroomsTask, schedulesTask, semestersTask, teacherSemestersTask, devicesTask, attendanceTask, requestsTask, ticketsTask, temperatureLogsTask);
+            var fingerprintCountTask = AuthService.CountFingerprintTemplatesAsync();
+            await Task.WhenAll(teachersTask, classroomsTask, schedulesTask, semestersTask, teacherSemestersTask, devicesTask, attendanceTask, temperatureLogsTask, fingerprintCountTask);
             teachers = (await teachersTask).ToList();
             classrooms = (await classroomsTask).ToList();
             schedules = (await schedulesTask).ToList();
@@ -581,15 +732,12 @@
             teacherSemesters = (await teacherSemestersTask).ToList();
             biometricDevices = (await devicesTask).ToList();
             attendance = (await attendanceTask).ToList();
-            requests = (await requestsTask).ToList();
-            tickets = (await ticketsTask).ToList();
             temperatureLogs = (await temperatureLogsTask).ToList();
+            fingerprintTemplateCount = await fingerprintCountTask;
             if (scheduleSemesterId == 0)
             {
                 scheduleSemesterId = semesters.FirstOrDefault(item => item.IsActive)?.Id ?? 0;
             }
-            substituteSelections.Clear();
-            foreach (var request in requests) substituteSelections[request.Id] = request.SubstituteTeacherAccountId ?? 0;
         }
         catch { Toast("Records could not be loaded."); }
         finally { isLoading = false; }
@@ -656,7 +804,10 @@
     private void ToggleSidebar() => sidebarOpen = !sidebarOpen;
     private void Toast(string value) => message = value;
     private async Task Logout() { await AuthService.LogoutAsync(); await AuthStateProvider.NotifyUserLogoutAsync(); Navigation.NavigateTo("/auth/logout", true); }
-    private string ScheduleTodayFor(long teacherId) => string.Join(", ", schedules.Where(schedule => schedule.TeacherAccountId == teacherId && schedule.ScheduleDate == Today).Select(schedule => $"{schedule.StartTime:HH\\:mm} {schedule.ClassroomName}").DefaultIfEmpty("No schedule"));
+    private string ScheduleTodayFor(long teacherId) =>
+        schedules.Any(schedule => schedule.TeacherAccountId == teacherId && schedule.ScheduleDate == Today)
+            ? "With Schedule"
+            : "No schedule";
 
     private void OpenAddTeacher()
     {
@@ -667,13 +818,39 @@
     private async Task SaveTeacher()
     {
         var wasCreate = editingTeacherId == 0;
+        if (wasCreate && !teacherOtpStep)
+        {
+            if (!MobilePhones.IsValid(newTeacherPhone))
+            {
+                Toast(MobilePhones.RequirementMessage);
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(newTeacherEmail) && !new System.ComponentModel.DataAnnotations.EmailAddressAttribute().IsValid(newTeacherEmail.Trim()))
+            {
+                Toast("Enter a valid school email address, or leave it blank.");
+                return;
+            }
+
+            teacherOtpStep = true;
+            teacherRegistrationOtp = string.Empty;
+            Toast(RegistrationOtp.SentHelpMessage);
+            return;
+        }
+
         var result = wasCreate
-            ? await AuthService.CreateTeacherAsync(new CreateTeacherRequest(newTeacherName, newTeacherUsername, newTeacherEmployeeNumber, newTeacherEmail, newTeacherPassword, string.IsNullOrWhiteSpace(newTeacherDevicePin) ? null : newTeacherDevicePin))
-            : await AuthService.UpdateAdminTeacherAsync(new UpdateAdminTeacherRequest(editingTeacherId, newTeacherName, newTeacherUsername, newTeacherEmployeeNumber, newTeacherEmail, string.IsNullOrWhiteSpace(newTeacherDevicePin) ? null : newTeacherDevicePin, string.IsNullOrWhiteSpace(newTeacherPassword) ? null : newTeacherPassword));
+            ? await AuthService.CreateTeacherAsync(new CreateTeacherRequest(newTeacherName, newTeacherUsername, newTeacherEmployeeNumber, string.IsNullOrWhiteSpace(newTeacherEmail) ? null : newTeacherEmail, newTeacherPhone, newTeacherPassword, string.IsNullOrWhiteSpace(newTeacherDevicePin) ? null : newTeacherDevicePin, teacherRegistrationOtp))
+            : await AuthService.UpdateAdminTeacherAsync(new UpdateAdminTeacherRequest(editingTeacherId, newTeacherName, newTeacherUsername, newTeacherEmployeeNumber, string.IsNullOrWhiteSpace(newTeacherEmail) ? null : newTeacherEmail, newTeacherPhone, string.IsNullOrWhiteSpace(newTeacherDevicePin) ? null : newTeacherDevicePin, string.IsNullOrWhiteSpace(newTeacherPassword) ? null : newTeacherPassword));
         if (!result.Succeeded) { Toast(result.Error ?? "Teacher could not be saved."); return; }
         ClearTeacherForm();
         await ReloadAsync();
         Toast(wasCreate ? "Teacher account was stored. Enroll fingerprints from the scanner device API." : "Teacher account was updated.");
+    }
+
+    private void BackFromTeacherOtp()
+    {
+        teacherOtpStep = false;
+        teacherRegistrationOtp = string.Empty;
     }
 
     private async Task EditTeacher(long accountId)
@@ -684,9 +861,12 @@
         newTeacherName = profile.DisplayName;
         newTeacherUsername = profile.Username;
         newTeacherEmployeeNumber = profile.EmployeeNumber ?? string.Empty;
-        newTeacherEmail = profile.Email;
+        newTeacherEmail = profile.Email ?? string.Empty;
+        newTeacherPhone = profile.Phone ?? string.Empty;
         newTeacherDevicePin = profile.DevicePin ?? string.Empty;
         newTeacherPassword = string.Empty;
+        teacherOtpStep = false;
+        teacherRegistrationOtp = string.Empty;
         active = "teachers";
         teacherModalOpen = true;
     }
@@ -694,7 +874,8 @@
     private void ClearTeacherForm()
     {
         editingTeacherId = 0;
-        newTeacherName = newTeacherEmployeeNumber = newTeacherUsername = newTeacherEmail = newTeacherPassword = newTeacherDevicePin = string.Empty;
+        newTeacherName = newTeacherEmployeeNumber = newTeacherUsername = newTeacherEmail = newTeacherPhone = newTeacherPassword = newTeacherDevicePin = teacherRegistrationOtp = string.Empty;
+        teacherOtpStep = false;
         teacherModalOpen = false;
     }
 
@@ -752,6 +933,8 @@
         scheduleTeacherId = scheduleClassroomId = 0;
         scheduleSubject = string.Empty;
         scheduleKind = ScheduleKinds.Regular;
+        scheduleRecurrence = ScheduleRecurrence.None;
+        scheduleCustomDays.Clear();
         scheduleDate = DateTime.Today;
         scheduleStartTime = new(8, 0);
         scheduleEndTime = new(9, 30);
@@ -768,7 +951,35 @@
         scheduleTeacherId = scheduleClassroomId = 0;
         scheduleSubject = string.Empty;
         scheduleKind = ScheduleKinds.Regular;
+        scheduleRecurrence = ScheduleRecurrence.None;
+        scheduleCustomDays.Clear();
         scheduleModalOpen = false;
+    }
+
+    private void RefreshSchedulePreview() => StateHasChanged();
+
+    private void OnScheduleRecurrenceChanged()
+    {
+        if (scheduleRecurrence != ScheduleRecurrence.Custom)
+        {
+            scheduleCustomDays.Clear();
+        }
+
+        StateHasChanged();
+    }
+
+    private void ToggleScheduleWeekday(DayOfWeek day, bool selected)
+    {
+        if (selected)
+        {
+            scheduleCustomDays.Add(day);
+        }
+        else
+        {
+            scheduleCustomDays.Remove(day);
+        }
+
+        StateHasChanged();
     }
 
     private void OpenDelete(string type, long id, string name)
@@ -806,11 +1017,54 @@
 
     private async Task SaveSchedule()
     {
-        var result = await AuthService.CreateScheduleAsync(new CreateScheduleRequest(scheduleTeacherId, scheduleClassroomId, scheduleSemesterId, scheduleKind, scheduleSubject, DateOnly.FromDateTime(scheduleDate), scheduleStartTime, scheduleEndTime));
+        var result = await AuthService.CreateSchedulesAsync(new CreateScheduleRequest(
+            scheduleTeacherId,
+            scheduleClassroomId,
+            scheduleSemesterId,
+            scheduleKind,
+            scheduleSubject,
+            DateOnly.FromDateTime(scheduleDate),
+            scheduleStartTime,
+            scheduleEndTime,
+            scheduleRecurrence,
+            scheduleRecurrence == ScheduleRecurrence.Custom ? scheduleCustomDays.ToList() : null));
         if (!result.Succeeded) { Toast(result.Error ?? "Schedule could not be saved."); return; }
         CloseScheduleModal();
         await ReloadAsync();
-        Toast("Schedule was stored with teacher and classroom conflict protection.");
+        Toast(result.Summary);
+    }
+
+    private void OpenMoveSchedule(ScheduleDirectoryEntry schedule)
+    {
+        moveScheduleTarget = schedule;
+        moveScheduleDate = schedule.ScheduleDate.ToDateTime(TimeOnly.MinValue);
+        moveScheduleStartTime = schedule.StartTime;
+        moveScheduleEndTime = schedule.EndTime;
+        moveScheduleModalOpen = true;
+    }
+
+    private void CloseMoveScheduleModal()
+    {
+        moveScheduleModalOpen = false;
+        moveScheduleTarget = null;
+    }
+
+    private async Task SaveMoveSchedule()
+    {
+        if (moveScheduleTarget is null)
+        {
+            return;
+        }
+
+        var result = await AuthService.MoveScheduleAsync(new MoveScheduleRequest(
+            moveScheduleTarget.Id,
+            DateOnly.FromDateTime(moveScheduleDate),
+            moveScheduleStartTime,
+            moveScheduleEndTime));
+        if (!result.Succeeded) { Toast(result.Error ?? "Schedule could not be moved."); return; }
+        CloseMoveScheduleModal();
+        await ReloadAsync();
+        Toast("Schedule moved to the new date and time.");
     }
 
     private async Task SaveSemester()
@@ -826,6 +1080,30 @@
     {
         enrollSemesterId = semesterId;
         enrollTeacherId = 0;
+        enrollmentPager.Reset();
+    }
+
+    private void ResetTeacherPage() => teacherPager.Reset();
+    private void ResetSemesterPage() => semesterPager.Reset();
+    private void ResetClassroomPage() => classroomPager.Reset();
+    private void ResetSchedulePage() => schedulePager.Reset();
+
+    private void OnScheduleFilterChanged()
+    {
+        if (scheduleFilter == "date")
+        {
+            scheduleFilterDate = DateTime.Today;
+        }
+
+        schedulePager.Reset();
+    }
+
+    private async Task ToggleTeacherActive(TeacherDirectoryEntry teacher)
+    {
+        var result = await AuthService.SetTeacherActiveAsync(teacher.Id, !teacher.IsActive);
+        if (!result.Succeeded) { Toast(result.Error ?? "Teacher status could not be updated."); return; }
+        await ReloadAsync();
+        Toast(teacher.IsActive ? "Teacher deactivated." : "Teacher activated.");
     }
 
     private async Task ToggleSemester(SemesterEntry semester)
@@ -853,52 +1131,22 @@
         Toast("Teacher unenrolled.");
     }
 
-    private void SelectTemperatureRoom(long classroomId)
-    {
-        temperatureClassroomId = classroomId;
-        var room = classrooms.FirstOrDefault(item => item.Id == classroomId);
-        if (room is not null)
-        {
-            temperatureTarget = room.TargetTemperature;
-        }
-    }
-
     private async Task RemoteAc(long classroomId, bool turnOn)
     {
-        SelectTemperatureRoom(classroomId);
-        await SaveTemperature(turnOn ? "RemoteOn" : "RemoteOff");
-    }
+        var room = classrooms.FirstOrDefault(item => item.Id == classroomId);
+        if (room is null)
+        {
+            Toast("Classroom was not found.");
+            return;
+        }
 
-    private async Task SaveTemperature(string eventType)
-    {
-        var result = await AuthService.SetTemperatureAsync(new SetTemperatureRequest(temperatureClassroomId, temperatureTarget, eventType));
+        var eventType = turnOn ? "RemoteOn" : "RemoteOff";
+        var result = await AuthService.SetTemperatureAsync(new SetTemperatureRequest(classroomId, room.TargetTemperature, eventType));
         if (!result.Succeeded) { Toast(result.Error ?? "Temperature command could not be saved."); return; }
         await ReloadAsync();
-        Toast(eventType switch
-        {
-            "RemoteOn" => "Remote AC on queued — the room scanner applies it within about 30 seconds.",
-            "RemoteOff" => "Remote AC off queued — the room scanner applies it within about 30 seconds.",
-            "TargetSet" => "Target temperature saved and AC set to Cooling.",
-            "EmergencyOverride" => "Emergency override logged — AC stays on until turned off.",
-            _ => $"{eventType} command was logged for the classroom."
-        });
-    }
-
-    private async Task ReviewRequest(TeacherRequestEntry request, string status)
-    {
-        var substitute = substituteSelections.TryGetValue(request.Id, out var id) && id > 0 ? id : (long?)null;
-        var result = await AuthService.ReviewTeacherRequestAsync(new ReviewTeacherRequest(request.Id, status, substitute, status == "Approved" ? "Approved by administrator." : "Rejected by administrator."));
-        if (!result.Succeeded) { Toast(result.Error ?? "Request could not be reviewed."); return; }
-        await ReloadAsync();
-        Toast($"Request {status.ToLowerInvariant()}.");
-    }
-
-    private async Task ReviewTicket(SupportTicketEntry ticket, string status)
-    {
-        var result = await AuthService.ReviewSupportTicketAsync(new ReviewSupportTicket(ticket.Id, status, $"Ticket {status.ToLowerInvariant()} by administrator."));
-        if (!result.Succeeded) { Toast(result.Error ?? "Ticket could not be reviewed."); return; }
-        await ReloadAsync();
-        Toast($"Ticket {status.ToLowerInvariant()}.");
+        Toast(turnOn
+            ? "Remote AC on queued — the room scanner applies it within about 30 seconds."
+            : "Remote AC off queued — the room scanner applies it within about 30 seconds.");
     }
 
     private async Task SaveAdminSettings()
@@ -908,6 +1156,17 @@
         adminCurrentPassword = adminNewPassword = string.Empty;
         currentUser = await AuthService.GetCurrentUserAsync();
         Toast("Administrator credentials were saved.");
+    }
+
+    private async Task ClearFingerprintDevices()
+    {
+        if (!string.Equals(clearFingerprintsConfirmation, "CLEAR", StringComparison.Ordinal)) { Toast("Type CLEAR to confirm fingerprint wipe."); return; }
+        var result = await AuthService.RequestClearAllFingerprintDevicesAsync();
+        if (!result.Succeeded) { Toast(result.Error ?? "Fingerprint data could not be cleared."); return; }
+        clearFingerprintsOpen = false;
+        clearFingerprintsConfirmation = string.Empty;
+        await ReloadAsync();
+        Toast("Fingerprint templates cleared. Active scanners will wipe their sensors on the next status poll.");
     }
 
     private async Task ResetSystem()

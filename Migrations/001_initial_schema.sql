@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS user_accounts (
     CONSTRAINT ck_user_accounts_role CHECK (role IN ('Admin', 'Teacher')),
     UNIQUE KEY uq_user_accounts_username (username),
     UNIQUE KEY uq_user_accounts_email (email),
+    UNIQUE KEY uq_user_accounts_phone (phone),
     UNIQUE KEY uq_user_accounts_employee_number (employee_number),
     UNIQUE KEY uq_user_accounts_device_pin (device_pin),
     UNIQUE KEY uq_user_accounts_default_admin (is_default_admin_key)
