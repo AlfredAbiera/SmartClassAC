@@ -1,10 +1,10 @@
 <mxfile host="app.diagrams.net" agent="SmartClassAC">
   <diagram id="main" name="SmartClass AC — continuous flow">
-    <mxGraphModel dx="752" dy="323" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="4200" math="0" shadow="0">
+    <mxGraphModel dx="1559" dy="669" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="4200" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontStyle=1;fontSize=20;fontColor=#1c2940;" value="SmartClass AC — Continuous detailed flow" vertex="1">
+        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontStyle=1;fontSize=20;fontColor=#1c2940;" value="SmartClass AC" vertex="1">
           <mxGeometry height="28" width="520" x="40" y="20" as="geometry" />
         </mxCell>
         <mxCell id="subtitle" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=12;fontColor=#748197;" value="Blazor Server · MariaDB · ESP32 room scanners · Auth → Setup → Enroll → Class day → Reconcile / AC" vertex="1">
@@ -13,11 +13,11 @@
         <mxCell id="secA" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#8cbcf4;fontStyle=1;align=left;spacingLeft=12;fontColor=#1c2940;" value="A. Boot &amp; authentication" vertex="1">
           <mxGeometry height="32" width="900" x="40" y="90" as="geometry" />
         </mxCell>
-        <mxCell id="a1" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#2378e6;fontColor=#ffffff;strokeColor=#155fca;" value="Start app&#xa;dotnet run" vertex="1">
+        <mxCell id="a1" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#2378e6;fontColor=#ffffff;strokeColor=#155fca;" value="START" vertex="1">
           <mxGeometry height="50" width="120" x="400" y="140" as="geometry" />
         </mxCell>
         <mxCell id="a2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;" value="Apply MariaDB migrations&#xa;Seed default admin (if empty)" vertex="1">
-          <mxGeometry height="55" width="180" x="370" y="220" as="geometry" />
+          <mxGeometry height="55" width="200" x="360" y="220" as="geometry" />
         </mxCell>
         <mxCell id="a3" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="Admin recovery email&#xa;already set?" vertex="1">
           <mxGeometry height="80" width="170" x="375" y="310" as="geometry" />
@@ -26,7 +26,7 @@
           <mxGeometry height="55" width="140" x="620" y="322.5" as="geometry" />
         </mxCell>
         <mxCell id="a5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;" value="/login&#xa;Username + password (PBKDF2)" vertex="1">
-          <mxGeometry height="55" width="180" x="370" y="430" as="geometry" />
+          <mxGeometry height="55" width="200" x="360" y="430" as="geometry" />
         </mxCell>
         <mxCell id="a6" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="Credentials valid?" vertex="1">
           <mxGeometry height="70" width="140" x="390" y="520" as="geometry" />
@@ -38,7 +38,7 @@
           <mxGeometry height="70" width="110" x="405" y="630" as="geometry" />
         </mxCell>
         <mxCell id="a10" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#2378e6;fontStyle=1;" value="Admin dashboard&#xa;/admin" vertex="1">
-          <mxGeometry height="55" width="140" x="390" y="738" as="geometry" />
+          <mxGeometry height="55" width="200" x="360" y="738" as="geometry" />
         </mxCell>
         <mxCell id="ae1" edge="1" parent="1" source="a1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="a2">
           <mxGeometry relative="1" as="geometry" />
@@ -78,7 +78,7 @@
           <mxGeometry height="70" width="200" x="360" y="890" as="geometry" />
         </mxCell>
         <mxCell id="b2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;" value="Create teacher&#xa;name, employee #, username,&#xa;required mobile 09xxxxxxxxx,&#xa;optional email / PIN / password&#xa;OTP stub 0000" vertex="1">
-          <mxGeometry height="95" width="220" x="350" y="1000" as="geometry" />
+          <mxGeometry height="95" width="200" x="360" y="1000" as="geometry" />
         </mxCell>
         <mxCell id="b3" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="Teacher IsActive?" vertex="1">
           <mxGeometry height="70" width="150" x="385" y="1130" as="geometry" />
@@ -114,10 +114,10 @@
           <mxGeometry height="32" width="900" x="40" y="1440" as="geometry" />
         </mxCell>
         <mxCell id="c1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#16a68d;" value="Add schedule&#xa;semester, kind (Regular/Makeup),&#xa;teacher, classroom, subject,&#xa;start date, start/end time" vertex="1">
-          <mxGeometry height="85" width="220" x="350" y="1500" as="geometry" />
+          <mxGeometry height="85" width="200" x="360" y="1500" as="geometry" />
         </mxCell>
         <mxCell id="c2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#16a68d;" value="Repeat pattern?&#xa;None / Weekly / Mon–Wed /&#xa;Tue–Thu / MWF / TTH / Custom" vertex="1">
-          <mxGeometry height="75" width="220" x="350" y="1620" as="geometry" />
+          <mxGeometry height="75" width="200" x="360" y="1620" as="geometry" />
         </mxCell>
         <mxCell id="c3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eafaf5;strokeColor=#16a68d;" value="Expand dates from start&#xa;through semester end_date&#xa;(preview count in UI)" vertex="1">
           <mxGeometry height="70" width="200" x="360" y="1730" as="geometry" />
@@ -132,7 +132,7 @@
           <mxGeometry height="60" width="150" x="620" y="1860" as="geometry" />
         </mxCell>
         <mxCell id="c7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;fontSize=11;" value="Optional later: Move schedule&#xa;change date/times only&#xa;reject if Active session / conflict / outside semester" vertex="1">
-          <mxGeometry height="70" width="280" x="320" y="1980" as="geometry" />
+          <mxGeometry height="70" width="200" x="360" y="1980" as="geometry" />
         </mxCell>
         <mxCell id="ce0" edge="1" parent="1" source="b5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="c1">
           <mxGeometry relative="1" as="geometry" />
@@ -163,10 +163,10 @@
           <mxGeometry height="32" width="900" x="40" y="2080" as="geometry" />
         </mxCell>
         <mxCell id="d0" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="Teacher enters device PIN&#xa;on room ESP32" vertex="1">
-          <mxGeometry height="55" width="180" x="370" y="2140" as="geometry" />
+          <mxGeometry height="55" width="200" x="360" y="2140" as="geometry" />
         </mxCell>
         <mxCell id="d1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ce8414;" value="POST /api/device/fingerprint/enroll&#xa;PIN + templateId + deviceCode&#xa;header X-Device-Api-Key" vertex="1">
-          <mxGeometry height="70" width="240" x="340" y="2230" as="geometry" />
+          <mxGeometry height="70" width="200" x="360" y="2230" as="geometry" />
         </mxCell>
         <mxCell id="d2" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="PIN matches active teacher&#xa;+ device known?" vertex="1">
           <mxGeometry height="80" width="180" x="370" y="2340" as="geometry" />
@@ -196,10 +196,10 @@
           <mxGeometry height="32" width="900" x="40" y="2550" as="geometry" />
         </mxCell>
         <mxCell id="e1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;fontStyle=1;" value="Teacher scans finger&#xa;on classroom ESP32" vertex="1">
-          <mxGeometry height="55" width="180" x="370" y="2610" as="geometry" />
+          <mxGeometry height="55" width="190" x="365" y="2610" as="geometry" />
         </mxCell>
         <mxCell id="e2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ce8414;" value="POST /api/device/fingerprint/scan&#xa;templateId + deviceCode" vertex="1">
-          <mxGeometry height="55" width="220" x="350" y="2700" as="geometry" />
+          <mxGeometry height="55" width="200" x="360" y="2700" as="geometry" />
         </mxCell>
         <mxCell id="e3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f6f8fc;strokeColor=#99a5b6;fontSize=11;" value="Reconcile attendance first&#xa;(school local date/time)" vertex="1">
           <mxGeometry height="50" width="200" x="360" y="2790" as="geometry" />
@@ -208,19 +208,19 @@
           <mxGeometry height="80" width="180" x="370" y="2870" as="geometry" />
         </mxCell>
         <mxCell id="e4n" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;" value="unknown" vertex="1">
-          <mxGeometry height="45" width="100" x="620" y="2887.5" as="geometry" />
+          <mxGeometry height="45" width="150" x="650" y="2887.5" as="geometry" />
         </mxCell>
         <mxCell id="e5" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="deviceCode matches&#xa;a classroom device?" vertex="1">
           <mxGeometry height="80" width="180" x="370" y="2990" as="geometry" />
         </mxCell>
         <mxCell id="e5n" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;" value="unknown_device" vertex="1">
-          <mxGeometry height="45" width="120" x="620" y="3007.5" as="geometry" />
+          <mxGeometry height="45" width="150" x="650" y="3007.5" as="geometry" />
         </mxCell>
         <mxCell id="e6" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#2378e6;" value="Find in-window schedule&#xa;for teacher + this classroom&#xa;(active semester; Makeup preferred)" vertex="1">
-          <mxGeometry height="100" width="240" x="340" y="3110" as="geometry" />
+          <mxGeometry height="100" width="200" x="360" y="3110" as="geometry" />
         </mxCell>
         <mxCell id="e6n" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;" value="no_schedule&#xa;/ wrong_room" vertex="1">
-          <mxGeometry height="50" width="120" x="650" y="3135" as="geometry" />
+          <mxGeometry height="50" width="150" x="650" y="3135" as="geometry" />
         </mxCell>
         <mxCell id="e7" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#2378e6;" value="Attendance state&#xa;for this schedule?" vertex="1">
           <mxGeometry height="90" width="200" x="360" y="3260" as="geometry" />
@@ -229,13 +229,13 @@
           <mxGeometry height="120" width="220" x="40" y="3245" as="geometry" />
         </mxCell>
         <mxCell id="e9" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;align=left;spacingLeft=8;" value="Active → ended&#xa;Set time_out, Completed&#xa;AC → Off&#xa;log ClassEnded" vertex="1">
-          <mxGeometry height="100" width="200" x="650" y="3255" as="geometry" />
+          <mxGeometry height="100" width="150" x="650" y="3255" as="geometry" />
         </mxCell>
         <mxCell id="e10" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eafaf5;strokeColor=#16a68d;align=left;spacingLeft=8;" value="Completed (in window) → ac_on&#xa;Clear time_out, reopen Active&#xa;AC → Cooling&#xa;(same attendance row)" vertex="1">
-          <mxGeometry height="85" width="280" x="320" y="3420" as="geometry" />
+          <mxGeometry height="85" width="200" x="360" y="3420" as="geometry" />
         </mxCell>
         <mxCell id="e11" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;" value="Next scan while Active again → ended&#xa;Update time_out · AC Off" vertex="1">
-          <mxGeometry height="55" width="240" x="340" y="3540" as="geometry" />
+          <mxGeometry height="55" width="200" x="360" y="3540" as="geometry" />
         </mxCell>
         <mxCell id="ee0" edge="1" parent="1" source="d4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="e1">
           <mxGeometry relative="1" as="geometry" />
@@ -321,22 +321,22 @@
           <mxGeometry height="100" width="220" x="350" y="3790" as="geometry" />
         </mxCell>
         <mxCell id="g3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;" value="Force Completed&#xa;outcome MissingTimeOut&#xa;AC → Off" vertex="1">
-          <mxGeometry height="70" width="160" x="650" y="3805" as="geometry" />
+          <mxGeometry height="70" width="150" x="650" y="3805" as="geometry" />
         </mxCell>
         <mxCell id="g4" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="Schedule ended with&#xa;zero attendance rows?" vertex="1">
           <mxGeometry height="90" width="200" x="360" y="3930" as="geometry" />
         </mxCell>
         <mxCell id="g5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;" value="Insert Absent&#xa;(system verification)" vertex="1">
-          <mxGeometry height="55" width="160" x="650" y="3948" as="geometry" />
+          <mxGeometry height="55" width="150" x="650" y="3948" as="geometry" />
         </mxCell>
         <mxCell id="g6" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#2378e6;" value="Room ac_status = Cooling&#xa;AND no schedule currently&#xa;in-window for that room?" vertex="1">
-          <mxGeometry height="100" width="240" x="340" y="4060" as="geometry" />
+          <mxGeometry height="100" width="200" x="360" y="4060" as="geometry" />
         </mxCell>
         <mxCell id="g7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;fontStyle=1;" value="Auto-off Cooling → Off&#xa;even if teacher still Active&#xa;(forgot logout)" vertex="1">
           <mxGeometry height="70" width="200" x="80" y="4075" as="geometry" />
         </mxCell>
         <mxCell id="g8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eafaf5;strokeColor=#16a68d;" value="Keep Cooling&#xa;(back-to-back / next&#xa;in-window class)" vertex="1">
-          <mxGeometry height="70" width="180" x="650" y="4075" as="geometry" />
+          <mxGeometry height="70" width="150" x="650" y="4075" as="geometry" />
         </mxCell>
         <mxCell id="ge0" edge="1" parent="1" source="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="g1">
           <mxGeometry relative="1" as="geometry" />

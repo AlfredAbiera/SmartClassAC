@@ -1,0 +1,501 @@
+<mxfile host="app.diagrams.net" agent="SmartClassAC">
+  <diagram id="esp" name="ESP32 firmware — continuous flow">
+    <mxGraphModel dx="1091" dy="468" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="4600" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontStyle=1;fontSize=20;fontColor=#1c2940;" value="SmartClass ESP32 firmware — continuous detailed flow" vertex="1">
+          <mxGeometry height="28" width="640" x="40" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="sub" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=12;fontColor=#748197;" value="smartclass.ino · FIRMWARE_VERSION 1.2.15 · WiFi + fingerprint UART + LCD + AC relay + SmartClass HTTP API" vertex="1">
+          <mxGeometry height="20" width="820" x="40" y="48" as="geometry" />
+        </mxCell>
+        <mxCell id="leg" parent="1" style="swimlane;whiteSpace=wrap;html=1;fillColor=#f6f8fc;strokeColor=#dce4ef;fontStyle=1;startSize=24;" value="Legend" vertex="1">
+          <mxGeometry height="160" width="360" x="980" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="l1" parent="leg" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;fontSize=11;" value="Firmware step" vertex="1">
+          <mxGeometry height="28" width="150" x="16" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="l2" parent="leg" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;fontSize=11;" value="Decision" vertex="1">
+          <mxGeometry height="44" width="140" x="190" y="32" as="geometry" />
+        </mxCell>
+        <mxCell id="l3" parent="leg" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#2378e6;fontSize=11;" value="HTTP / server" vertex="1">
+          <mxGeometry height="28" width="150" x="16" y="88" as="geometry" />
+        </mxCell>
+        <mxCell id="l4" parent="leg" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;fontSize=11;" value="Hardware / LCD" vertex="1">
+          <mxGeometry height="28" width="150" x="190" y="88" as="geometry" />
+        </mxCell>
+        <mxCell id="l5" parent="leg" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eafaf5;strokeColor=#16a68d;fontSize=11;" value="AC on / success" vertex="1">
+          <mxGeometry height="24" width="150" x="16" y="124" as="geometry" />
+        </mxCell>
+        <mxCell id="l6" parent="leg" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;fontSize=11;" value="Deny / AC off" vertex="1">
+          <mxGeometry height="24" width="150" x="190" y="124" as="geometry" />
+        </mxCell>
+        <mxCell id="secA" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#8cbcf4;fontStyle=1;align=left;spacingLeft=12;" value="A. setup() — boot once" vertex="1">
+          <mxGeometry height="30" width="900" x="40" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="a1" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#2378e6;fontColor=#ffffff;strokeColor=#155fca;" value="Power on / reset" vertex="1">
+          <mxGeometry height="45" width="120" x="400" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="a2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="Serial 115200 · LCD init&#xa;Create AC icons · relay pinMode" vertex="1">
+          <mxGeometry height="55" width="240" x="340" y="210" as="geometry" />
+        </mxCell>
+        <mxCell id="a3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;" value="WiFi.begin(ssid, password)&#xa;wait up to 120s" vertex="1">
+          <mxGeometry height="55" width="240" x="340" y="290" as="geometry" />
+        </mxCell>
+        <mxCell id="a4" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="WiFi connected?" vertex="1">
+          <mxGeometry height="70" width="160" x="380" y="375" as="geometry" />
+        </mxCell>
+        <mxCell id="a5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#2378e6;align=left;spacingLeft=8;" value="NTP configTime&#xa;GET /health&#xa;if online: POST /status&#xa;restore relay + teacher" vertex="1">
+          <mxGeometry height="90" width="200" x="620" y="365" as="geometry" />
+        </mxCell>
+        <mxCell id="a6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;" value="LCD: WiFi Timeout&#xa;Booting Offline&#xa;statusRestoreNeeded=true" vertex="1">
+          <mxGeometry height="70" width="180" x="140" y="375" as="geometry" />
+        </mxCell>
+        <mxCell id="a7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="Fingerprint UART Serial2&#xa;RX=GPIO16 TX=GPIO17&#xa;finger.verifyPassword()" vertex="1">
+          <mxGeometry height="70" width="240" x="340" y="500" as="geometry" />
+        </mxCell>
+        <mxCell id="a8" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="Sensor OK?" vertex="1">
+          <mxGeometry height="70" width="140" x="390" y="600" as="geometry" />
+        </mxCell>
+        <mxCell id="a9" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;fontStyle=1;" value="HALT&#xa;LCD: Sensor Error!&#xa;check wiring" vertex="1">
+          <mxGeometry height="60" width="160" x="620" y="605" as="geometry" />
+        </mxCell>
+        <mxCell id="a10" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eafaf5;strokeColor=#16a68d;fontStyle=1;" value="dht.begin()&#xa;enterScanningMode()&#xa;LCD: Ready to scan" vertex="1">
+          <mxGeometry height="70" width="240" x="340" y="710" as="geometry" />
+        </mxCell>
+        <mxCell id="ae1" edge="1" parent="1" source="a1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="a2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ae2" edge="1" parent="1" source="a2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="a3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ae3" edge="1" parent="1" source="a3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="a4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ae4" edge="1" parent="1" source="a4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#16a68d;fontSize=10;" target="a5" value="yes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ae5" edge="1" parent="1" source="a4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#d84755;fontSize=10;" target="a6" value="no">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ae6" edge="1" parent="1" source="a5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="a7">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="720" y="535" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ae7" edge="1" parent="1" source="a6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="a7">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="230" y="535" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ae8" edge="1" parent="1" source="a7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="a8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ae9" edge="1" parent="1" source="a8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#d84755;fontSize=10;" target="a9" value="no">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ae10" edge="1" parent="1" source="a8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#16a68d;fontSize=10;" target="a10" value="yes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="secB" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#eafaf5;strokeColor=#9ad9c4;fontStyle=1;align=left;spacingLeft=12;" value="B. loop() — forever (non-blocking Serial)" vertex="1">
+          <mxGeometry height="30" width="900" x="40" y="820" as="geometry" />
+        </mxCell>
+        <mxCell id="b1" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#16a68d;fontColor=#ffffff;strokeColor=#0f7a66;" value="loop() tick" vertex="1">
+          <mxGeometry height="45" width="120" x="400" y="875" as="geometry" />
+        </mxCell>
+        <mxCell id="b2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;" value="processSerialCommands()&#xa;complete lines only (NL/CR)" vertex="1">
+          <mxGeometry height="55" width="240" x="340" y="950" as="geometry" />
+        </mxCell>
+        <mxCell id="b3" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="WiFi connected?" vertex="1">
+          <mxGeometry height="70" width="160" x="380" y="1040" as="geometry" />
+        </mxCell>
+        <mxCell id="b4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;" value="Retry WiFi periodically&#xa;serverOnline=false&#xa;statusRestoreNeeded=true" vertex="1">
+          <mxGeometry height="70" width="220" x="640" y="1040" as="geometry" />
+        </mxCell>
+        <mxCell id="b5" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="Just reconnected /&#xa;restore needed?" vertex="1">
+          <mxGeometry height="80" width="180" x="370" y="1150" as="geometry" />
+        </mxCell>
+        <mxCell id="b6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#2378e6;" value="checkServerHealth&#xa;if Healthy → restoreRoomStatus&#xa;(POST /api/device/status)" vertex="1">
+          <mxGeometry height="70" width="220" x="640" y="1155" as="geometry" />
+        </mxCell>
+        <mxCell id="b7" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="Every ~30s health interval?" vertex="1">
+          <mxGeometry height="80" width="210" x="355" y="1270" as="geometry" />
+        </mxCell>
+        <mxCell id="b8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#2378e6;align=left;spacingLeft=8;" value="GET /health&#xa;if online: quiet&#xa;applyRoomStatusFromServer&#xa;(remote AC + clearFingerprints)" vertex="1">
+          <mxGeometry height="70" width="220" x="640" y="1275" as="geometry" />
+        </mxCell>
+        <mxCell id="b9" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="STATE_ENROLL?" vertex="1">
+          <mxGeometry height="70" width="150" x="385" y="1400" as="geometry" />
+        </mxCell>
+        <mxCell id="b10" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0f3f7;strokeColor=#99a5b6;" value="return early&#xa;(enroll owns sensor)" vertex="1">
+          <mxGeometry height="70" width="220" x="640" y="1400" as="geometry" />
+        </mxCell>
+        <mxCell id="b11" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;" value="manageDisplayState()&#xa;(overlay timers → scanning)" vertex="1">
+          <mxGeometry height="55" width="240" x="340" y="1510" as="geometry" />
+        </mxCell>
+        <mxCell id="b12" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="STATE_SCANNING?" vertex="1">
+          <mxGeometry height="70" width="160" x="380" y="1600" as="geometry" />
+        </mxCell>
+        <mxCell id="b13" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eafaf5;strokeColor=#16a68d;fontStyle=1;" value="Update LCD clock/temp&#xa;pollScanAndLog()" vertex="1">
+          <mxGeometry height="55" width="240" x="340" y="1710" as="geometry" />
+        </mxCell>
+        <mxCell id="b14" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0f3f7;strokeColor=#99a5b6;" value="(wait overlay / other state)" vertex="1">
+          <mxGeometry height="70" width="220" x="640" y="1600" as="geometry" />
+        </mxCell>
+        <mxCell id="be1" edge="1" parent="1" source="a10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="b1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be2" edge="1" parent="1" source="b1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="b2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be3" edge="1" parent="1" source="b2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="b3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be4" edge="1" parent="1" source="b3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#d84755;fontSize=10;" target="b4" value="no">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be5" edge="1" parent="1" source="b3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#16a68d;fontSize=10;" target="b5" value="yes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be6" edge="1" parent="1" source="b5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#2378e6;fontSize=10;" target="b6" value="yes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be7" edge="1" parent="1" source="b5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;fontSize=10;" target="b7" value="no">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be9" edge="1" parent="1" source="b7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#2378e6;fontSize=10;" target="b8" value="yes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be10" edge="1" parent="1" source="b7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="b9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be12" edge="1" parent="1" source="b9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#99a5b6;fontSize=10;" target="b10" value="yes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be13" edge="1" parent="1" source="b9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#16a68d;fontSize=10;" target="b11" value="no">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be14" edge="1" parent="1" source="b11" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="b12">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be15" edge="1" parent="1" source="b12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#16a68d;fontSize=10;" target="b13" value="yes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be16" edge="1" parent="1" source="b12" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#99a5b6;fontSize=10;" target="b14" value="no">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="be17" edge="1" parent="1" source="b13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#16a68d;dashed=1;fontSize=10;" target="b1" value="next tick">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="100" y="1737" />
+              <mxPoint x="100" y="897" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="be18" edge="1" parent="1" source="b14" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#99a5b6;dashed=1;" target="b1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="900" y="1635" />
+              <mxPoint x="900" y="897" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="be19" edge="1" parent="1" source="b10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#99a5b6;dashed=1;" target="b1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="920" y="1435" />
+              <mxPoint x="920" y="897" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="be20" edge="1" parent="1" source="b4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#d84755;dashed=1;" target="b9">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="750" y="1020" />
+              <mxPoint x="200" y="1020" />
+              <mxPoint x="200" y="1435" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="secC" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#8cbcf4;fontStyle=1;align=left;spacingLeft=12;" value="C. Serial commands (from processSerialCommands)" vertex="1">
+          <mxGeometry height="30" width="900" x="40" y="1810" as="geometry" />
+        </mxCell>
+        <mxCell id="c0" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;fontStyle=1;" value="handleSerialCommand(line)" vertex="1">
+          <mxGeometry height="45" width="240" x="340" y="1865" as="geometry" />
+        </mxCell>
+        <mxCell id="c1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f6f8fc;strokeColor=#99a5b6;fontSize=11;" value="HELP&#xa;print commands + version" vertex="1">
+          <mxGeometry height="50" width="150" x="40" y="1950" as="geometry" />
+        </mxCell>
+        <mxCell id="c2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#2378e6;fontSize=11;" value="HEALTH&#xa;checkServerHealth(true)" vertex="1">
+          <mxGeometry height="50" width="150" x="210" y="1950" as="geometry" />
+        </mxCell>
+        <mxCell id="c3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#2378e6;fontSize=11;" value="STATUS&#xa;dump WiFi/AC/sensor&#xa;+ refresh /status" vertex="1">
+          <mxGeometry height="60" width="160" x="380" y="1945" as="geometry" />
+        </mxCell>
+        <mxCell id="c4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;fontSize=11;" value="DELETEALL / CLEARFP&#xa;(must be STATE_SCANNING)" vertex="1">
+          <mxGeometry height="60" width="160" x="560" y="1945" as="geometry" />
+        </mxCell>
+        <mxCell id="c5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;fontSize=11;fontStyle=1;" value="ENROLL&#xa;(must be STATE_SCANNING)&#xa;→ runEnrollFlow(testPinCode)" vertex="1">
+          <mxGeometry height="70" width="180" x="740" y="1940" as="geometry" />
+        </mxCell>
+        <mxCell id="ce0" edge="1" parent="1" source="b2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;dashed=1;" target="c0">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="240" y="977.5" />
+              <mxPoint x="240" y="1887" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ce1" edge="1" parent="1" source="c0" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#99a5b6;fontSize=10;" target="c1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce2" edge="1" parent="1" source="c0" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#2378e6;fontSize=10;" target="c2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce3" edge="1" parent="1" source="c0" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#2378e6;fontSize=10;" target="c3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce4" edge="1" parent="1" source="c0" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#d84755;fontSize=10;" target="c4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce5" edge="1" parent="1" source="c0" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#ce8414;fontSize=10;" target="c5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="secD" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#e4c57a;fontStyle=1;align=left;spacingLeft=12;" value="D. ENROLL flow (pauses scanning)" vertex="1">
+          <mxGeometry height="30" width="900" x="40" y="2060" as="geometry" />
+        </mxCell>
+        <mxCell id="d1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="STATE_ENROLL&#xa;findFreeTemplateId() 1..127" vertex="1">
+          <mxGeometry height="55" width="240" x="340" y="2115" as="geometry" />
+        </mxCell>
+        <mxCell id="d2" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="Free slot?" vertex="1">
+          <mxGeometry height="70" width="140" x="390" y="2200" as="geometry" />
+        </mxCell>
+        <mxCell id="d2n" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;" value="Sensor full&#xa;showDenied → scanning" vertex="1">
+          <mxGeometry height="50" width="150" x="620" y="2210" as="geometry" />
+        </mxCell>
+        <mxCell id="d3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ce8414;" value="enrollCaptureAndStore&#xa;place finger ×2, image2Tz,&#xa;createModel, storeModel" vertex="1">
+          <mxGeometry height="70" width="240" x="340" y="2305" as="geometry" />
+        </mxCell>
+        <mxCell id="d4" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="Capture OK?" vertex="1">
+          <mxGeometry height="70" width="140" x="390" y="2410" as="geometry" />
+        </mxCell>
+        <mxCell id="d4n" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;" value="Enroll failed&#xa;Capture error" vertex="1">
+          <mxGeometry height="50" width="140" x="620" y="2420" as="geometry" />
+        </mxCell>
+        <mxCell id="d5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#2378e6;align=left;spacingLeft=8;" value="POST /api/device/fingerprint/enroll&#xa;{ pinCode, templateId, deviceCode }&#xa;X-Device-Api-Key" vertex="1">
+          <mxGeometry height="75" width="240" x="340" y="2520" as="geometry" />
+        </mxCell>
+        <mxCell id="d6" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="API ok=true?" vertex="1">
+          <mxGeometry height="70" width="140" x="390" y="2635" as="geometry" />
+        </mxCell>
+        <mxCell id="d6n" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;" value="deleteModel(slot)&#xa;showDenied API fail" vertex="1">
+          <mxGeometry height="55" width="160" x="620" y="2640" as="geometry" />
+        </mxCell>
+        <mxCell id="d7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eafaf5;strokeColor=#16a68d;fontStyle=1;" value="LCD Enroll OK + name&#xa;overlay then back to scanning" vertex="1">
+          <mxGeometry height="55" width="240" x="340" y="2745" as="geometry" />
+        </mxCell>
+        <mxCell id="de1" edge="1" parent="1" source="c5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#ce8414;entryX=1;entryY=0.5;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="d1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="830" y="2142.5" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="de2" edge="1" parent="1" source="d1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="d2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de3" edge="1" parent="1" source="d2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#d84755;fontSize=10;" target="d2n" value="no">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de4" edge="1" parent="1" source="d2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#16a68d;fontSize=10;" target="d3" value="yes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de5" edge="1" parent="1" source="d3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="d4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de6" edge="1" parent="1" source="d4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#d84755;fontSize=10;" target="d4n" value="no">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de7" edge="1" parent="1" source="d4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#16a68d;fontSize=10;" target="d5" value="yes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de8" edge="1" parent="1" source="d5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="d6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de9" edge="1" parent="1" source="d6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#d84755;fontSize=10;" target="d6n" value="no">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="de10" edge="1" parent="1" source="d6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#16a68d;fontSize=10;" target="d7" value="yes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="secE" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#f0c4c9;fontStyle=1;align=left;spacingLeft=12;" value="E. DELETEALL / remote clearFingerprints" vertex="1">
+          <mxGeometry height="30" width="900" x="40" y="2840" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;align=left;spacingLeft=8;" value="finger.emptyDatabase()&#xa;clearActiveTeacher · setAcState(false)&#xa;clearRoomSessionOnServer()" vertex="1">
+          <mxGeometry height="75" width="240" x="340" y="2900" as="geometry" />
+        </mxCell>
+        <mxCell id="ee1" edge="1" parent="1" source="c4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#d84755;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="e1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="640" y="2040" />
+              <mxPoint x="800" y="2040" />
+              <mxPoint x="800" y="2937" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ee2" edge="1" parent="1" source="b8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#d84755;dashed=1;fontSize=10;" target="e1" value="also from /status&#xa;clearFingerprints=true">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="920" y="1305" />
+              <mxPoint x="920" y="2937" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="secF" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#eafaf5;strokeColor=#9ad9c4;fontStyle=1;align=left;spacingLeft=12;" value="F. pollScanAndLog() — usual fingerprint use" vertex="1">
+          <mxGeometry height="30" width="900" x="40" y="3020" as="geometry" />
+        </mxCell>
+        <mxCell id="f1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="getFingerprintID()" vertex="1">
+          <mxGeometry height="45" width="240" x="340" y="3080" as="geometry" />
+        </mxCell>
+        <mxCell id="f2" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="Result?" vertex="1">
+          <mxGeometry height="70" width="150" x="385" y="3160" as="geometry" />
+        </mxCell>
+        <mxCell id="f2a" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0f3f7;strokeColor=#99a5b6;" value="0 = no finger&#xa;return" vertex="1">
+          <mxGeometry height="50" width="130" x="160" y="3170" as="geometry" />
+        </mxCell>
+        <mxCell id="f2b" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;" value="&lt;0 no match&#xa;wait finger lifted" vertex="1">
+          <mxGeometry height="50" width="150" x="640" y="3170" as="geometry" />
+        </mxCell>
+        <mxCell id="f3" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;" value="serverOnline?&#xa;(quick /health if needed)" vertex="1">
+          <mxGeometry height="80" width="200" x="360" y="3270" as="geometry" />
+        </mxCell>
+        <mxCell id="f3n" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;" value="showDenied Offline&#xa;Check PC app" vertex="1">
+          <mxGeometry height="50" width="160" x="640" y="3285" as="geometry" />
+        </mxCell>
+        <mxCell id="f4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#2378e6;align=left;spacingLeft=8;" value="LCD Matched ID / Logging...&#xa;POST /api/device/fingerprint/scan&#xa;{ templateId, deviceCode }" vertex="1">
+          <mxGeometry height="75" width="240" x="340" y="3390" as="geometry" />
+        </mxCell>
+        <mxCell id="f5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;fontStyle=1;" value="handleScanResult(action)" vertex="1">
+          <mxGeometry height="45" width="240" x="340" y="3505" as="geometry" />
+        </mxCell>
+        <mxCell id="f6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eafaf5;strokeColor=#16a68d;align=left;spacingLeft=6;fontSize=11;" value="started&#xa;remember teacher&#xa;setAcState(true)&#xa;LCD class started" vertex="1">
+          <mxGeometry height="90" width="150" x="50" y="3600" as="geometry" />
+        </mxCell>
+        <mxCell id="f7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eafaf5;strokeColor=#16a68d;align=left;spacingLeft=6;fontSize=11;" value="ac_on&#xa;reopen session&#xa;setAcState(true)&#xa;LCD AC resumed" vertex="1">
+          <mxGeometry height="90" width="150" x="220" y="3600" as="geometry" />
+        </mxCell>
+        <mxCell id="f8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;align=left;spacingLeft=6;fontSize=11;" value="ended&#xa;clear teacher&#xa;setAcState(false)&#xa;LCD class ended" vertex="1">
+          <mxGeometry height="90" width="150" x="385" y="3600" as="geometry" />
+        </mxCell>
+        <mxCell id="f9" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;align=left;spacingLeft=6;fontSize=11;" value="ac_off&#xa;clear teacher&#xa;setAcState(false)&#xa;LCD AC off" vertex="1">
+          <mxGeometry height="90" width="150" x="550" y="3600" as="geometry" />
+        </mxCell>
+        <mxCell id="f10" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff0f1;strokeColor=#d84755;align=left;spacingLeft=6;fontSize=11;" value="Deny paths&#xa;unknown / unknown_device&#xa;wrong_room / no_schedule&#xa;unauthorized / error&#xa;(AC unchanged)" vertex="1">
+          <mxGeometry height="90" width="170" x="720" y="3600" as="geometry" />
+        </mxCell>
+        <mxCell id="f11" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eafaf5;strokeColor=#16a68d;" value="waitForFingerRemoved()&#xa;return to Ready to scan&#xa;(AC-on LCD shows teacher + timer)" vertex="1">
+          <mxGeometry height="70" width="240" x="340" y="3760" as="geometry" />
+        </mxCell>
+        <mxCell id="fe0" edge="1" parent="1" source="b13" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#16a68d;" target="f1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="20" y="1737.5" />
+              <mxPoint x="20" y="3102" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="fe1" edge="1" parent="1" source="f1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="f2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe2" edge="1" parent="1" source="f2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#99a5b6;fontSize=10;" target="f2a" value="none">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe3" edge="1" parent="1" source="f2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#d84755;fontSize=10;" target="f2b" value="fail">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe4" edge="1" parent="1" source="f2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#16a68d;fontSize=10;" target="f3" value="ID&gt;0">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe5" edge="1" parent="1" source="f3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#d84755;fontSize=10;" target="f3n" value="no">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe6" edge="1" parent="1" source="f3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#16a68d;fontSize=10;" target="f4" value="yes">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe7" edge="1" parent="1" source="f4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="f5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe8" edge="1" parent="1" source="f5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#16a68d;fontSize=10;" target="f6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe9" edge="1" parent="1" source="f5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#16a68d;fontSize=10;" target="f7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe10" edge="1" parent="1" source="f5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#2378e6;fontSize=10;" target="f8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe11" edge="1" parent="1" source="f5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#2378e6;fontSize=10;" target="f9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe12" edge="1" parent="1" source="f5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#d84755;fontSize=10;" target="f10">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe13" edge="1" parent="1" source="f6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="f11">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="115" y="3795" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="fe14" edge="1" parent="1" source="f8" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="f11">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fe15" edge="1" parent="1" source="f10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="f11">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="810" y="3795" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="secG" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#8cbcf4;fontStyle=1;align=left;spacingLeft=12;" value="G. setAcState / relay / LCD idle" vertex="1">
+          <mxGeometry height="30" width="900" x="40" y="3880" as="geometry" />
+        </mxCell>
+        <mxCell id="g1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;align=left;spacingLeft=8;" value="setAcState(on)&#xa;isGlobalACOn · acStartTime&#xa;applyAcRelay() if AC_RELAY_PIN≥0&#xa;off clears teacher name" vertex="1">
+          <mxGeometry height="90" width="240" x="340" y="3950" as="geometry" />
+        </mxCell>
+        <mxCell id="g2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ce8414;align=left;spacingLeft=8;" value="updateScanningDisplay()&#xa;Offline row2 if !serverOnline&#xa;else Ready to scan&#xa;If AC on: teacher + clock/timer/temp/icon" vertex="1">
+          <mxGeometry height="90" width="240" x="340" y="4070" as="geometry" />
+        </mxCell>
+        <mxCell id="g3" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#1c2940;fontColor=#ffffff;strokeColor=#102444;" value="Continuous loop continues…&#xa;next finger / Serial / 30s health+status poll" vertex="1">
+          <mxGeometry height="70" width="285" x="317.5" y="4240" as="geometry" />
+        </mxCell>
+        <mxCell id="ge1" edge="1" parent="1" source="f11" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="g1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ge2" edge="1" parent="1" source="g1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="g2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ge3" edge="1" parent="1" source="g2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#50617a;" target="g3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ge4" edge="1" parent="1" source="g3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;endFill=1;strokeColor=#16a68d;dashed=1;fontSize=10;" target="b1" value="back to loop()">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="460" y="4180" />
+              <mxPoint x="40" y="4180" />
+              <mxPoint x="40" y="897" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="note" parent="1" style="rounded=1;whiteSpace=wrap;html=1;align=left;fillColor=#f6f8fc;strokeColor=#dce4ef;spacingLeft=10;fontSize=11;" value="Config: ssid, password, baseUrl, deviceApiKey, deviceCode, testPinCode (until keypad), AC_RELAY_PIN.&#xa;Templates live on the physical sensor — demo DB IDs alone do not match until ENROLL on this device." vertex="1">
+          <mxGeometry height="50" width="900" x="40" y="4360" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
