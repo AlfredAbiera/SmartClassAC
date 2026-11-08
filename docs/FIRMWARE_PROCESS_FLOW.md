@@ -1,7 +1,7 @@
 # Firmware process flow
 
 This describes the companion `SmartClassAC-ESP32\smartclass` source at version
-`1.6.61` as inspected on 2026-11-08. It does not assert that this version is
+`1.6.63` as inspected on 2026-11-08. It does not assert that this version is
 compiled, flashed, or validated on a particular scanner. The portal workflows
 are described in [Portal process flow](./PORTAL_PROCESS_FLOW.md), and storage
 relationships in [Data model and relationships](./DATA_MODEL.md).
@@ -77,6 +77,20 @@ a separate one-time code generated in the portal; on success the scanner saves
 the generated device ID to NVS. A paired admin can choose an available room or
 unassign the scanner, subject to server restrictions. Assigning a room is not
 proof that the sensor contains the correct templates.
+
+Source 1.6.62 offers pairing-code entry if the server rejects a saved device ID
+as unknown or inactive during admin authentication. Check that the device and
+its assigned room are active on the intended portal first. Pairing still
+requires the server to validate the admin PIN and one-time code. A pending,
+unreadable, or corrupt enrollment journal, an installed enrollment key, or a
+storage error blocks entry; do not erase storage to bypass these safeguards.
+
+Source 1.6.63 adds **Admin → Unpair device** after server-validated admin access.
+Press `#` to confirm or `*` to cancel. This is local-only: it removes the saved
+device ID, not the portal pairing, room assignment, sensor fingerprints or AC
+power state. An installed enrollment key, nonempty/unreadable journal, or storage
+failure blocks it. After local unpairing, generate a fresh pairing code in the
+portal and pair again; local unpairing does not revoke server credentials.
 
 ## Attendance scanning
 

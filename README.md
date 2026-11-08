@@ -330,6 +330,28 @@ Firmware `1.6.1+` distinguishes invalid PIN/code, an invalid device API key, ser
 
 **Startup settings and power-loss recovery:** after Wi-Fi connects (boot or reconnect), firmware calls `/api/device/status` with its `deviceId`, restores the relay from `acOn`, and receives the admin-managed device name, assigned room, room target temperature, polling interval, and scan/enrollment controls. It also polls status at the configured interval; `/health` remains on its own 30-second check. Serial `STATUS` refreshes the same settings. Wi-Fi credentials, server URL, and API key stay provisioned on the device because they are required to connect and authenticate before it can download settings.
 
+If status returns `Unknown or inactive biometric device`, compare the scanner's
+`STATUS` device ID and portal address with **Management → Devices**. The server
+requires a matching active, paired device and, if assigned, an active classroom;
+`/health` succeeding does not establish device eligibility. Firmware 1.6.61
+treats a saved ID as paired locally, so a newly registered but unpaired server
+record can prevent opening the pairing screen even when its ID matches.
+Source 1.6.62 offers pairing-code entry after this specific admin lookup failure.
+After uploading it, enter the device admin PIN and the current one-time pairing
+code from the intended portal. Installed enrollment keys, pending/unreadable
+journals and storage errors still block pairing. Do not use `DELETEALL`, erase
+NVS, or delete keys to bypass these protections. Changing source alone does not
+update the device; this pairing recovery needs build, upload and hardware validation.
+
+Firmware source 1.6.63 in `esp32\smartclass\smartclass.ino` adds **Admin → Unpair
+device** with `#` to confirm and `*` to cancel. This clears only the saved scanner
+ID; the portal still considers the device paired, and room assignment, sensor
+fingerprints and AC power are unchanged. Installed enrollment keys and pending
+or unreadable write journals block unpairing; no keys or fingerprints are erased.
+The menu requires server-validated admin access. To reconnect after local
+unpairing, generate a fresh portal pairing code and pair again. This is not
+server-side revocation or a way to bypass protected provisioning.
+
 **Admin → Devices:** search by device name, ID, room, or status, and filter by activity, assignment, pairing, scan, or enrollment state. Register devices and manage their room assignment (including disassociation), room target temperature, status polling interval (5–3600 seconds), active state, attendance scanning, and fingerprint enrollment. Names are generated from each device's stable database ID and cannot be edited. A room can have one scanner; unassigned devices are allowed. Moving/disassociating/deactivating a scanner or disabling attendance scans is blocked while an affected room has an open class session. The scan/enrollment controls are enforced by the server as well as downloaded to firmware. Target temperature is sent as the room setpoint; firmware displays it, while actual AC control remains relay on/off.
 
 The enrollment scanner selector records the administrator's selected scanner. The portal can reserve a slot and record short-lived consent; firmware 1.6.21 adds an admin keypad entry to the experimental enrollment flow, which remains compile-time disabled by default. An opt-in 1.6.20 build completed one physical enrollment and attendance scan; the keypad entry in 1.6.21 still requires hardware validation. Template synchronization is not available. The legacy enrollment API remains disabled.

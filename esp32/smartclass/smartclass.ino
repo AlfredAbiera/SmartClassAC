@@ -64,6 +64,8 @@ struct EnrollmentSensorAdapter;
 // Also print/show via Serial boot banner, LCD splash, and STATUS command.
 // Changelog:
 //
+//   1.6.63 2026-11-08  Add confirmed, guarded local-only unpairing.
+//   1.6.62 2026-11-08  Offer guarded pairing after a saved device ID is rejected.
 //   1.6.61 2026-11-08  Enable guarded fingerprint enrollment and inventory.
 //   1.6.60 2026-11-08  Enable guarded IR power-toggle protocol.
 //   1.6.59 2026-11-08  Add opt-in guarded IR power-toggle protocol.
@@ -80,7 +82,7 @@ struct EnrollmentSensorAdapter;
 //   1.6.48 2026-11-08  Authenticate Faculty login with server SMS OTP.
 //   1.6.47 2026-11-08  Remove boot SMS sending.
 // ---------------------------------------------------------------------------
-const char* FIRMWARE_VERSION = "1.6.61";
+const char* FIRMWARE_VERSION = "1.6.63";
 
 // USB Serial Monitor MUST match this baud (115200). Boxes/diamonds = wrong baud
 // or fingerprint TX wired to GPIO1/3 (USB UART) instead of FINGERPRINT_RX/TX.
@@ -190,6 +192,7 @@ enum DisplayState {
   STATE_MENU_FACULTY_AC,
   STATE_MENU_ROOMS,
   STATE_MENU_PAIR_CODE,
+  STATE_MENU_UNPAIR_CONFIRM,
   STATE_MENU_NOTICE
 };
 
@@ -1939,6 +1942,7 @@ bool isKeypadMenuState(DisplayState state) {
          state == STATE_MENU_FACULTY_AC ||
          state == STATE_MENU_ROOMS ||
          state == STATE_MENU_PAIR_CODE ||
+         state == STATE_MENU_UNPAIR_CONFIRM ||
          state == STATE_MENU_NOTICE;
 }
 
@@ -1989,9 +1993,9 @@ uint8_t menuItemCount(DisplayState state) {
   }
   if (state == STATE_MENU_ADMIN) {
 #if ENROLLMENT_WRITES_ENABLED && REPLACEMENT_WRITES_ENABLED
-    return 6;
+    return 7;
 #else
-    return 5;
+    return 6;
 #endif
   }
   if (state == STATE_MENU_FACULTY) {
@@ -2014,6 +2018,9 @@ const char* menuItemLabel(DisplayState state, uint8_t index) {
     if (index == 3) return "Room status";
 #if ENROLLMENT_WRITES_ENABLED && REPLACEMENT_WRITES_ENABLED
     if (index == 5) return "Replace finger";
+    if (index == 6) return "Unpair device";
+#else
+    if (index == 5) return "Unpair device";
 #endif
     return "Pair device";
   }
@@ -2057,6 +2064,10 @@ void renderMenu() {
     case STATE_MENU_PAIR_CODE:
       printLcdRow(0, "Pairing code:");
       renderEntryLine();
+      break;
+    case STATE_MENU_UNPAIR_CONFIRM:
+      printLcdRow(0, "Unpair locally?");
+      printLcdRow(1, "*Cancel #Confirm");
       break;
     case STATE_MENU_FACULTY_ID:
       printLcdRow(0, "Mobile 09...:");
@@ -2337,9 +2348,17 @@ void selectHighlightedItem() {
     } else if (menuIndex == 4) {
       openPairCodeEntry();
 #if ENROLLMENT_WRITES_ENABLED && REPLACEMENT_WRITES_ENABLED
-    } else {
+    } else if (menuIndex == 5) {
       startReplacement();
 #endif
+    } else {
+      if (!isDevicePaired()) {
+        showMenuNotice("Not paired", "No ID to clear", STATE_MENU_ADMIN, false, false);
+      } else {
+        currentDisplayState = STATE_MENU_UNPAIR_CONFIRM;
+        Serial.println("Local unpair confirmation: portal pairing and sensor fingerprints will remain unchanged.");
+        renderMenu();
+      }
     }
     return;
   }
@@ -2407,15 +2426,21 @@ void submitAdminPin() {
   adminPinSession[sizeof(adminPinSession) - 1] = '\0';
   if (!isDevicePaired()) {
     // No device ID yet: the server verifies the PIN together with the pairing code.
-    clearKeypadEntry();
     Serial.println("Keypad: device not paired, ask pairing code.");
-    showMenuNotice("Not paired", "Enter pair code", STATE_MENU_PAIR_CODE, true, false);
+    openPairCodeEntry();
     return;
   }
   printLcdRow(0, "Checking PIN...");
   printLcdRow(1, "");
   String responseBody;
   int httpCode = loadAdminRooms(responseBody);
+  if (httpCode == 404 &&
+      extractJsonString(responseBody, "error") == "Unknown or inactive biometric device.") {
+    roomStatusReceived = false;
+    Serial.println("Keypad: server rejected saved device ID; check portal activity and pairing.");
+    openPairCodeEntry();
+    return;
+  }
   if (httpCode != 200) {
     memset(adminPinSession, 0, sizeof(adminPinSession));
     showAdminRequestFailure(httpCode, responseBody);
@@ -2428,19 +2453,74 @@ void submitAdminPin() {
 }
 
 void openPairCodeEntry() {
+  if (!enrollmentJournalIsClear()) {
+    memset(adminPinSession, 0, sizeof(adminPinSession));
+    Serial.println("Cannot start pairing: enrollment journal is pending or unavailable.");
+    showMenuNotice("Write pending", "Pair disabled", STATE_MENU_ADMIN_PIN, true, false);
+    return;
+  }
   if (!devicePrefs.begin("smartclass", true)) {
-    showMenuNotice("Storage error", "Cannot pair", STATE_MENU_ADMIN, true, false);
+    memset(adminPinSession, 0, sizeof(adminPinSession));
+    showMenuNotice("Storage error", "Cannot pair", STATE_MENU_ADMIN_PIN, true, false);
     return;
   }
   bool hasEnrollmentKey = devicePrefs.isKey("enrollKey");
   devicePrefs.end();
   if (hasEnrollmentKey) {
-    showMenuNotice("Key installed", "Pair disabled", STATE_MENU_ADMIN, true, false);
+    memset(adminPinSession, 0, sizeof(adminPinSession));
+    Serial.println("Cannot start pairing: enrollment key installed; preserve key and investigate server pairing.");
+    showMenuNotice("Key installed", "Pair disabled", STATE_MENU_ADMIN_PIN, true, false);
     return;
   }
   clearKeypadEntry();
   currentDisplayState = STATE_MENU_PAIR_CODE;
   renderMenu();
+}
+
+void unpairDeviceLocally() {
+  if (!isDevicePaired()) {
+    showMenuNotice("Not paired", "No ID to clear", STATE_MENU_ADMIN, false, false);
+    return;
+  }
+  if (!enrollmentJournalIsClear()) {
+    Serial.println("Local unpair refused: enrollment journal is pending or unavailable.");
+    showMenuNotice("Write pending", "Unpair blocked", STATE_MENU_ADMIN, false, false);
+    return;
+  }
+  if (!devicePrefs.begin("smartclass", false)) {
+    Serial.println("Local unpair failed: preferences unavailable.");
+    showMenuNotice("Storage error", "ID retained", STATE_MENU_ADMIN, false, false);
+    return;
+  }
+  if (devicePrefs.isKey("enrollKey")) {
+    devicePrefs.end();
+    Serial.println("Local unpair refused: enrollment key installed; preserve provisioning.");
+    showMenuNotice("Key installed", "Unpair blocked", STATE_MENU_ADMIN, false, false);
+    return;
+  }
+  bool removed = devicePrefs.remove("deviceId");
+  bool absent = !devicePrefs.isKey("deviceId");
+  devicePrefs.end();
+  if (!removed || !absent) {
+    Serial.println("Local unpair failed: saved device ID removal was not verified.");
+    showMenuNotice("Storage error", "Restart / check", STATE_MENU_ADMIN, false, false);
+    return;
+  }
+  memset(deviceId, 0, sizeof(deviceId));
+  ++pairingGeneration;
+  ++statusGeneration;
+  roomStatusReceived = false;
+  assignedRoomName = "";
+  clearActiveTeacher();
+#if AC_IR_ENABLED
+  acIrRegistered = false;
+  acIrHalted = false;
+#endif
+  memset(adminPinSession, 0, sizeof(adminPinSession));
+  clearKeypadEntry();
+  mbedtls_platform_zeroize(facultySession, sizeof(facultySession));
+  Serial.println("Device unpaired locally. Portal pairing, room assignment, sensor fingerprints and AC power are unchanged.");
+  showMenuNotice("Locally unpaired", "Portal unchanged", STATE_SCANNING, true, true, 3000);
 }
 
 void submitPairCode() {
@@ -2912,6 +2992,13 @@ void submitFacultyPin() {
 
 void handleMenuKey(char key) {
   switch (currentDisplayState) {
+    case STATE_MENU_UNPAIR_CONFIRM:
+      if (key == '#') unpairDeviceLocally();
+      else if (key == '*') {
+        currentDisplayState = STATE_MENU_ADMIN;
+        renderMenu();
+      }
+      break;
     case STATE_MENU_ROLE:
     case STATE_MENU_ADMIN:
     case STATE_MENU_FACULTY:
