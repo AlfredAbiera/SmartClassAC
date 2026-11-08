@@ -1,4 +1,5 @@
 .fingerprint-dialog{max-height:calc(100vh - 2rem);overflow-y:auto}
+.admin-dashboard .dashboard-sidebar{height:100vh;overflow-y:auto}.admin-dashboard .sidebar-logout{margin-top:.15rem}
 .form-help{margin:.25rem 0 1rem;color:#667085;font-size:.82rem;line-height:1.55}
 :root{--sc-ink:#1e2b42;--sc-muted:#748197;--sc-line:#e7edf5;--sc-bg:#f6f8fc;--sc-blue:#2378e6;--sc-teal:#16a68d;--sc-violet:#7559da;--sc-danger:#d84755}
 .dashboard-page{min-height:100vh;display:flex;background:var(--sc-bg);color:var(--sc-ink)}.dashboard-page *{box-sizing:border-box}.dashboard-page button,.dashboard-page input,.dashboard-page select,.dashboard-page textarea{font:inherit}.dashboard-page button{border:0}

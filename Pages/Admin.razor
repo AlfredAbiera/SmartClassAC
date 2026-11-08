@@ -15,7 +15,7 @@
 
 <PageTitle>Admin Dashboard | SmartClass AC</PageTitle>
 
-<div class="dashboard-page">
+<div class="dashboard-page admin-dashboard">
     <aside class='dashboard-sidebar @(sidebarOpen ? "is-open" : string.Empty)'>
         <a class="dashboard-brand" href="/"><span class="brand-mark"><i class="fas fa-snowflake"></i></span><span>SmartClass <strong>AC</strong></span></a>
         <p class="workspace-label">ADMINISTRATOR WORKSPACE</p>
@@ -347,11 +347,13 @@
                                         @if (irStatusUnavailable) { <span>IR status unavailable; target unverified</span> }
                                         else if (!Configuration.GetValue<bool>("AcIr:EnableDeviceApi")) { <span>IR disabled; AC unverified</span> }
                                         else if (ir is null) { <span>Unavailable; target not verified</span> }
+                                        else if (Configuration.GetValue<bool>("AcIr:EnablePowerToggle") != (ir.ProtocolVersion == 2)) { <span>Restart scanner with matching IR protocol; then reconcile.</span> }
                                         else if (ir.State == "reconcile") { <span>Target pending; reconciliation required</span><button type="button" class="text-button" @onclick="() => BeginIrReconciliation(ir)">Reconcile</button> }
                                         else if (ir.State == "inflight") { <span>Target pending; command uncertain/in progress. Restart and reconcile if stalled.</span> }
                                         else if (!ir.RecentlySeen) { <span>Scanner not recently seen; target pending or unverified</span> }
                                         else if (ir.Assumed != ir.Target) { <span>Pending; assumed @ir.Assumed°C</span> }
                                         else { <span>Assumed @ir.Assumed°C; not verified</span> }
+                                        @if (ir?.ProtocolVersion == 2) { <span> Attendance power requested @(ir.DesiredPower ? "ON" : "OFF"); assumed @(ir.AssumedPower is null ? "unknown" : ir.AssumedPower.Value ? "ON" : "OFF")@(ir.AssumedPower != ir.DesiredPower ? " (pending)" : ""); not verified.</span> }
                                     </td>
                                     <td><span class='status-badge @AcStatusBadge(room.AcStatus)'>@AcStatusLabel(room.AcStatus)</span></td>
                                     <td class="table-actions">
@@ -574,17 +576,17 @@
 {
     <div class="modal-backdrop" @onclick="ClearTeacherForm">
         <section class="dialog-card form-dialog" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
-            @if (editingTeacherId == 0 && teacherOtpStep)
+            @if (teacherOtpStep)
             {
                 <span class="eyebrow">VERIFY MOBILE</span>
-                <h2>Enter registration OTP</h2>
-                <p class="form-help">OTP was sent to <strong>@newTeacherPhone</strong>. @RegistrationOtp.SentHelpMessage</p>
+                <h2>Verify mobile number</h2>
+                <p class="form-help">A verification code was submitted to <strong>@newTeacherPhone</strong>. It expires after five minutes.</p>
                 <div class="form-grid">
-                    <label>One-time password<input @bind="teacherRegistrationOtp" maxlength="4" inputmode="numeric" pattern="[0-9]*" placeholder="0000" autocomplete="one-time-code" /></label>
+                    <label>One-time password<input @bind="teacherRegistrationOtp" maxlength="6" inputmode="numeric" pattern="[0-9]*" placeholder="6-digit code" autocomplete="one-time-code" /></label>
                 </div>
                 <div class="dialog-actions">
                     <button class="secondary-button" @onclick="BackFromTeacherOtp">Back</button>
-                    <button class="primary-button" @onclick="SaveTeacher">Verify &amp; save teacher</button>
+                    <button class="primary-button" disabled="@teacherOtpBusy" @onclick="SaveTeacher">Verify &amp; save teacher</button>
                 </div>
             }
             else
@@ -602,7 +604,7 @@
                 </div>
                 <div class="dialog-actions">
                     <button class="secondary-button" @onclick="ClearTeacherForm">Cancel</button>
-                    <button class="primary-button" @onclick="SaveTeacher">@(editingTeacherId == 0 ? "Continue" : "Update teacher")</button>
+                    <button class="primary-button" disabled="@teacherOtpBusy" @onclick="SaveTeacher">@(editingTeacherId == 0 ? "Continue" : "Update teacher")</button>
                 </div>
             }
         </section>
@@ -893,8 +895,19 @@
         <h2>Reconcile AC target</h2>
         <p>With the scanner stopped or awaiting reconciliation, use the AC remote to set the AC in <strong>@(classrooms.FirstOrDefault(room => room.Id == reconciliation.ClassroomId)?.Name ?? $"room {reconciliation.ClassroomId}")</strong> to <strong>@reconciliation.Target°C</strong>. Verify device <strong>@reconciliation.DeviceId</strong>.</p>
         <p>This records an assumption, not proof of the physical setpoint. Future missed IR signals or remote changes can cause drift.</p>
+        @if (reconciliation.ProtocolVersion == 2)
+        {
+            <p>Set the temperature while the AC is on, then physically verify its current power state. The scanner may toggle it to match the room status after confirmation.</p>
+            <label>Actual AC power
+                <select @bind="irReconciliationPower">
+                    <option value="">Select verified state</option>
+                    <option value="on">ON</option>
+                    <option value="off">OFF</option>
+                </select>
+            </label>
+        }
         <label><input type="checkbox" @bind="irReconciliationConfirmed" /> I have set and checked the AC at this target.</label>
-        <div class="dialog-actions"><button type="button" class="secondary-button" @onclick="CancelIrReconciliation">Cancel</button><button type="button" class="primary-button" disabled="@(!irReconciliationConfirmed || irReconciliationSaving)" @onclick="ConfirmIrReconciliation">Confirm</button></div>
+        <div class="dialog-actions"><button type="button" class="secondary-button" @onclick="CancelIrReconciliation">Cancel</button><button type="button" class="primary-button" disabled="@(!irReconciliationConfirmed || irReconciliationSaving || (reconciliation.ProtocolVersion == 2 && irReconciliationPower == ""))" @onclick="ConfirmIrReconciliation">Confirm</button></div>
     </section></div>
 }
 
@@ -907,11 +920,13 @@
     private IReadOnlyList<AcIrAdminSnapshot> irSnapshots = Array.Empty<AcIrAdminSnapshot>();
     private AcIrAdminSnapshot? irReconciliation;
     private bool irReconciliationConfirmed, irReconciliationSaving, irStatusUnavailable;
+    private string irReconciliationPower = "";
 
     private void BeginIrReconciliation(AcIrAdminSnapshot snapshot)
     {
         irReconciliation = snapshot;
         irReconciliationConfirmed = false;
+        irReconciliationPower = "";
     }
 
     private void CancelIrReconciliation()
@@ -929,7 +944,10 @@
         irReconciliationSaving = true;
         try
         {
-            if (!await IrAdministration.ReconcileAsync(user.Id, snapshot))
+            bool? power = snapshot.ProtocolVersion == 2
+                ? irReconciliationPower switch { "on" => true, "off" => false, _ => null }
+                : null;
+            if (!await IrAdministration.ReconcileAsync(user.Id, snapshot, power))
             {
                 Toast("Reconciliation failed: the device, room, target or state changed. Refresh and verify again.");
                 CancelIrReconciliation();
@@ -960,6 +978,8 @@
     private void DismissBuzzerTestStatus(long version) { if (version == buzzerTestStatusVersion) buzzerTestStatus = string.Empty; }
     private void DismissGsmTestStatus(long version) { if (version == gsmTestStatusVersion) gsmTestStatus = string.Empty; }
     private bool hasAdminDevicePin, sidebarOpen, isLoading, resetOpen, clearFingerprintsOpen, teacherModalOpen, teacherOtpStep, classroomModalOpen, deviceModalOpen, scheduleModalOpen, moveScheduleModalOpen, semesterModalOpen;
+    private bool teacherOtpBusy;
+    private string originalTeacherPhone = string.Empty;
     private bool deviceIsActive = true, deviceFingerprintEnrollmentEnabled = true, deviceAttendanceScanEnabled = true;
     private long editingTeacherId, editingClassroomId, editingDeviceId, scheduleTeacherId, scheduleClassroomId, scheduleSemesterId, enrollSemesterId, enrollTeacherId, deleteTargetId;
     private long? deviceClassroomId;
@@ -1662,7 +1682,7 @@
     private async Task SaveTeacher()
     {
         var wasCreate = editingTeacherId == 0;
-        if (wasCreate && !teacherOtpStep)
+        if (!teacherOtpStep && (wasCreate || !string.Equals(newTeacherPhone.Trim(), originalTeacherPhone, StringComparison.Ordinal)))
         {
             if (!MobilePhones.IsValid(newTeacherPhone))
             {
@@ -1676,15 +1696,27 @@
                 return;
             }
 
-            teacherOtpStep = true;
-            teacherRegistrationOtp = string.Empty;
-            Toast(RegistrationOtp.SentHelpMessage);
+            teacherOtpBusy = true;
+            try
+            {
+                var sent = await AuthService.RequestMobileOtpAsync(wasCreate ? null : editingTeacherId, newTeacherPhone);
+                if (!sent.Succeeded) { Toast(sent.Error ?? "Could not send verification code."); return; }
+                teacherOtpStep = true;
+                teacherRegistrationOtp = string.Empty;
+                Toast("Verification code submitted. Check the phone.");
+            }
+            catch (Exception exception)
+            {
+                Logger.LogError(exception, "Could not request teacher mobile verification.");
+                Toast("Could not request verification. Check the modem and configuration.");
+            }
+            finally { teacherOtpBusy = false; }
             return;
         }
 
         var result = wasCreate
             ? await AuthService.CreateTeacherAsync(new CreateTeacherRequest(newTeacherName, newTeacherUsername, newTeacherEmployeeNumber, string.IsNullOrWhiteSpace(newTeacherEmail) ? null : newTeacherEmail, newTeacherPhone, newTeacherPassword, string.IsNullOrWhiteSpace(newTeacherDevicePin) ? null : newTeacherDevicePin, teacherRegistrationOtp))
-            : await AuthService.UpdateAdminTeacherAsync(new UpdateAdminTeacherRequest(editingTeacherId, newTeacherName, newTeacherUsername, newTeacherEmployeeNumber, string.IsNullOrWhiteSpace(newTeacherEmail) ? null : newTeacherEmail, newTeacherPhone, string.IsNullOrWhiteSpace(newTeacherDevicePin) ? null : newTeacherDevicePin, string.IsNullOrWhiteSpace(newTeacherPassword) ? null : newTeacherPassword));
+            : await AuthService.UpdateAdminTeacherAsync(new UpdateAdminTeacherRequest(editingTeacherId, newTeacherName, newTeacherUsername, newTeacherEmployeeNumber, string.IsNullOrWhiteSpace(newTeacherEmail) ? null : newTeacherEmail, newTeacherPhone, string.IsNullOrWhiteSpace(newTeacherDevicePin) ? null : newTeacherDevicePin, string.IsNullOrWhiteSpace(newTeacherPassword) ? null : newTeacherPassword, teacherRegistrationOtp));
         if (!result.Succeeded) { Toast(result.Error ?? "Teacher could not be saved."); return; }
         ClearTeacherForm();
         await ReloadAsync();
@@ -1707,6 +1739,7 @@
         newTeacherEmployeeNumber = profile.EmployeeNumber ?? string.Empty;
         newTeacherEmail = profile.Email ?? string.Empty;
         newTeacherPhone = profile.Phone ?? string.Empty;
+        originalTeacherPhone = newTeacherPhone;
         newTeacherDevicePin = profile.DevicePin ?? string.Empty;
         newTeacherPassword = string.Empty;
         teacherOtpStep = false;
@@ -1721,6 +1754,7 @@
         newTeacherName = newTeacherEmployeeNumber = newTeacherUsername = newTeacherEmail = newTeacherPhone = newTeacherPassword = newTeacherDevicePin = teacherRegistrationOtp = string.Empty;
         teacherOtpStep = false;
         teacherModalOpen = false;
+        originalTeacherPhone = string.Empty;
     }
 
     private void OpenAddClassroom()

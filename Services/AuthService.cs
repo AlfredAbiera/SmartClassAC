@@ -16,6 +16,7 @@ public sealed class AuthService : IAuthService
     private readonly LoginAttemptLimiter _loginAttemptLimiter;
     private readonly SchoolTimeOptions _schoolTime;
     private readonly IConfiguration? _configuration;
+    private readonly IServiceProvider? _services;
     private AuthenticatedUser? _currentUser;
 
     public AuthService(
@@ -26,7 +27,8 @@ public sealed class AuthService : IAuthService
         IPasswordResetEmailSender passwordResetEmailSender,
         LoginAttemptLimiter loginAttemptLimiter,
         IOptions<SchoolTimeOptions> schoolTime,
-        IConfiguration? configuration = null)
+        IConfiguration? configuration = null,
+        IServiceProvider? services = null)
     {
         _accounts = accounts;
         _passwordHasher = passwordHasher;
@@ -36,6 +38,7 @@ public sealed class AuthService : IAuthService
         _loginAttemptLimiter = loginAttemptLimiter;
         _schoolTime = schoolTime.Value;
         _configuration = configuration;
+        _services = services;
     }
 
     public async Task<LoginResult> LoginAsync(string usernameOrEmail, string password)
@@ -198,6 +201,17 @@ public sealed class AuthService : IAuthService
         return result;
     }
 
+    public async Task<OperationResult> RequestMobileOtpAsync(long? teacherId, string phone)
+    {
+        var actor = _currentUser;
+        if (actor is null || actor.Role != UserRole.Admin && (actor.Role != UserRole.Teacher || teacherId != actor.Id))
+            return OperationResult.Failure("You are not authorized to request mobile verification.");
+        if (!MobilePhones.IsValid(phone)) return OperationResult.Failure(MobilePhones.RequirementMessage);
+        var purpose = actor.Role == UserRole.Teacher ? "self" : teacherId is null ? "create" : "admin";
+        if (_services is null) throw new InvalidOperationException("Mobile verification service is unavailable.");
+        return await _services.GetRequiredService<PortalMobileOtp>().IssueAsync(actor.Id, purpose, teacherId ?? 0, MobilePhones.Normalize(phone));
+    }
+
     public async Task<OperationResult> CreateTeacherAsync(CreateTeacherRequest request)
     {
         var authorization = RequireAdmin();
@@ -226,11 +240,6 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure(MobilePhones.RequirementMessage);
         }
 
-        if (!RegistrationOtp.Matches(request.RegistrationOtp))
-        {
-            return OperationResult.Failure(RegistrationOtp.RequirementMessage);
-        }
-
         if (!PasswordPolicy.MeetsRequirements(request.Password))
         {
             return OperationResult.Failure(PasswordPolicy.RequirementMessage);
@@ -244,7 +253,7 @@ public sealed class AuthService : IAuthService
             Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim(),
             Phone = MobilePhones.Normalize(request.Phone),
             DevicePin = string.IsNullOrWhiteSpace(request.DevicePin) ? null : DevicePinCodes.Normalize(request.DevicePin),
-            RegistrationOtp = null
+            VerificationActorId = _currentUser!.Id
         };
 
         if (cleanRequest.DevicePin is not null && !DevicePinCodes.IsValid(cleanRequest.DevicePin))
@@ -306,7 +315,8 @@ public sealed class AuthService : IAuthService
             EmployeeNumber = request.EmployeeNumber.Trim(),
             Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim(),
             Phone = MobilePhones.Normalize(request.Phone),
-            DevicePin = string.IsNullOrWhiteSpace(request.DevicePin) ? null : DevicePinCodes.Normalize(request.DevicePin)
+            DevicePin = string.IsNullOrWhiteSpace(request.DevicePin) ? null : DevicePinCodes.Normalize(request.DevicePin),
+            VerificationActorId = _currentUser!.Id
         };
 
         if (cleanRequest.DevicePin is not null && !DevicePinCodes.IsValid(cleanRequest.DevicePin))

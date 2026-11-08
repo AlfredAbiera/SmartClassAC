@@ -10,6 +10,10 @@ Fingerprint terminals (ESP32 + Adafruit sensor) identify teachers through a **de
 
 ## Table of contents
 
+Detailed guides: [Portal process flow](docs/PORTAL_PROCESS_FLOW.md) ·
+[Firmware process flow](docs/FIRMWARE_PROCESS_FLOW.md) ·
+[Data model and relationships](docs/DATA_MODEL.md).
+
 1. [Tech stack](#tech-stack)
 2. [Prerequisites](#prerequisites)
 3. [Quick start](#quick-start)
@@ -142,6 +146,70 @@ dotnet user-secrets set "DeviceApi:ApiKey" "dev-device-key-smartclass" --project
 6. Open `/first-access`, then `/login`.
 
 For a deployed app, set environment variables such as `ConnectionStrings__SmartClassMariaDb`, `DefaultAdmin__Username`, `DefaultAdmin__Password`, and `DeviceApi__ApiKey`.
+
+### Optional device features: Development PowerShell commands
+
+Run these commands in PowerShell from the repository root (`D:\SmartClassAC`).
+They configure **Development User Secrets for this Windows user**; they do not
+change another user's settings or a deployed portal's configuration. Enable
+only the features you intend to use. Restart the portal after changing settings
+and check that migrations have completed; a running process or environment
+variable can use different values.
+
+The authenticated features below also require the fleet API key, a stable
+`EnrollmentSecurity:MasterKey`, and an individually provisioned scanner key.
+Faculty OTP additionally requires its own stable `FacultyOtp:Secret` and a
+configured GSM modem. See the enrollment and Faculty OTP sections below before
+enabling them. Do **not** overwrite or regenerate existing secrets when
+enabling flags: changing the master key can make provisioned scanner keys
+unavailable, and changing the OTP secret invalidates outstanding codes.
+
+**Faculty login, schedule menu, and scanner temperature target** (each line
+enables the indicated feature; the menu and target also require login):
+
+```powershell
+dotnet user-secrets set "FacultyOtp:EnableDeviceApi" "true" --project .\SmartClassAC.csproj
+dotnet user-secrets set "FacultyOtp:EnableMenuApi" "true" --project .\SmartClassAC.csproj
+dotnet user-secrets set "FacultyOtp:EnableAcTargetApi" "true" --project .\SmartClassAC.csproj
+```
+
+**AC IR and attendance power toggle:**
+
+```powershell
+dotnet user-secrets set "AcIr:EnableDeviceApi" "true" --project .\SmartClassAC.csproj
+dotnet user-secrets set "AcIr:EnablePowerToggle" "true" --project .\SmartClassAC.csproj
+```
+
+The power flag is global and disables the legacy IR routes. Upgrade **all**
+scanners that use IR to power-capable firmware first; source 1.6.60 defaults
+to the v2 protocol. A v2 scanner cannot synchronize IR until both portal flags
+are enabled. Apply migration `042`, restart the portal and scanner, and have an
+admin physically verify the AC target and ON/OFF state in **AC control →
+Reconcile**. A toggle may be sent after confirmation. A transmitted signal
+does not prove the AC received it.
+
+**Experimental fingerprint enrollment and inventory:** enable these only for a
+deliberately validated Development deployment with compatible firmware and the
+enrollment safeguards described below. Enabling the API does not itself enable
+firmware writes; scanner source 1.6.61 enables guarded enrollment writes by
+default.
+
+```powershell
+dotnet user-secrets set "EnrollmentSecurity:EnableOperationApi" "true" --project .\SmartClassAC.csproj
+dotnet user-secrets set "EnrollmentSecurity:EnableClaimApi" "true" --project .\SmartClassAC.csproj
+dotnet user-secrets set "EnrollmentSecurity:EnableFinishApi" "true" --project .\SmartClassAC.csproj
+dotnet user-secrets set "EnrollmentSecurity:EnableRecoveryApi" "true" --project .\SmartClassAC.csproj
+dotnet user-secrets set "EnrollmentSecurity:EnableInventoryApi" "true" --project .\SmartClassAC.csproj
+```
+
+To disable a flag, repeat its command with `"false"` instead of `"true"`.
+Changing the IR power flag also requires restarting the scanner and physically
+reconciling again; reverting to legacy mode requires legacy-compatible scanner
+firmware. Do not enable experimental replacement endpoints merely by analogy;
+their separate gates and incomplete recovery limitations are described below.
+For non-Development deployments, configure the equivalent names using `__`
+instead of `:` (for example `AcIr__EnablePowerToggle`) through the deployment's
+protected configuration. Outside Development, device APIs require HTTPS.
 
 ---
 
@@ -347,13 +415,13 @@ An internal write guard can durably mark a preparation as unresolved using a uni
 
 The legacy enrollment API is disabled until a safe enrollment workflow is implemented; for a recognized device it returns HTTP 503. Existing fingerprint scan mappings remain global, not device-specific, so do not use multiple scanners for legacy attendance. The new completion path binds its future mappings to the original scanner, and the binding survives scanner deletion; it does not synchronize templates or make it safe to replace a scanner. Migration 020 is required for fingerprint lookups; if absent, they fail instead of bypassing bindings. Explicit replacement is not yet available. The new template encryption component is not connected to enrollment or storage, and does not provide encrypted device transport or synchronization.
 
-The server and firmware also contain a matching enrollment message-authentication primitive, used by the experimental recovery, claim, and finish endpoints, not as encryption. It authenticates a message's direction, device ID, operation, challenge, and SHA-256 body digest with HMAC-SHA-256. It does **not** encrypt data or prevent replay by itself: the protocol uses per-scanner keys, single-use challenges, authenticated responses, and durable recovery state. Do not send PINs, secrets, or biometric data using this primitive as a substitute for encrypted transport. Firmware 1.6.20 contains the client and checked sensor adapters, but enrollment writes remain disabled by default.
+The server and firmware also contain a matching enrollment message-authentication primitive, used by the experimental recovery, claim, and finish endpoints, not as encryption. It authenticates a message's direction, device ID, operation, challenge, and SHA-256 body digest with HMAC-SHA-256. It does **not** encrypt data or prevent replay by itself: the protocol uses per-scanner keys, single-use challenges, authenticated responses, and durable recovery state. Do not send PINs, secrets, or biometric data using this primitive as a substitute for encrypted transport. Firmware 1.6.20 contains the client and checked sensor adapters; enrollment writes are enabled by default starting with source 1.6.61.
 
 An internal challenge store generates 32-byte random challenges, stores only their hashes, expires them after two minutes, and atomically consumes a matching challenge after MAC verification. It limits each active paired device to 16 outstanding challenges, and survives process restarts. Recovery challenges do not issue write permissions. Claim challenges are consumed transactionally with admin-consent validation and write-guard creation. The outstanding-challenge cap is not production-grade rate limiting and can be exhausted by anyone with the shared fleet key. All enrollment APIs below remain disabled by default.
 
 The authenticated completion route binds a `finish` challenge and MAC to the preparation, operation, slot, and confirmed state, loads the scanner's stored key, and consumes the challenge in the same transaction as the mapping and receipt. A failed transaction leaves the challenge available until expiry; successful retries require a fresh challenge and return a signed completed receipt. Migration 022 records the slot in new completion receipts; older receipts without a slot cannot be authenticated through this route. It relies on the firmware's confirmed journal and checked sensor acknowledgement; one enrollment succeeded on hardware, but interrupted-write recovery has not been tested on hardware.
 
-Experimental enrollment operation, claim, finish, and recovery endpoints are available and disabled by default: `POST /api/device/enrollment/operation` (`EnrollmentSecurity:EnableOperationApi`), `POST /api/device/enrollment/claim/challenge` and `POST /api/device/enrollment/claim` (`EnrollmentSecurity:EnableClaimApi`), `POST /api/device/enrollment/finish/challenge` and `POST /api/device/enrollment/finish` (`EnrollmentSecurity:EnableFinishApi`), and the recovery challenge/response endpoints (`EnrollmentSecurity:EnableRecoveryApi`). They require the shared fleet API key. To activate them for local development, set all four flags to `true` in Development User Secrets, configure a persistent random 32-byte Base64 `EnrollmentSecurity:MasterKey`, and restart the app. HTTP is allowed only in the Development environment; other environments reject HTTP with status 426 before device authentication or protocol processing. HTTP exposes device keys to anyone able to observe the development network, so use only on a trusted LAN. The operation endpoint returns only the selected scanner's currently eligible, admin-consented preparation; it does not consume consent. A claim additionally requires the scanner's unique key and a fresh, single-use `claim` challenge, and atomically consumes consent while creating the write guard. The signed claim response is the firmware's authorization gate, not evidence that a sensor write succeeded. The finish request is accepted only with the scanner key and a fresh challenge; the server atomically commits the mapping and receipt, then signs `preparationId\noperationId\nslot\ncompleted\n`. Recovery reports an exact scanner, preparation, operation, and slot as `unresolved` or `completed`; a verified completed state plus an occupied slot allows firmware to clear its retained journal after a lost finish response. Firmware checks and handles an existing journal before requesting a new operation, avoids recovery calls when no journal exists, verifies recovery, claim, and finish responses, and runs the checked flow only when compiled with `ENROLLMENT_WRITES_ENABLED=1`. The default firmware build sets the flag to `0`. One enrollment and attendance scan succeeded on the opt-in 1.6.20 build on COM9.
+Experimental enrollment operation, claim, finish, and recovery endpoints are available and disabled by default: `POST /api/device/enrollment/operation` (`EnrollmentSecurity:EnableOperationApi`), `POST /api/device/enrollment/claim/challenge` and `POST /api/device/enrollment/claim` (`EnrollmentSecurity:EnableClaimApi`), `POST /api/device/enrollment/finish/challenge` and `POST /api/device/enrollment/finish` (`EnrollmentSecurity:EnableFinishApi`), and the recovery challenge/response endpoints (`EnrollmentSecurity:EnableRecoveryApi`). They require the shared fleet API key. To activate them for local development, set all four flags to `true` in Development User Secrets, configure a persistent random 32-byte Base64 `EnrollmentSecurity:MasterKey`, and restart the app. HTTP is allowed only in the Development environment; other environments reject HTTP with status 426 before device authentication or protocol processing. HTTP exposes device keys to anyone able to observe the development network, so use only on a trusted LAN. The operation endpoint returns only the selected scanner's currently eligible, admin-consented preparation; it does not consume consent. A claim additionally requires the scanner's unique key and a fresh, single-use `claim` challenge, and atomically consumes consent while creating the write guard. The signed claim response is the firmware's authorization gate, not evidence that a sensor write succeeded. The finish request is accepted only with the scanner key and a fresh challenge; the server atomically commits the mapping and receipt, then signs `preparationId\noperationId\nslot\ncompleted\n`. Recovery reports an exact scanner, preparation, operation, and slot as `unresolved` or `completed`; a verified completed state plus an occupied slot allows firmware to clear its retained journal after a lost finish response. Firmware checks and handles an existing journal before requesting a new operation, avoids recovery calls when no journal exists, verifies recovery, claim, and finish responses, and runs the checked flow only when compiled with `ENROLLMENT_WRITES_ENABLED=1`. Source 1.6.61 enables this flag by default. One enrollment and attendance scan succeeded on the opt-in 1.6.20 build on COM9.
 
 The operation request contains `deviceId` and returns `preparationId`, `operationId`, and `slot` only while the matching admin consent is active. Each challenge request contains `deviceId`. The recovery request contains `deviceId`, `preparationId`, `operationId`, `slot`, `challenge`, `clientNonce`, and `tag`; challenge, client nonce, and tag are lowercase 64-character hexadecimal strings. The claim request contains `deviceId`, `preparationId`, `operationId`, `slot`, `occupied`, `challenge`, and `tag`. Firmware currently submits `occupied: false`; it never authorizes an occupied-slot replacement. Claim responses are signed over `preparationId\noperationId\nslot\nempty\ngranted\n`. The finish request contains `deviceId`, `preparationId`, `operationId`, `slot`, `challenge`, and `tag`; its signed request body is `preparationId\noperationId\nslot\nconfirmed\n`, and the server response adds `completed\n`. The scanner must generate a new unpredictable 32-byte client nonce for every recovery attempt and check that the signed response contains that exact nonce, even if an old server challenge is replayed. The authenticated recovery request body is ASCII `preparationId\noperationId\nslot\nclientNonce\n`, and its signed response body adds `unresolved\n` or `completed\n`. GUIDs are canonical lowercase, the slot is decimal, and every field ends with a newline. Errors are unsigned and must never be treated as success. A lost response requires a fresh challenge and nonce; the device must not blindly retry a claim because it creates a durable guard. These APIs do not encrypt traffic; the existing shared fleet key is exposed on plain HTTP, and the per-device key provisioning path is not production-ready.
 
@@ -363,7 +431,7 @@ An experimental USB-only provisioning path consists of `scripts\provision-enroll
 
 The local development setup now has a Base64 random 32-byte master key in User Secrets and a provisioned key for device `1000000005`; no key values are stored in the repository. There is no key rotation/recovery procedure. Back up the master key separately: losing it prevents recovery of stored scanner keys, and changing it is rejected. After reset or scanner replacement, do not erase or re-pair the device until a safe key recovery process exists. This storage does not encrypt network traffic or protect keys from a compromised server.
 
-For the interim workflow, use one physical scanner for both teacher enrollment and attendance in its assigned classroom. Development route flags are enabled in local User Secrets, and the opt-in write-enabled firmware is installed on COM9; the application must be started in Development for HTTP enrollment routes to work. Device `1000000005` has a verified protocol key and completed one manual enrollment and attendance scan; automatic slot allocation and the keypad enrollment entry have not yet been validated end-to-end on hardware. Do not treat fingerprints enrolled locally by diagnostic sketches as teacher enrollments: they have no corresponding server mapping and an existing legacy mapping for the same slot could identify a different teacher. The device previously reported sensor slots 2 and 3 occupied; do not replace or clear them. Before enrollment, confirm the intended teacher, finger, scanner, and automatically reserved slot.
+For the interim workflow, use one physical scanner for both teacher enrollment and attendance in its assigned classroom. Development route flags must be enabled in local User Secrets, and the application must be started in Development for HTTP enrollment routes to work. Verify the firmware actually installed on the scanner: source changes do not update a device until built and uploaded. Device `1000000005` has a verified protocol key and completed one manual enrollment and attendance scan; automatic slot allocation and the keypad enrollment entry have not yet been validated end-to-end on hardware. Do not treat fingerprints enrolled locally by diagnostic sketches as teacher enrollments: they have no corresponding server mapping and an existing legacy mapping for the same slot could identify a different teacher. The device previously reported sensor slots 2 and 3 occupied; do not replace or clear them. Before enrollment, confirm the intended teacher, finger, scanner, and automatically reserved slot.
 
 After migration `016` has been applied and the updated app is running, an admin can block a slot under **System settings → Block a sensor slot**. A block prevents attendance matching for that slot on every scanner, without changing its server mapping or sensor contents. Blocks persist through fingerprint clears and resets; the portal does not yet support unblocking. Do not unblock by editing the database unless the physical slot and its mapping have been verified and a safe replacement procedure is available. If migration `016` is missing, fingerprint matching fails rather than bypassing the block.
 
@@ -379,7 +447,7 @@ Admins can permanently delete a device after ending any active session and turni
 
 **Server health:** firmware `1.2.9+` polls `GET /health` every 30s (and on boot / WiFi reconnect / Serial `HEALTH`). Idle LCD (firmware `1.2.14+`) keeps **Ready to scan** on row 1 and shows **Offline** on row 2 when WiFi is up but SmartClass is unreachable (or WiFi is down); fingerprint scans are blocked until health returns Healthy (HTTP 200).
 
-**Attendance vs AC re-entry:** the first in-window scan creates one attendance session (`started` → AC Cooling). A second scan ends it (`ended` → sets **time-out**, AC Off). Further scans **in the same schedule window** reuse that attendance row: `ac_on` reopens it (clears time-out, status Active, AC on); the next scan is `ended` again and **updates time-out** to now. Outside the window, scans return `no_schedule`. When the window ends, reconcile turns `Cooling` rooms **Off immediately** unless another schedule for that room is still in-window (does not auto-clear `Remote` / `Override`). Open attendance without logout is still force-closed later as **Missing time-out** after `MissingTimeOutGraceMinutes`.
+**Attendance vs AC re-entry:** the first in-window scan creates one attendance session (`started` → AC Cooling); the next ends it and records time-out. The room remains on if a different class is active or currently scheduled, otherwise it turns off, even if the ending class's own window remains open. A further scan in the same window reopens that attendance row regardless of the room's existing AC status; the next scan ends it again. Outside the window, scans return `no_schedule`. Automatic missing-time-out closure applies the same overlap rule. Reconciliation clears attendance power when no active session or in-window schedule remains; `Remote` / `Override` status is not automatically cleared.
 
 ### Device PIN
 
@@ -454,7 +522,7 @@ sequenceDiagram
 
 1. **Config** — `baseUrl` (e.g. `http://192.168.x.x:5062`), `deviceApiKey`, remove old `:3001/attendance`.
 2. **HTTP** — JSON POST, `X-Device-Api-Key`, parse `ok` / `action` from the body.
-3. **Enroll** — firmware `1.6.22` checks for pending recovery first, then can fetch an active admin-consented operation and run the checked capture/claim/journal/finish flow only when compiled with `ENROLLMENT_WRITES_ENABLED=1`; the default build sets it to `0`. After reserving an automatically selected slot and recording consent in the portal, press `#`, select **Admin**, enter the device admin PIN, then select **Enroll finger** on the keypad within five minutes. Follow the LCD prompts. A pending or uncertain result requires investigation; do not remove guards or blocks manually. Serial `ENROLL` remains available for diagnostics. To produce an opt-in build without changing the safe default, compile with `arduino-cli compile --fqbn esp32:esp32:esp32 --build-property "compiler.cpp.extra_flags=-DENROLLMENT_WRITES_ENABLED=1" .\smartclass`.
+3. **Enroll** — firmware checks for pending recovery first, then can fetch an active admin-consented operation and run the checked capture/claim/journal/finish flow only when compiled with `ENROLLMENT_WRITES_ENABLED=1`; source 1.6.61 enables it by default. After reserving an automatically selected slot and recording consent in the portal, press `#`, select **Admin**, enter the device admin PIN, then select **Enroll finger** on the keypad within five minutes. Follow the LCD prompts. A pending or uncertain result requires investigation; do not remove guards or blocks manually. Serial `ENROLL` remains available for diagnostics. To disable enrollment and inventory in a build, pass `--build-property "compiler.cpp.extra_flags=-DENROLLMENT_WRITES_ENABLED=0"` to `arduino-cli compile`.
 4. **Scan** — On match, `POST` scan; `started`/`ac_on` → AC ON; `ended`/`ac_off` → AC OFF; deny paths do **not** flip AC.
 5. **AC** — LCD icons; optional `#define AC_RELAY_PIN -1` for a physical relay later. Desired state also comes from Admin remote on/off via `/api/device/status` poll.
 6. **Temperature** — DHT for LCD idle display only (optional later: send room temp on scan).
@@ -487,7 +555,7 @@ Companion project: `SmartClassAC-ESP32/smartclass/` (`smartclass.ino`).
 
 | Constant | Purpose |
 |----------|---------|
-| `FIRMWARE_VERSION` | Sketch semver (source currently `1.6.53`) |
+| `FIRMWARE_VERSION` | Sketch semver (source currently `1.6.61`) |
 | `ssid` / `password` | Wi-Fi |
 | `baseUrl` | PC running SmartClass, e.g. `http://192.168.x.x:5062` |
 | `deviceApiKey` | Same as `DeviceApi:ApiKey` |
@@ -504,7 +572,7 @@ Serial Monitor **115200**:
 | `GSM` | Repeat the SIM900L modem, SIM, network-registration, and signal checks |
 | `ENROLL` | Default build reports enrollment disabled; the gated flow runs only in an explicitly enabled test/deployment build |
 
-At boot, firmware checks the SIM900L before starting Wi-Fi. In Serial Monitor at **115200**, confirm `GSM modem AT: OK`, `SIM card: READY`, and `Network registration: REGISTERED`; `AT+CSQ` output reports signal quality (`99` means unknown/unavailable). The firmware also queries `AT+CNUM` and logs the phone number if the SIM/network provides it; many SIMs do not store this number, so an unavailable number is not a modem failure. The registration check waits up to 30 seconds, then continues boot. Firmware 1.6.47 no longer sends the boot status SMS; earlier versions may still send it. The manual `GSM` command reruns diagnostics.
+The current sketch does not automatically run the SIM900L startup check; the call is commented out. Use the `GSM` serial command to run diagnostics at **115200** and check modem, SIM, network registration and signal quality (`99` means unknown/unavailable). The firmware also queries `AT+CNUM` and may log a phone number if the SIM/network provides it; do not share that output. Firmware 1.6.47 no longer sends the boot status SMS; earlier versions may still send it. The portal's SMS transport uses a separate server-connected modem.
 
 Power the SIM900L from a supply appropriate for the exact module/breakout; cellular transmit bursts can require high current, so do not assume the ESP32 3.3 V pin can power it. Share ground with the ESP32, cross TX/RX as shown above, and verify the board's UART logic-level compatibility before connecting GPIO19 to the modem RX.
 
@@ -512,7 +580,24 @@ The portal's separate **GSM settings** view can list Windows COM ports and save 
 
 Administrators can use **System → GSM settings → Test SMS** to send the fixed message “SmartClassAC modem test message.” Enter an `09xxxxxxxxx` recipient, save and verify the modem port and baud rate, then explicitly confirm the recipient and port before sending. Standard SMS charges may apply. This test uses the saved modem settings independently of Faculty OTP configuration and does not issue an OTP. If delivery is uncertain, check the phone before attempting another send.
 
-The Faculty OTP store (migration `036`) reserves six-digit codes for five minutes, activates them only after modem acceptance, limits requests to three per phone and ten per scanner in a five-minute fixed window, and allows at most five guesses and one successful use. Codes and phone numbers are represented by keyed digests in the OTP tables; verification rechecks the teacher's current status and phone. The device API is **disabled by default** (`FacultyOtp:EnableDeviceApi`). Firmware source `1.6.53` replaces the demo Faculty ID/PIN with an 11-digit mobile number and six-digit SMS code, verifies the signed response before allowing access, and fails closed if the API is unavailable. It has been compiled but not uploaded or hardware-tested; previously installed firmware may still have the insecure demo login. Teacher-registration OTP remains a separate stub.
+The Faculty OTP store (migration `036`) reserves six-digit codes for five minutes, activates them only after modem acceptance, limits requests to three per phone and ten per scanner in a five-minute fixed window, and allows at most five guesses and one successful use. Codes and phone numbers are represented by keyed digests in the OTP tables; verification rechecks the teacher's current status and phone. The device API is **disabled by default** (`FacultyOtp:EnableDeviceApi`). Firmware source `1.6.53` replaces the demo Faculty ID/PIN with an 11-digit mobile number and six-digit SMS code, verifies the signed response before allowing access, and fails closed if the API is unavailable. It has been compiled but not uploaded or hardware-tested; previously installed firmware may still have the insecure demo login.
+
+Portal teacher registration and mobile changes use a separate SMS verification
+workflow (migration `043`), not the scanner OTP endpoints. Configure the GSM
+modem under **System → GSM settings** and retain a stable random 32-byte
+Base64 `FacultyOtp:Secret` in protected configuration. The admin receives a
+six-digit code at the proposed number when creating a teacher or changing that
+number; a teacher changing their own number follows the same flow. Other profile
+edits do not need an OTP. Codes expire in five minutes, allow five guesses, and
+are bound to the signed-in actor, operation, teacher (for updates), and proposed
+number. Limits are three requests per number and ten per actor in five minutes,
+separate from scanner limits. Successful verification and the account change
+commit together. A failed, uncertain, expired or superseded SMS submission
+cannot authorize the change. Modem acceptance does not guarantee delivery;
+check the handset before retrying an uncertain submission. Existing teacher
+numbers are not retroactively verified. Seeded demo accounts bypass the portal
+registration workflow and must not be used as evidence of verified ownership.
+The GSM workflow has been tested with a simulated modem, not live SMS.
 
 Faculty OTP failure logs report the modem result and whether the reservation was updated, without phone numbers or codes. `DeliveryUnknown` means the message may have been submitted, but its OTP is not activated; check the handset before another request. `Unavailable` indicates a port or communication failure, `Rejected` a modem rejection before submission, and `Accepted` with an unchanged reservation can mean the request was superseded or expired, or the device became ineligible before activation. The device's generic request response does not confirm SMS delivery.
 
@@ -524,15 +609,19 @@ Administrators can set a classroom's inclusive teacher minimum (16–30°C; migr
 
 New rooms no longer initialize `current_temperature` from the target, and target commands no longer overwrite it. Earlier stored values may have been copied from targets and are not reliable measurements; the dashboard overview displays the explicitly labeled target instead.
 
-Experimental IR synchronization is disabled by default in portal configuration (`AcIr:EnableDeviceApi`); the current sketch sets `AC_IR_ENABLED=1`. The source uses GPIO23 with IRremoteESP8266 and NEC 32-bit up `0x08E7A857` and down `0x08E7906F`. These relative commands cannot verify AC reception or its physical setpoint: missed commands or another remote can cause drift, so the minimum is not guaranteed physically. IR temperature commands do not implement AC power on/off. Verify the IR module's wiring, 3.3V input compatibility and power requirements, and test with the actual AC before use. The sketch has been compiled with IR enabled but not uploaded or hardware-tested.
+Experimental IR synchronization is disabled by default in portal configuration (`AcIr:EnableDeviceApi`); the current sketch sets `AC_IR_ENABLED=1`. The source uses GPIO23 with IRremoteESP8266 and NEC 32-bit up `0x08E7A857` and down `0x08E7906F`. These relative commands cannot verify AC reception or its physical setpoint: missed commands or another remote can cause drift, so the minimum is not guaranteed physically. Verify the IR module is a suitable transmitter, its wiring, 3.3V input compatibility and power requirements before use.
 
-The companion firmware repository includes a separate `ir_receiver_diagnostic` sketch for an IdeaSpark ESP32 with an integrated ST7789 display and a 38 kHz IR receiver on GPIO13. It displays received IR codes on the TFT and Serial Monitor and labels the two SmartClass temperature commands; see its README for wiring and use. It cannot confirm reception or temperature at the actual AC.
+The companion firmware repository includes a separate `ir_receiver_diagnostic` sketch for an IdeaSpark ESP32 with an integrated ST7789 display and a 38 kHz IR receiver on GPIO13. It labels the temperature commands and power toggle; see its README for wiring and use. It cannot confirm reception or state at the actual AC.
 
 Firmware source `1.6.57` runs periodic health, room-status, and buzzer network requests in a background task to keep the keypad responsive during number and code entry. User-initiated requests, such as submitting an OTP or changing a target, can still take time and show a waiting message. If the background task cannot start, the scanner logs an error and falls back to blocking polling. Network delays, other blocking scanner operations, and offline periods can still delay or miss buzzer reminders.
 
 Migration `039` stores the boot, assumed setpoint, pending step and audit history. After every scanner restart, an administrator must use the remote to set the assigned AC to the current portal target and confirm it under **AC control → Reconcile**. The confirmation is tied to that boot, room and unchanged target. A relative step is recorded as in flight before it can be transmitted; an unknown claim or acknowledgement halts the scanner until restart and reconciliation, rather than retrying. Reassignment, deactivation, re-pairing, deletion, room retirement and reset are blocked while a step is in flight; otherwise changing assignment or pairing, deactivating the scanner, or retiring its room invalidates its IR state and requires a fresh boot. The AC control page distinguishes reconciliation, pending, uncertain and not-recently-seen states; its two-minute heartbeat is not proof the scanner is online. Apply migration `039` before deploying this portal version even if IR is disabled, because device and classroom management checks the IR state.
 
 Firmware source `1.6.58` checks for pending IR steps every five seconds while on the normal scanning screen, instead of every ten seconds. Exit the Faculty menu after saving a target to allow IR polling. Network authentication and other scanner work add delay; each degree requires a separately claimed and acknowledged step. More frequent polling increases server requests and still does not verify physical AC reception.
+
+**Experimental attendance power toggle:** migration `042` adds an attendance-derived desired power state, an assumed power state and guarded in-flight toggle. Apply migrations before deploying this portal. Scanner source `1.6.60` enables `AC_IR_POWER_ENABLED=1` by default; all scanners must use power-capable firmware compiled with that flag enabled, and the portal must have both `AcIr:EnableDeviceApi=true` and `AcIr:EnablePowerToggle=true`. The portal flags remain off by default. A v2 scanner cannot synchronize IR with a portal that has power toggle disabled; the portal power flag globally disables legacy IR routes, so old scanners cannot synchronize IR until upgraded or the flag is turned off. Switching protocol versions requires a fresh scanner restart. Firmware source `1.6.60` has not been uploaded or physically tested as part of this change.
+
+After each restart, an admin must set the AC to the target temperature with its remote, physically verify whether it is ON or OFF, and select that state in **AC control → Reconcile**. Reconciliation can immediately result in a toggle if the confirmed state differs from attendance demand. The NEC `0x08E700FF` command is one toggle, not separate ON/OFF codes; a missed signal or manual remote use can invalidate the assumption. After any uncertain claim or completion, restart and physically reconcile; never retry the toggle blindly. Temperature steps wait while assumed power is off. Admin/teacher Remote or Override controls retain their existing room/relay behavior and are not IR power-toggle requests. Neither server acknowledgment nor the diagnostic receiver proves that the AC received or applied a signal.
 
 Migration `038` adds a five-minute scanner-bound teacher session. Session creation consumes a delivered OTP atomically and stores only a hash of a random token; session lookup rechecks the paired scanner, pairing timestamp, active teacher and phone. An authenticated query returns only that teacher's schedules for the current school date, across classrooms. These menu routes are separately gated by `FacultyOtp:EnableMenuApi` (default false) in addition to `FacultyOtp:EnableDeviceApi`. Scanner target changes additionally require `FacultyOtp:EnableAcTargetApi` (default false). Firmware source `1.6.53` has been compiled but not uploaded or hardware-tested; validate the complete deployment before enabling menu flags.
 
@@ -622,7 +711,7 @@ In-window start/end at seed time ≈ **now − 1h** through **now + 2h** so fing
 6. Scan `1` in Maria’s window → `started`; scan again → `ended`; scan again while still in window → `ac_on` (AC only).
 7. Scan `9999` → `unknown`.
 8. Admin AC target on Computer Lab → temperature log row.
-9. Admin add teacher — mobile `09xxxxxxxxx` required; email optional; registration OTP step accepts **0000**.
+9. Admin add teacher — mobile `09xxxxxxxxx` required; email optional; registration requires SMS OTP verification.
 
 ---
 
@@ -720,7 +809,7 @@ option does not keep the user signed in.
 
 ## Admin and teacher workflow
 
-**Admin:** create/edit teachers (name, employee number, username, **required mobile** `09xxxxxxxxx`, optional email, optional device PIN and password; **active/inactive** status — only active teachers appear when creating schedules or enrolling in a semester; **new teachers** confirm a registration OTP — stub code **0000** until SMS is wired), **semesters** (enroll teachers), classrooms, schedules with **Regular/Makeup** kind and optional **repeat through semester end** (None / Weekly / Mon–Wed / Tue–Thu / MWF / TTH / Custom weekdays — expands to one `class_schedules` row per date; conflicts are skipped and reported); **move** a single schedule to another date/time; system reset (`RESET`) / delete.
+**Admin:** create/edit teachers (name, employee number, username, **required mobile** `09xxxxxxxxx`, optional email, optional device PIN and password; **active/inactive** status — only active teachers appear when creating schedules or enrolling in a semester; new registrations and mobile-number changes require SMS OTP verification), **semesters** (enroll teachers), classrooms, schedules with **Regular/Makeup** kind and optional **repeat through semester end** (None / Weekly / Mon–Wed / Tue–Thu / MWF / TTH / Custom weekdays — expands to one `class_schedules` row per date; conflicts are skipped and reported); **move** a single schedule to another date/time; system reset (`RESET`) / delete.
 
 From **Admin → Classrooms**, select **View schedules** in the room's Schedules column to view its schedules, then move or delete individual entries. Current and future schedules must be moved or deleted before a classroom can be retired; device assignments are managed separately in Devices.
 

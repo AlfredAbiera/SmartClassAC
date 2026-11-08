@@ -128,8 +128,8 @@ public sealed record OperationResult(bool Succeeded, string? Error = null)
     public static OperationResult Failure(string error) => new(false, error);
 }
 
-public sealed record CreateTeacherRequest(string DisplayName, string Username, string EmployeeNumber, string? Email, string Phone, string Password, string? DevicePin = null, string? RegistrationOtp = null);
-public sealed record UpdateAdminTeacherRequest(long AccountId, string DisplayName, string Username, string EmployeeNumber, string? Email, string Phone, string? DevicePin, string? NewPassword);
+public sealed record CreateTeacherRequest(string DisplayName, string Username, string EmployeeNumber, string? Email, string Phone, string Password, string? DevicePin = null, string? RegistrationOtp = null, long VerificationActorId = 0);
+public sealed record UpdateAdminTeacherRequest(long AccountId, string DisplayName, string Username, string EmployeeNumber, string? Email, string Phone, string? DevicePin, string? NewPassword, string? MobileOtp = null, long VerificationActorId = 0);
 public sealed record TeacherDirectoryEntry(long Id, string DisplayName, string Username, string? EmployeeNumber, string? Email, string? Phone, int FingerprintTemplateCount, bool IsActive);
 public sealed record ClassroomEntry(long Id, string Name, int Capacity, int TargetTemperature, decimal? CurrentTemperature, string AcStatus, bool IsActive, int MinimumTemperature = 16);
 public sealed record CreateClassroomRequest(string Name, int Capacity, int TargetTemperature, int MinimumTemperature = 16);
@@ -293,7 +293,7 @@ public static class ScheduleRecurrence
 }
 
 public sealed record TeacherProfileEntry(long AccountId, string DisplayName, string Username, string? EmployeeNumber, string? Email, string? Phone, string? DevicePin, int FingerprintTemplateCount, bool IsActive = true);
-public sealed record UpdateTeacherProfileRequest(string DisplayName, string? Email, string Phone, string? DevicePin, string? NewPassword);
+public sealed record UpdateTeacherProfileRequest(string DisplayName, string? Email, string Phone, string? DevicePin, string? NewPassword, string? MobileOtp = null);
 
 public sealed record AttendanceLogEntry(
     long Id,
@@ -553,17 +553,6 @@ public static class MobilePhones
     public static string Normalize(string phone) => phone.Trim();
 }
 
-public static class RegistrationOtp
-{
-    /// <summary>Stub OTP accepted for all teacher registrations until real SMS delivery is wired.</summary>
-    public const string StubCode = "0000";
-    public const string RequirementMessage = "Enter the 4-digit OTP sent to the teacher's mobile number.";
-    public const string SentHelpMessage = "An OTP was sent to the mobile number. For development, use 0000.";
-
-    public static bool Matches(string? otp) =>
-        string.Equals(otp?.Trim(), StubCode, StringComparison.Ordinal);
-}
-
 public interface IUserAccountRepository
 {
     Task InitializeAsync(DefaultAdminOptions defaultAdmin, string passwordHash, CancellationToken cancellationToken);
@@ -668,6 +657,7 @@ public interface IAuthService
     Task<bool> IsInitialAdminSetupRequiredAsync();
     Task<OperationResult> CompleteInitialAdminSetupAsync(string email);
     Task<OperationResult> UpdateAdministratorCredentialsAsync(string email, string currentPassword, string? newPassword);
+    Task<OperationResult> RequestMobileOtpAsync(long? teacherId, string phone);
     Task<OperationResult> CreateTeacherAsync(CreateTeacherRequest request);
     Task<OperationResult> UpdateAdminTeacherAsync(UpdateAdminTeacherRequest request);
     Task<IReadOnlyList<TeacherDirectoryEntry>> GetTeachersAsync();

@@ -12,6 +12,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
     private const string ConnectionStringName = "SmartClassMariaDb";
     private readonly string _connectionString;
     private readonly SchoolTimeOptions _schoolTime;
+    private readonly IConfiguration _configuration;
 
     public MariaDbUserAccountRepository(IConfiguration configuration, Microsoft.Extensions.Options.IOptions<SchoolTimeOptions> schoolTime)
     {
@@ -44,6 +45,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
 
         _connectionString = builder.ConnectionString;
         _schoolTime = schoolTime.Value;
+        _configuration = configuration;
     }
 
     public async Task InitializeAsync(DefaultAdminOptions defaultAdmin, string passwordHash, CancellationToken cancellationToken)
@@ -210,6 +212,12 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            if (request.VerificationActorId > 0 && !await PortalMobileOtp.ConsumeAsync(connection, transaction, _configuration,
+                request.VerificationActorId, "create", 0, request.Phone, request.RegistrationOtp, cancellationToken))
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return OperationResult.Failure("Invalid, expired, or unavailable verification code. Request a new code if needed.");
+            }
             await using var account = connection.CreateCommand();
             account.Transaction = transaction;
             account.CommandText = @"
@@ -255,6 +263,19 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            await using var existingPhone = connection.CreateCommand();
+            existingPhone.Transaction = transaction;
+            existingPhone.CommandText = "SELECT COALESCE(phone, '') FROM user_accounts WHERE id=@id AND role='Teacher' AND is_active=TRUE FOR UPDATE;";
+            existingPhone.Parameters.Add("@id", MySqlDbType.Int64).Value = request.AccountId;
+            var oldPhone = await existingPhone.ExecuteScalarAsync(cancellationToken) as string;
+            if (oldPhone is null) return OperationResult.Failure("The teacher account was not found.");
+            if (!string.Equals(oldPhone, request.Phone, StringComparison.Ordinal) &&
+                !await PortalMobileOtp.ConsumeAsync(connection, transaction, _configuration, request.VerificationActorId,
+                    "admin", request.AccountId, request.Phone, request.MobileOtp, cancellationToken))
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return OperationResult.Failure("Invalid, expired, or unavailable verification code. Request a new code if needed.");
+            }
             string? devicePin = null;
             if (!string.IsNullOrWhiteSpace(request.DevicePin))
             {
@@ -1242,7 +1263,22 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
     public async Task<OperationResult> UpdateTeacherProfileAsync(long accountId, UpdateTeacherProfileRequest request, string? passwordHash, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var existing = connection.CreateCommand();
+        existing.Transaction = transaction;
+        existing.CommandText = "SELECT COALESCE(phone, '') FROM user_accounts WHERE id=@id AND role='Teacher' AND is_active=TRUE FOR UPDATE;";
+        existing.Parameters.Add("@id", MySqlDbType.Int64).Value = accountId;
+        var oldPhone = await existing.ExecuteScalarAsync(cancellationToken) as string;
+        if (oldPhone is null) return OperationResult.Failure("Your teacher account was not found.");
+        if (!string.Equals(oldPhone, request.Phone, StringComparison.Ordinal) &&
+            !await PortalMobileOtp.ConsumeAsync(connection, transaction, _configuration, accountId, "self", accountId,
+                request.Phone, request.MobileOtp, cancellationToken))
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return OperationResult.Failure("Invalid, expired, or unavailable verification code. Request a new code if needed.");
+        }
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = passwordHash is null
             ? "UPDATE user_accounts SET display_name = @name, email = @email, phone = @phone, device_pin = @devicePin WHERE id = @id AND role = 'Teacher' AND is_active = TRUE;"
             : "UPDATE user_accounts SET display_name = @name, email = @email, phone = @phone, device_pin = @devicePin, password_hash = @passwordHash WHERE id = @id AND role = 'Teacher' AND is_active = TRUE;";
@@ -1254,7 +1290,10 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         if (passwordHash is not null) command.Parameters.Add("@passwordHash", MySqlDbType.VarChar).Value = passwordHash;
         try
         {
-            return await command.ExecuteNonQueryAsync(cancellationToken) == 1 ? OperationResult.Success() : OperationResult.Failure("Your teacher account was not found.");
+            var changed = await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+            if (!changed) return OperationResult.Failure("Your teacher account was not found.");
+            await transaction.CommitAsync(cancellationToken);
+            return OperationResult.Success();
         }
         catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
         {
@@ -1355,6 +1394,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 ?? throw new InvalidOperationException("Attendance log was not created."));
 
             await SetClassroomStatusAndLogAsync(connection, transaction, classroomId, teacherAccountId, "Cooling", "ClassStarted", null, SchoolNow(), cancellationToken);
+            await SetAttendanceIrPowerAsync(connection, transaction, classroomId, true, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return OperationResult.Success();
         }
@@ -1379,7 +1419,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             await using var end = connection.CreateCommand();
             end.Transaction = transaction;
             end.CommandText = @"
-                SELECT id, classroom_id FROM attendance_logs
+                SELECT id, classroom_id, class_schedule_id FROM attendance_logs
                 WHERE teacher_account_id = @teacherId AND time_out_utc IS NULL
                 ORDER BY time_in_utc DESC
                 LIMIT 1
@@ -1387,6 +1427,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             end.Parameters.Add("@teacherId", MySqlDbType.Int64).Value = teacherAccountId;
             long attendanceId;
             long classroomId;
+            long? scheduleId;
             await using (var reader = await end.ExecuteReaderAsync(cancellationToken))
             {
                 if (!await reader.ReadAsync(cancellationToken))
@@ -1397,6 +1438,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
 
                 attendanceId = reader.GetInt64(0);
                 classroomId = reader.GetInt64(1);
+                scheduleId = reader.IsDBNull(2) ? null : reader.GetInt64(2);
             }
 
             await using var complete = connection.CreateCommand();
@@ -1410,7 +1452,11 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             complete.Parameters.Add("@recordedAt", MySqlDbType.DateTime).Value = SchoolNow();
             await complete.ExecuteNonQueryAsync(cancellationToken);
 
-            await SetClassroomStatusAndLogAsync(connection, transaction, classroomId, teacherAccountId, "Off", "ClassEnded", null, SchoolNow(), cancellationToken);
+            var now = SchoolNow();
+            var keepOn = await AnotherClassNeedsAcAsync(connection, transaction, classroomId, scheduleId,
+                DateOnly.FromDateTime(now), TimeOnly.FromDateTime(now), cancellationToken);
+            await SetClassroomStatusAndLogAsync(connection, transaction, classroomId, teacherAccountId, keepOn ? "Cooling" : "Off", "ClassEnded", null, now, cancellationToken);
+            await SetAttendanceIrPowerAsync(connection, transaction, classroomId, keepOn, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return OperationResult.Success();
         }
@@ -1419,6 +1465,56 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             await transaction.RollbackAsync(cancellationToken);
             throw;
         }
+    }
+
+    private static async Task SetAttendanceIrPowerAsync(MySqlConnection connection, MySqlTransaction transaction,
+        long classroomId, bool on, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "UPDATE classrooms SET ir_attendance_power = @on WHERE id = @room;";
+        command.Parameters.Add("@on", MySqlDbType.Bool).Value = on;
+        command.Parameters.Add("@room", MySqlDbType.Int64).Value = classroomId;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<bool> AnotherClassNeedsAcAsync(MySqlConnection connection, MySqlTransaction transaction,
+        long classroomId, long? endedScheduleId, DateOnly schoolDate, TimeOnly schoolTime, CancellationToken cancellationToken)
+    {
+        await using var room = connection.CreateCommand();
+        room.Transaction = transaction;
+        room.CommandText = "SELECT id FROM classrooms WHERE id = @room FOR UPDATE;";
+        room.Parameters.Add("@room", MySqlDbType.Int64).Value = classroomId;
+        if (await room.ExecuteScalarAsync(cancellationToken) is null)
+            throw new InvalidOperationException("Attendance classroom no longer exists.");
+
+        await using var active = connection.CreateCommand();
+        active.Transaction = transaction;
+        active.CommandText = """
+            SELECT id FROM attendance_logs
+            WHERE classroom_id = @room AND (@ended IS NULL OR class_schedule_id IS NULL OR class_schedule_id <> @ended)
+              AND status = 'Active' AND time_out_utc IS NULL LIMIT 1 FOR UPDATE;
+            """;
+        active.Parameters.Add("@room", MySqlDbType.Int64).Value = classroomId;
+        active.Parameters.Add("@ended", MySqlDbType.Int64).Value = (object?)endedScheduleId ?? DBNull.Value;
+        if (await active.ExecuteScalarAsync(cancellationToken) is not null) return true;
+
+        await using var scheduled = connection.CreateCommand();
+        scheduled.Transaction = transaction;
+        scheduled.CommandText = """
+            SELECT s.id FROM class_schedules s
+            INNER JOIN semesters sem ON sem.id = s.semester_id AND sem.is_active = TRUE
+            INNER JOIN teacher_semesters e ON e.semester_id = s.semester_id AND e.teacher_account_id = s.teacher_account_id
+            WHERE s.classroom_id = @room AND (@ended IS NULL OR s.id <> @ended) AND s.schedule_date = @date
+              AND @date BETWEEN sem.start_date AND sem.end_date
+              AND @time >= s.start_time AND @time < s.end_time
+            LIMIT 1 FOR UPDATE;
+            """;
+        scheduled.Parameters.Add("@room", MySqlDbType.Int64).Value = classroomId;
+        scheduled.Parameters.Add("@ended", MySqlDbType.Int64).Value = (object?)endedScheduleId ?? DBNull.Value;
+        scheduled.Parameters.Add("@date", MySqlDbType.Date).Value = schoolDate;
+        scheduled.Parameters.Add("@time", MySqlDbType.Time).Value = schoolTime;
+        return await scheduled.ExecuteScalarAsync(cancellationToken) is not null;
     }
 
     public async Task<int> ReconcileAttendanceOutcomesAsync(DateOnly schoolDate, TimeOnly schoolTime, CancellationToken cancellationToken = default)
@@ -1434,7 +1530,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             await using var findMissing = connection.CreateCommand();
             findMissing.Transaction = transaction;
             findMissing.CommandText = @"
-                SELECT a.id, a.classroom_id, a.teacher_account_id
+                SELECT a.id, a.classroom_id, a.teacher_account_id, a.class_schedule_id
                 FROM attendance_logs a
                 INNER JOIN class_schedules s ON s.id = a.class_schedule_id
                 WHERE a.time_out_utc IS NULL
@@ -1451,12 +1547,12 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             findMissing.Parameters.Add("@schoolTime", MySqlDbType.Time).Value = schoolTime;
             findMissing.Parameters.Add("@missingGraceSeconds", MySqlDbType.Int32).Value = missingGraceSeconds;
 
-            var missingSessions = new List<(long AttendanceId, long ClassroomId, long TeacherId)>();
+            var missingSessions = new List<(long AttendanceId, long ClassroomId, long TeacherId, long ScheduleId)>();
             await using (var reader = await findMissing.ExecuteReaderAsync(cancellationToken))
             {
                 while (await reader.ReadAsync(cancellationToken))
                 {
-                    missingSessions.Add((reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2)));
+                    missingSessions.Add((reader.GetInt64(0), reader.GetInt64(1), reader.GetInt64(2), reader.GetInt64(3)));
                 }
             }
 
@@ -1473,16 +1569,19 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 close.Parameters.Add("@id", MySqlDbType.Int64).Value = session.AttendanceId;
                 close.Parameters.Add("@recordedAt", MySqlDbType.DateTime).Value = recordedAt;
                 changed += await close.ExecuteNonQueryAsync(cancellationToken);
+                var keepOn = await AnotherClassNeedsAcAsync(connection, transaction, session.ClassroomId,
+                    session.ScheduleId, schoolDate, schoolTime, cancellationToken);
                 await SetClassroomStatusAndLogAsync(
                     connection,
                     transaction,
                     session.ClassroomId,
                     session.TeacherId,
-                    "Off",
+                    keepOn ? "Cooling" : "Off",
                     "ClassEnded",
                     "Auto-closed: missing time-out",
                     recordedAt,
                     cancellationToken);
+                await SetAttendanceIrPowerAsync(connection, transaction, session.ClassroomId, keepOn, cancellationToken);
             }
 
             // Schedules that ended with no attendance punch → Absent.
@@ -1521,16 +1620,19 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             markAbsent.Parameters.Add("@recordedAt", MySqlDbType.DateTime).Value = recordedAt;
             changed += await markAbsent.ExecuteNonQueryAsync(cancellationToken);
 
-            // Turn Cooling Off as soon as no schedule is still in-window for the room
-            // (even if a teacher forgot to log out). Keep Cooling only when another class
-            // for that room is currently in its window. Remote / Override stay until explicit Off.
+            // Clear attendance power when neither an active session nor an in-window schedule remains.
+            // Remote / Override status remains until explicitly changed.
             await using var clearAc = connection.CreateCommand();
             clearAc.Transaction = transaction;
             clearAc.CommandText = @"
-                SELECT c.id
+                SELECT c.id, c.ac_status
                 FROM classrooms c
                 WHERE c.is_active = TRUE
-                  AND c.ac_status = 'Cooling'
+                  AND (c.ac_status = 'Cooling' OR c.ir_attendance_power = TRUE)
+                  AND NOT EXISTS (
+                        SELECT 1 FROM attendance_logs a
+                        WHERE a.classroom_id = c.id AND a.status = 'Active' AND a.time_out_utc IS NULL
+                  )
                   AND NOT EXISTS (
                         SELECT 1
                         FROM class_schedules s
@@ -1542,27 +1644,29 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 FOR UPDATE;";
             clearAc.Parameters.Add("@schoolDate", MySqlDbType.Date).Value = schoolDate;
             clearAc.Parameters.Add("@schoolTime", MySqlDbType.Time).Value = schoolTime;
-            var roomsToClear = new List<long>();
+            var roomsToClear = new List<(long Id, string Status)>();
             await using (var reader = await clearAc.ExecuteReaderAsync(cancellationToken))
             {
                 while (await reader.ReadAsync(cancellationToken))
                 {
-                    roomsToClear.Add(reader.GetInt64(0));
+                    roomsToClear.Add((reader.GetInt64(0), reader.GetString(1)));
                 }
             }
 
-            foreach (var classroomId in roomsToClear)
+            foreach (var roomToClear in roomsToClear)
             {
-                await SetClassroomStatusAndLogAsync(
-                    connection,
-                    transaction,
-                    classroomId,
-                    null,
-                    "Off",
-                    "ClassEnded",
-                    "Auto-off: schedule window ended",
-                    recordedAt,
-                    cancellationToken);
+                if (roomToClear.Status == "Cooling")
+                    await SetClassroomStatusAndLogAsync(
+                        connection,
+                        transaction,
+                        roomToClear.Id,
+                        null,
+                        "Off",
+                        "ClassEnded",
+                        "Auto-off: schedule window ended",
+                        recordedAt,
+                        cancellationToken);
+                await SetAttendanceIrPowerAsync(connection, transaction, roomToClear.Id, false, cancellationToken);
                 changed++;
             }
 
@@ -3649,6 +3753,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                     "Device DELETEALL: fingerprints cleared — session and AC reset",
                     recordedAt,
                     cancellationToken);
+                await SetAttendanceIrPowerAsync(connection, transaction, assignedClassroomId, false, cancellationToken);
             }
 
             await using (var clearPending = connection.CreateCommand())
@@ -3870,16 +3975,12 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 return null;
             }
 
-            var turnOn = currentStatus is not ("Cooling" or "Override" or "Remote");
-            var nextStatus = turnOn ? "Cooling" : "Off";
-            var action = turnOn ? "ac_on" : "ac_off";
-            var eventType = turnOn ? "AcReentryOn" : "AcReentryOff";
+            var nextStatus = "Cooling";
+            var action = "ac_on";
+            var eventType = "AcReentryOn";
             var recordedAt = SchoolNow();
-            var notes = turnOn
-                ? "In-window re-login: reopened attendance (cleared time-out)"
-                : "In-window logout: updated attendance time-out";
+            var notes = "In-window re-login: reopened attendance (cleared time-out)";
 
-            if (turnOn)
             {
                 // Relogin: reopen the schedule's attendance row so the teacher is Active again.
                 await using var reopen = connection.CreateCommand();
@@ -3902,28 +4003,6 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                     return null;
                 }
             }
-            else
-            {
-                // Logout while AC still Cooling but session already closed: refresh time-out to now.
-                await using var touchOut = connection.CreateCommand();
-                touchOut.Transaction = transaction;
-                touchOut.CommandText = @"
-                    UPDATE attendance_logs
-                    SET time_out_utc = @recordedAt,
-                        status = 'Completed',
-                        outcome = COALESCE(outcome, 'OnTime')
-                    WHERE class_schedule_id = @scheduleId
-                      AND teacher_account_id = @teacherId
-                      AND verification_method <> 'System'
-                      AND COALESCE(outcome, '') <> 'Absent'
-                    ORDER BY time_in_utc DESC
-                    LIMIT 1;";
-                touchOut.Parameters.Add("@scheduleId", MySqlDbType.Int64).Value = scheduleId;
-                touchOut.Parameters.Add("@teacherId", MySqlDbType.Int64).Value = teacherAccountId;
-                touchOut.Parameters.Add("@recordedAt", MySqlDbType.DateTime).Value = recordedAt;
-                await touchOut.ExecuteNonQueryAsync(cancellationToken);
-            }
-
             await SetClassroomStatusAndLogAsync(
                 connection,
                 transaction,
@@ -3934,6 +4013,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 notes,
                 recordedAt,
                 cancellationToken);
+            await SetAttendanceIrPowerAsync(connection, transaction, classroomId, true, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return new AcReentryResult(action, nextStatus);
         }

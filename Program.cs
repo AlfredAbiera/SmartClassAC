@@ -59,6 +59,7 @@ builder.Services.AddScoped<GsmModemSettingsStore>();
 builder.Services.AddScoped<BuzzerSettingsStore>();
 builder.Services.AddScoped<AcIrAdministration>();
 builder.Services.AddSingleton<GsmSmsTransport>();
+builder.Services.AddScoped<PortalMobileOtp>();
 builder.Services.AddScoped<DemoDataSeeder>();
 builder.Services.AddScoped<DatabaseMigrationRunner>();
 // DatabaseInitializationService attempts to seed the default admin on startup.

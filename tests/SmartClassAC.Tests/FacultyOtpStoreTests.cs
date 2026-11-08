@@ -345,6 +345,118 @@ public sealed class FacultyOtpStoreTests
     }
 
     [MariaDbFact]
+    public async Task AttendancePowerHandlesEarlyEndOverlapReentryAndAutomaticClosure()
+    {
+        await WithDatabase(async (_, connection, _) =>
+        {
+            var options = new SchoolTimeOptions();
+            var now = SchoolClock.GetNow(options);
+            var date = DateOnly.FromDateTime(now);
+            var time = TimeOnly.FromDateTime(now);
+            await Execute(connection, $"""
+                INSERT INTO classrooms (id, name, capacity, target_temperature) VALUES (1, 'Room A', 30, 24);
+                INSERT INTO user_accounts (id, username, display_name, password_hash, role, is_active)
+                VALUES (2, 'other', 'Other', 'hash', 'Teacher', 1);
+                INSERT INTO semesters (id, name, start_date, end_date, is_active)
+                VALUES (100, 'Test', '{date.AddDays(-2):yyyy-MM-dd}', '{date.AddDays(2):yyyy-MM-dd}', 1);
+                INSERT INTO teacher_semesters (teacher_account_id, semester_id) VALUES (1, 100), (2, 100);
+                INSERT INTO class_schedules (id, teacher_account_id, classroom_id, classroom_name, schedule_date, start_time, end_time, semester_id)
+                VALUES (101, 1, 1, 'Room A', '{date:yyyy-MM-dd}', '00:00:00', '23:59:59', 100),
+                       (102, 2, 1, 'Room A', '{date:yyyy-MM-dd}', '00:00:00', '23:59:59', 100);
+                """);
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString
+            }).Build();
+            var repository = new MariaDbUserAccountRepository(config, Options.Create(options));
+            async Task<bool> Desired()
+            {
+                await using var query = new MySqlCommand("SELECT ir_attendance_power FROM classrooms WHERE id = 1;", connection);
+                return Convert.ToBoolean(await query.ExecuteScalarAsync());
+            }
+            Assert.True((await repository.StartClassAsync(1, 101, date, time)).Succeeded);
+            Assert.True(await Desired());
+            Assert.True((await repository.EndClassAsync(1)).Succeeded);
+            Assert.True(await Desired());
+            Assert.Equal("ac_on", (await repository.TryInWindowAcReentryAsync(1, 101, 1, date, time))!.Action);
+            await Execute(connection, "DELETE FROM class_schedules WHERE id = 102;");
+            Assert.True((await repository.EndClassAsync(1)).Succeeded);
+            Assert.False(await Desired());
+
+            await Execute(connection, $"""
+                UPDATE class_schedules SET schedule_date = '{date.AddDays(-1):yyyy-MM-dd}' WHERE id = 101;
+                UPDATE attendance_logs SET time_out_utc = NULL, status = 'Active' WHERE class_schedule_id = 101;
+                UPDATE classrooms SET ac_status = 'Cooling', ir_attendance_power = TRUE WHERE id = 1;
+                INSERT INTO class_schedules (id, teacher_account_id, classroom_id, classroom_name, schedule_date, start_time, end_time, semester_id)
+                VALUES (102, 2, 1, 'Room A', '{date:yyyy-MM-dd}', '00:00:00', '23:59:59', 100);
+                """);
+            await repository.ReconcileAttendanceOutcomesAsync(date, time);
+            Assert.True(await Desired());
+            await Execute(connection, "DELETE FROM class_schedules WHERE id = 102;");
+            await repository.ReconcileAttendanceOutcomesAsync(date, time);
+            Assert.False(await Desired());
+        });
+    }
+
+    [MariaDbFact]
+    public async Task PowerToggleRequiresVersionedBootAndExplicitReconciliation()
+    {
+        await WithDatabase(async (_, connection, _) =>
+        {
+            await Execute(connection, """
+                INSERT INTO classrooms (id, name, capacity, target_temperature) VALUES (1, 'Room A', 30, 24);
+                UPDATE biometric_devices SET classroom_id = 1 WHERE id = 1;
+                INSERT INTO user_accounts (id, username, display_name, password_hash, role, is_active)
+                VALUES (2, 'admin', 'Admin', 'hash', 'Admin', 1);
+                """);
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString,
+                ["AcIr:EnablePowerToggle"] = "true"
+            }).Build();
+            var ir = new AcIrStateStore(config);
+            const string device = "1000000001";
+            var boot = RandomNumberGenerator.GetBytes(32);
+            Assert.True(await ir.RegisterBootAsync(device, boot, powerEnabled: true));
+            Assert.False(await ir.RegisterBootAsync(device, boot));
+            Assert.Null(await ir.ClaimAsync(device, boot, powerEnabled: true));
+            Assert.False(await ir.ReconcileAsync(2, device, boot, 1, 24));
+            Assert.True(await ir.ReconcileAsync(2, device, boot, 1, 24, assumedPower: false));
+            await Execute(connection, "UPDATE classrooms SET target_temperature = 25 WHERE id = 1;");
+            Assert.Null(await ir.ClaimAsync(device, boot, powerEnabled: true));
+            await Execute(connection, "UPDATE classrooms SET ir_attendance_power = TRUE WHERE id = 1;");
+            var claims = await Task.WhenAll(ir.ClaimAsync(device, boot, powerEnabled: true),
+                ir.ClaimAsync(device, boot, powerEnabled: true));
+            var on = Assert.Single(claims.OfType<AcIrCommand>());
+            Assert.True(on.IsPower);
+            Assert.Equal(0, on.From);
+            Assert.Equal(1, on.To);
+            Assert.Null(await ir.ClaimAsync(device, boot));
+            Assert.False(await ir.CompleteAsync(device, boot, on.Id));
+            Assert.True(await ir.CompleteAsync(device, boot, on.Id, powerEnabled: true));
+            Assert.False(await ir.CompleteAsync(device, boot, on.Id, powerEnabled: true));
+            Assert.True((await ir.GetAsync(device, boot))!.AssumedPower);
+            var temperature = Assert.IsType<AcIrCommand>(await ir.ClaimAsync(device, boot, powerEnabled: true));
+            Assert.False(temperature.IsPower);
+            Assert.Equal(24, temperature.From);
+            Assert.Equal(25, temperature.To);
+            Assert.True(await ir.CompleteAsync(device, boot, temperature.Id, powerEnabled: true));
+            await Execute(connection, "UPDATE classrooms SET ir_attendance_power = FALSE WHERE id = 1;");
+            var off = Assert.IsType<AcIrCommand>(await ir.ClaimAsync(device, boot, powerEnabled: true));
+            Assert.True(off.IsPower);
+            Assert.Equal(1, off.From);
+            Assert.Equal(0, off.To);
+            Assert.Null(await ir.ClaimAsync(device, boot, powerEnabled: true));
+            var nextBoot = RandomNumberGenerator.GetBytes(32);
+            Assert.True(await ir.RegisterBootAsync(device, nextBoot, powerEnabled: true));
+            Assert.False(await ir.CompleteAsync(device, boot, off.Id, powerEnabled: true));
+            Assert.Null((await ir.GetAsync(device, nextBoot))!.AssumedPower);
+            Assert.True(await ir.ReconcileAsync(2, device, nextBoot, 1, 25, assumedPower: false));
+            Assert.Null(await ir.ClaimAsync(device, nextBoot, powerEnabled: true));
+        });
+    }
+
+    [MariaDbFact]
     public async Task RelativeIrStateRequiresReconciliationAndNeverReissuesInflightCommand()
     {
         await WithDatabase(async (_, connection, _) =>
@@ -545,6 +657,30 @@ public sealed class FacultyOtpStoreTests
                     Convert.FromHexString(httpChallenge), Encoding.ASCII.GetBytes(httpSigned.Body), Convert.FromHexString(httpSigned.Tag)));
                 using var replay = await client.PostAsJsonAsync("api/device/ac-ir/claim", request);
                 Assert.Equal(HttpStatusCode.Forbidden, replay.StatusCode);
+
+                using var disabledV2 = await client.PostAsJsonAsync("api/device/ac-ir/v2/claim/challenge", new FacultyOtpChallengeRequest(device));
+                Assert.Equal(HttpStatusCode.ServiceUnavailable, disabledV2.StatusCode);
+                app.Configuration["AcIr:EnablePowerToggle"] = "true";
+                using var disabledV1 = await client.PostAsJsonAsync("api/device/ac-ir/claim/challenge", new FacultyOtpChallengeRequest(device));
+                Assert.Equal(HttpStatusCode.ServiceUnavailable, disabledV1.StatusCode);
+                using var enabledV2 = await client.PostAsJsonAsync("api/device/ac-ir/v2/claim/challenge", new FacultyOtpChallengeRequest(device));
+                Assert.Equal(HttpStatusCode.OK, enabledV2.StatusCode);
+
+                bootBytes = RandomNumberGenerator.GetBytes(32);
+                boot = Convert.ToHexString(bootBytes).ToLowerInvariant();
+                Assert.EndsWith("\nregistered\n", (await Run("ac_ir_v2_boot", await Make("ac_ir_v2_boot", "-"))).Body);
+                Assert.True(await store.ReconcileAsync(2, device, bootBytes, 1, 25, assumedPower: false));
+                await Execute(connection, "UPDATE classrooms SET ir_attendance_power = TRUE WHERE id = 1;");
+                var powerClaim = await Make("ac_ir_v2_claim", "-");
+                var powerResponse = await Run("ac_ir_v2_claim", powerClaim);
+                var powerLines = powerResponse.Body.Split('\n');
+                Assert.Equal("power", powerLines[1]);
+                Assert.Equal("0", powerLines[3]);
+                Assert.Equal("1", powerLines[4]);
+                Assert.Null(await protocol.ExecuteAsync("ac_ir_v2_claim", powerClaim));
+                Assert.EndsWith("\ninflight\n", (await Run("ac_ir_v2_claim", await Make("ac_ir_v2_claim", "-"))).Body);
+                Assert.EndsWith("\ncompleted\n", (await Run("ac_ir_v2_complete",
+                    await Make("ac_ir_v2_complete", powerLines[2]))).Body);
             }
             finally
             {
@@ -714,6 +850,89 @@ public sealed class FacultyOtpStoreTests
             var requests = await Task.WhenAll(Enumerable.Range(0, 6).Select(i =>
                 store.ReserveAsync(i % 2 == 0 ? "1000000001" : "1000000002", "09123456789", secret)));
             Assert.Equal(3, requests.Count(value => value is not null));
+        });
+    }
+
+    [MariaDbFact]
+    public async Task PortalMobileOtpExpiresLimitsAttemptsAndRejectsCrossPurpose()
+    {
+        await WithDatabase(async (_, connection, secret) =>
+        {
+            await Execute(connection, """
+                INSERT INTO user_accounts (id, username, display_name, password_hash, role, is_active)
+                VALUES (2, 'admin', 'Admin', 'hash', 'Admin', 1);
+                INSERT INTO gsm_modem_settings (singleton_id, port_name, baud_rate) VALUES (1, 'COM42', 9600);
+                """);
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString,
+                ["FacultyOtp:Secret"] = Convert.ToBase64String(secret)
+            }).Build();
+            var serial = new FakeSerial();
+            var otp = new PortalMobileOtp(config, new GsmSmsTransport(_ => serial), NullLogger<PortalMobileOtp>.Instance);
+            var repository = new MariaDbUserAccountRepository(config, Options.Create(new SchoolTimeOptions()));
+            const string phone = "09888888888";
+            Assert.False((await otp.IssueAsync(1, "admin", 1, phone)).Succeeded);
+            Assert.True((await otp.IssueAsync(2, "create", 0, phone)).Succeeded);
+            var update = new UpdateAdminTeacherRequest(1, "Teacher", "teacher", "EMP1", null, phone, null, null, serial.Code, 2);
+            Assert.False((await repository.UpdateAdminTeacherAsync(update, null)).Succeeded);
+            var create = new CreateTeacherRequest("New", "new", "EMP2", null, phone, "password", "4321", serial.Code, 2);
+            await Execute(connection, "UPDATE portal_mobile_otp_requests SET expires_utc=DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 1 SECOND);");
+            Assert.False((await repository.CreateTeacherAsync(create, "hash")).Succeeded);
+            Assert.True((await otp.IssueAsync(2, "create", 0, phone)).Succeeded);
+            create = create with { RegistrationOtp = serial.Code };
+            var wrong = serial.Code == "000000" ? "000001" : "000000";
+            for (var i = 0; i < 5; i++)
+                Assert.False((await repository.CreateTeacherAsync(create with { RegistrationOtp = wrong }, "hash")).Succeeded);
+            Assert.False((await repository.CreateTeacherAsync(create, "hash")).Succeeded);
+            Assert.True((await otp.IssueAsync(2, "create", 0, phone)).Succeeded);
+            Assert.False((await otp.IssueAsync(2, "create", 0, phone)).Succeeded);
+            Assert.False((await repository.CreateTeacherAsync(create with { RegistrationOtp = serial.Code }, "hash")).Succeeded);
+        });
+    }
+
+    [MariaDbFact]
+    public async Task PortalMobileOtpProtectsRegistrationAndNumberChanges()
+    {
+        await WithDatabase(async (_, connection, secret) =>
+        {
+            await Execute(connection, """
+                INSERT INTO user_accounts (id, username, display_name, password_hash, role, is_active)
+                VALUES (2, 'admin', 'Admin', 'hash', 'Admin', 1), (3, 'admin2', 'Admin 2', 'hash', 'Admin', 1);
+                INSERT INTO gsm_modem_settings (singleton_id, port_name, baud_rate) VALUES (1, 'COM42', 9600);
+                """);
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString,
+                ["FacultyOtp:Secret"] = Convert.ToBase64String(secret)
+            }).Build();
+            var serial = new FakeSerial();
+            var otp = new PortalMobileOtp(config, new GsmSmsTransport(_ => serial), NullLogger<PortalMobileOtp>.Instance);
+            var repository = new MariaDbUserAccountRepository(config, Options.Create(new SchoolTimeOptions()));
+            const string phone = "09999999999";
+            Assert.True((await otp.IssueAsync(2, "create", 0, phone)).Succeeded);
+            var create = new CreateTeacherRequest("New", "new", "EMP2", null, phone, "password",
+                "4321", serial.Code, 2);
+            Assert.False((await repository.CreateTeacherAsync(create with { VerificationActorId = 3 }, "hash")).Succeeded);
+            Assert.False((await repository.CreateTeacherAsync(create with { Phone = "09999999998" }, "hash")).Succeeded);
+            Assert.False((await repository.CreateTeacherAsync(create with { Username = "teacher" }, "hash")).Succeeded);
+            Assert.True((await repository.CreateTeacherAsync(create, "hash")).Succeeded);
+            Assert.False((await repository.CreateTeacherAsync(create with { Username = "new2", EmployeeNumber = "EMP3" }, "hash")).Succeeded);
+            Assert.True((await otp.IssueAsync(2, "admin", 1, "09999999997")).Succeeded);
+            var update = new UpdateAdminTeacherRequest(1, "Teacher", "teacher", "EMP1", null,
+                "09999999997", null, null, serial.Code, 2);
+            Assert.False((await repository.UpdateAdminTeacherAsync(update with { MobileOtp = "000000" == serial.Code ? "000001" : "000000" }, null)).Succeeded);
+            Assert.True((await repository.UpdateAdminTeacherAsync(update, null)).Succeeded);
+            Assert.True((await otp.IssueAsync(1, "self", 1, "09999999996")).Succeeded);
+            var profile = new UpdateTeacherProfileRequest("Teacher", null, "09999999996", "1234", null, serial.Code);
+            Assert.True((await repository.UpdateTeacherProfileAsync(1, profile, null)).Succeeded);
+            Assert.True((await repository.UpdateTeacherProfileAsync(1, profile with { MobileOtp = null }, null)).Succeeded);
+            Assert.False((await repository.UpdateTeacherProfileAsync(1, profile with { Phone = "09999999995" }, null)).Succeeded);
+            var failed = new PortalMobileOtp(config, new GsmSmsTransport(_ => new FakeSerial { FailAfterSubmission = true }),
+                NullLogger<PortalMobileOtp>.Instance);
+            Assert.False((await failed.IssueAsync(2, "create", 0, "09999999994")).Succeeded);
+            await using var count = new MySqlCommand("SELECT COUNT(*) FROM portal_mobile_otp_requests WHERE actor_id=2 AND purpose='create';", connection);
+            Assert.Equal(0L, Convert.ToInt64(await count.ExecuteScalarAsync()));
         });
     }
 

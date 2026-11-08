@@ -96,8 +96,23 @@
     </main>
 </div>
 
+@if (profileOtpOpen)
+{
+    <div class="modal-backdrop"><section class="dialog-card" role="dialog" aria-modal="true">
+        <h2>Verify mobile number</h2>
+        <p>A verification code was submitted to <strong>@profilePhone</strong>. It expires after five minutes.</p>
+        <label>One-time password<input @bind="profileOtp" maxlength="6" inputmode="numeric" autocomplete="one-time-code" /></label>
+        <div class="dialog-actions">
+            <button type="button" class="secondary-button" @onclick="CancelProfileOtp">Back</button>
+            <button type="button" class="primary-button" disabled="@profileOtpBusy" @onclick="SaveProfile">Verify &amp; save</button>
+        </div>
+    </section></div>
+}
+
 @code {
     private string active = "overview", profileName = string.Empty, profileEmail = string.Empty, profilePhone = string.Empty, profilePin = string.Empty, profilePassword = string.Empty;
+    private bool profileOtpOpen, profileOtpBusy;
+    private string profileOtp = string.Empty;
     private string messageValue = string.Empty;
     private long messageVersion;
     private string message { get => messageValue; set { messageValue = value; messageVersion++; } }
@@ -123,9 +138,11 @@
         irStatusUnavailable ? "IR synchronization status is unavailable." :
         irSnapshot is null || irSnapshot.ClassroomId != selectedClassroomId ? "No active class for this room; IR status unavailable." :
         irSnapshot.State is null ? "IR unavailable; target pending or unverified." :
+        Configuration.GetValue<bool>("AcIr:EnablePowerToggle") != (irSnapshot.ProtocolVersion == 2) ? "Scanner protocol mismatch; administrator must restart and reconcile." :
         irSnapshot.State == "reconcile" ? "Target pending; administrator reconciliation required." :
         irSnapshot.State == "inflight" ? "Target pending; IR command in progress or uncertain." :
         !irSnapshot.RecentlySeen ? "Scanner not recently seen; target pending or unverified." :
+        irSnapshot.ProtocolVersion == 2 && irSnapshot.AssumedPower != true ? "AC power pending or unknown; actual AC state is unverified." :
         irSnapshot.Assumed != irSnapshot.Target ? "Target pending IR synchronization." :
         "IR target assumed synchronized; actual AC setting unverified.";
 
@@ -283,12 +300,35 @@
 
     private async Task SaveProfile()
     {
-        var result = await AuthService.UpdateMyTeacherProfileAsync(new UpdateTeacherProfileRequest(profileName, string.IsNullOrWhiteSpace(profileEmail) ? null : profileEmail, profilePhone, profilePin, profilePassword));
+        if (profileOtpBusy) return;
+        if (!profileOtpOpen && profile is not null && !string.Equals(profilePhone.Trim(), profile.Phone ?? string.Empty, StringComparison.Ordinal))
+        {
+            profileOtpBusy = true;
+            try
+            {
+                var sent = await AuthService.RequestMobileOtpAsync(profile.AccountId, profilePhone);
+                if (!sent.Succeeded) { Toast(sent.Error ?? "Could not send verification code."); return; }
+                profileOtp = string.Empty;
+                profileOtpOpen = true;
+                Toast("Verification code submitted. Check the phone.");
+            }
+            catch (Exception exception)
+            {
+                Logger.LogError(exception, "Could not request mobile verification.");
+                Toast("Could not request verification. Check the modem and configuration.");
+            }
+            finally { profileOtpBusy = false; }
+            return;
+        }
+        var result = await AuthService.UpdateMyTeacherProfileAsync(new UpdateTeacherProfileRequest(profileName, string.IsNullOrWhiteSpace(profileEmail) ? null : profileEmail, profilePhone, profilePin, profilePassword, profileOtp));
         if (!result.Succeeded) { Toast(result.Error ?? "Profile could not be updated."); return; }
+        CancelProfileOtp();
         profilePassword = string.Empty;
         await ReloadAsync();
         Toast("Your profile was updated.");
     }
+
+    private void CancelProfileOtp() { profileOtpOpen = false; profileOtp = string.Empty; }
 
     private async Task ApplyTarget()
     {
