@@ -5,6 +5,9 @@
 @inject IAuthService AuthService
 @inject CustomAuthStateProvider AuthStateProvider
 @inject IOptions<SchoolTimeOptions> SchoolTime
+@inject AcIrAdministration IrAdministration
+@inject IConfiguration Configuration
+@inject ILogger<Teacher> Logger
 @attribute [Authorize(Roles = "Teacher")]
 
 <PageTitle>Teacher Dashboard | SmartClass AC</PageTitle>
@@ -34,7 +37,9 @@
             <div class="topbar-actions"><button class="profile-chip" @onclick='() => Navigate("profile")'><span>@Initials</span><strong>@TeacherName</strong><i class="fas fa-chevron-down"></i></button></div>
         </header>
         <section class="dashboard-content">
-            @if (!string.IsNullOrEmpty(message)) { <div class="dashboard-toast" role="status"><i class="fas fa-circle-check"></i>@message<button @onclick='() => message = string.Empty' aria-label="Dismiss"><i class="fas fa-xmark"></i></button></div> }
+            <AutoDismiss Active="@(!string.IsNullOrEmpty(message))" Version="@messageVersion" Dismissed="DismissMessage">
+                <div class="dashboard-toast" role="status"><i class="fas fa-circle-check"></i>@message<button @onclick='() => message = string.Empty' aria-label="Dismiss"><i class="fas fa-xmark"></i></button></div>
+            </AutoDismiss>
 
             @if (isLoading)
             {
@@ -77,8 +82,9 @@
             }
             else if (active == "classroom")
             {
-                <div class="page-intro"><p>CLASSROOM TEMPERATURE PROCESS</p><h2>Assigned classroom temperature</h2><span>You may send a target command only for a classroom assigned to you today.</span></div>
-                <article class="panel"><div class="form-grid"><label>Classroom<select @bind="selectedClassroomId"><option value="0">Select a scheduled room</option>@foreach (var room in AssignedRooms) { <option value="@room.Id">@room.Name</option> }</select></label><label>Target temperature<input type="number" min="16" max="30" @bind="targetTemp" /></label></div><div class="form-actions"><button class="primary-button" disabled="@(selectedClassroomId == 0)" @onclick="ApplyTarget"><i class="fas fa-paper-plane"></i>Send target command</button><button class="danger-outline-button" disabled="@(selectedClassroomId == 0)" @onclick="Shutdown">Hard shutdown</button></div></article>
+                <div class="page-intro"><p>CLASSROOM TEMPERATURE PROCESS</p><h2>Assigned classroom temperature</h2><span>You may send a target command only for your active class, at or above the classroom minimum.</span></div>
+                <article class="panel"><p class="form-help">Temperature targets are saved in the portal. IR control may be unavailable or pending; AC reception and the physical setpoint are not verified.</p><div class="form-grid"><label>Classroom<select @bind="selectedClassroomId"><option value="0">Select a scheduled room</option>@foreach (var room in AssignedRooms) { <option value="@room.Id">@room.Name</option> }</select></label><label>Target temperature<input type="number" min="16" max="30" @bind="targetTemp" /></label></div><div class="form-actions"><button class="primary-button" disabled="@(selectedClassroomId == 0)" @onclick="ApplyTarget"><i class="fas fa-paper-plane"></i>Save target</button><button class="danger-outline-button" disabled="@(selectedClassroomId == 0)" @onclick="Shutdown">Hard shutdown</button></div></article>
+                <p class="form-help" role="status">@IrStatusText</p>
                 <article class="panel"><span class="eyebrow">RECENT TEMPERATURE LOGS</span><div class="data-table-wrap"><table class="data-table"><thead><tr><th>Classroom</th><th>Event</th><th>Target</th><th>Recorded</th></tr></thead><tbody>@if (temperatureLogs.Count == 0) { <tr><td colspan="4">No temperature commands have been logged.</td></tr> } @foreach (var log in PagedTemperatureLogs) { <tr><td>@log.ClassroomName</td><td>@log.EventType</td><td>@(log.TargetTemperature is null ? "—" : $"{log.TargetTemperature}°C")</td><td>@SchoolClock.Format(log.RecordedAt, "MMM d HH:mm")</td></tr> }</tbody></table></div><ListPager State="temperatureLogPager" TotalCount="temperatureLogs.Count" /></article>
             }
             else if (active == "active")
@@ -91,7 +97,11 @@
 </div>
 
 @code {
-    private string active = "overview", message = string.Empty, profileName = string.Empty, profileEmail = string.Empty, profilePhone = string.Empty, profilePin = string.Empty, profilePassword = string.Empty;
+    private string active = "overview", profileName = string.Empty, profileEmail = string.Empty, profilePhone = string.Empty, profilePin = string.Empty, profilePassword = string.Empty;
+    private string messageValue = string.Empty;
+    private long messageVersion;
+    private string message { get => messageValue; set { messageValue = value; messageVersion++; } }
+    private void DismissMessage(long version) { if (version == messageVersion) message = string.Empty; }
     private bool sidebarOpen, isLoading;
     private int targetTemp = 22;
     private long selectedClassroomId;
@@ -105,6 +115,35 @@
     private List<AttendanceLogEntry> attendance = new();
     private List<TemperatureLogEntry> temperatureLogs = new();
     private CancellationTokenSource? liveRefreshCts;
+    private AcIrTeacherSnapshot? irSnapshot;
+    private bool irStatusUnavailable;
+
+    private string IrStatusText =>
+        !Configuration.GetValue<bool>("AcIr:EnableDeviceApi") ? "IR control is disabled; the AC setting is unverified." :
+        irStatusUnavailable ? "IR synchronization status is unavailable." :
+        irSnapshot is null || irSnapshot.ClassroomId != selectedClassroomId ? "No active class for this room; IR status unavailable." :
+        irSnapshot.State is null ? "IR unavailable; target pending or unverified." :
+        irSnapshot.State == "reconcile" ? "Target pending; administrator reconciliation required." :
+        irSnapshot.State == "inflight" ? "Target pending; IR command in progress or uncertain." :
+        !irSnapshot.RecentlySeen ? "Scanner not recently seen; target pending or unverified." :
+        irSnapshot.Assumed != irSnapshot.Target ? "Target pending IR synchronization." :
+        "IR target assumed synchronized; actual AC setting unverified.";
+
+    private async Task RefreshIrStatusAsync()
+    {
+        try
+        {
+            var user = await AuthService.GetCurrentUserAsync();
+            irSnapshot = user?.Role == UserRole.Teacher ? await IrAdministration.GetForTeacherAsync(user.Id) : null;
+            irStatusUnavailable = false;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Could not load teacher IR status.");
+            irSnapshot = null;
+            irStatusUnavailable = true;
+        }
+    }
 
     private string TeacherName => profile?.DisplayName ?? "Teacher";
     private string Initials => string.Concat(TeacherName.Split(' ', StringSplitOptions.RemoveEmptyEntries).Take(2).Select(word => char.ToUpperInvariant(word[0])));
@@ -173,6 +212,7 @@
             attendance = (await attendanceTask).ToList();
             temperatureLogs = (await temperatureLogsTask).ToList();
             selectedClassroomId = TodaySchedules.FirstOrDefault()?.ClassroomId ?? 0;
+            await RefreshIrStatusAsync();
         }
         catch { Toast("Your dashboard data could not be loaded."); }
         finally { isLoading = false; }
@@ -189,6 +229,7 @@
             classrooms = (await classroomsTask).ToList();
             attendance = (await attendanceTask).ToList();
             temperatureLogs = (await temperatureLogsTask).ToList();
+            if (active == "classroom") await RefreshIrStatusAsync();
             await InvokeAsync(StateHasChanged);
         }
         catch
@@ -254,7 +295,8 @@
         var result = await AuthService.SetTemperatureAsync(new SetTemperatureRequest(selectedClassroomId, targetTemp, "TargetSet"));
         if (!result.Succeeded) { Toast(result.Error ?? "Temperature command could not be recorded."); return; }
         temperatureLogs = (await AuthService.GetTemperatureLogsAsync()).ToList();
-        Toast($"A {targetTemp}°C command was recorded for the classroom.");
+        await RefreshIrStatusAsync();
+        Toast($"Target {targetTemp}°C saved. The AC setting has not been verified.");
     }
 
     private async Task Shutdown()

@@ -5,6 +5,8 @@
 @inject IAuthService AuthService
 @inject NavigationManager Navigation
 @inject CustomAuthStateProvider AuthStateProvider
+@inject IJSRuntime JS
+@inject ILogger<Login> Logger
 
 <PageTitle>Login - SmartClass AC</PageTitle>
 
@@ -32,54 +34,6 @@
         </div>
 
     </div>
-
-
-    <!-- =====================================================
-         RESPONSIVE NAVBAR
-         ===================================================== -->
-
-    <header class="login-navbar">
-
-        <div class="navbar-inner">
-
-            <!-- Brand -->
-            <a href="/" class="brand-link">
-
-                <div class="brand-icon">
-                    <i class="fas fa-snowflake"></i>
-                </div>
-
-                <div class="brand-text">
-                    <span class="brand-name">
-                        SmartClass <strong>AC</strong>
-                    </span>
-
-                    <span class="brand-tagline">
-                        Smart Classroom Technology
-                    </span>
-                </div>
-
-            </a>
-
-
-            <!-- Navigation -->
-            <nav class="navbar-nav">
-
-                <a href="/" class="nav-link">
-                    <i class="fas fa-house"></i>
-                    <span>Home</span>
-                </a>
-
-                <div class="nav-status">
-                    <span class="status-dot"></span>
-                    System Online
-                </div>
-
-            </nav>
-
-        </div>
-
-    </header>
 
 
     <!-- =====================================================
@@ -127,7 +81,7 @@
 
 
             <!-- Login Form -->
-            <form method="post" action="/auth/login">
+            <form method="post" action="/auth/login" @ref="loginForm">
 
                 <!-- Username -->
                 <div class="form-field">
@@ -145,8 +99,7 @@
                                class="login-input"
                                placeholder="Enter your username"
                                autocomplete="username"
-                               name="username"
-                               @bind="username" />
+                               name="username" />
 
                     </div>
 
@@ -175,8 +128,7 @@
                                class="login-input login-input-password"
                                placeholder="Enter your password"
                                autocomplete="current-password"
-                               name="password"
-                               @bind="password" />
+                               name="password" />
 
                         <button type="button"
                                 class="password-peek"
@@ -190,6 +142,15 @@
 
                 </div>
 
+
+                <div class="remember-row">
+                    <label class="remember-label">
+                        <input type="checkbox" id="remember-username" disabled />
+                        <span class="custom-checkbox" aria-hidden="true"></span>
+                        <span>Remember username on this device</span>
+                    </label>
+                    <p id="remember-error" class="remember-error" role="alert">@rememberError</p>
+                </div>
 
                 <!-- Login Button -->
                 <button type="submit"
@@ -220,42 +181,6 @@
 
             </form>
 
-            <p class="login-account-switch">
-                Teacher accounts are created by the administrator. Your dashboard is selected automatically after sign-in.
-            </p>
-
-
-            <!-- Security Notice -->
-            <div class="security-notice">
-
-                <div class="security-icon">
-                    <i class="fas fa-shield-halved"></i>
-                </div>
-
-                <div>
-                    <strong>Secure Access</strong>
-
-                    <span>
-                        Your account is protected by SmartClass AC authentication.
-                    </span>
-                </div>
-
-            </div>
-
-
-            <!-- Back Home -->
-            <div class="back-home">
-
-                <a href="/">
-
-                    <i class="fas fa-arrow-left"></i>
-
-                    Back to SmartClass AC
-
-                </a>
-
-            </div>
-
         </section>
 
 
@@ -269,20 +194,6 @@
             <!-- Decorative Circle -->
             <div class="info-decoration info-decoration-1"></div>
             <div class="info-decoration info-decoration-2"></div>
-
-
-            <!-- Badge -->
-            <div class="info-badge">
-
-                <span class="badge-icon">
-                    <i class="fas fa-bolt"></i>
-                </span>
-
-                <span>
-                    Smart Classroom Technology
-                </span>
-
-            </div>
 
 
             <!-- Heading -->
@@ -479,9 +390,8 @@
 
 @code {
 
-    private string username = string.Empty;
-
-    private string password = string.Empty;
+    private ElementReference loginForm;
+    private string rememberError = string.Empty;
 
     private bool showPassword;
 
@@ -495,6 +405,23 @@
         if (Navigation.Uri.Contains("error=signin", StringComparison.OrdinalIgnoreCase))
         {
             errorMessage = "Invalid username or password.";
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        try
+        {
+            await JS.InvokeVoidAsync("smartClassRememberUsername.initialize", loginForm);
+        }
+        catch (JSException ex)
+        {
+            Logger.LogWarning(ex, "Unable to initialize the remember username option.");
+            rememberError = "Remember username could not be initialized. Reload the page and try again.";
+            StateHasChanged();
         }
     }
 
@@ -665,157 +592,6 @@
 
 
     /* =====================================================
-               NAVBAR
-               ===================================================== */
-
-    .login-navbar {
-        position: relative;
-        z-index: 10;
-        width: 100%;
-        padding: 18px 32px;
-        box-sizing: border-box;
-    }
-
-
-    .navbar-inner {
-        width: 100%;
-        max-width: 1280px;
-        margin: 0 auto;
-        min-height: 62px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 25px;
-        padding: 9px 12px 9px 16px;
-        border: 1px solid rgba(255, 255, 255, 0.85);
-        border-radius: 20px;
-        background: rgba(255, 255, 255, 0.62);
-        backdrop-filter: blur(18px);
-        -webkit-backdrop-filter: blur(18px);
-        box-shadow: 0 12px 35px rgba(26, 115, 232, 0.07);
-    }
-
-
-    /* =====================================================
-               BRAND
-               ===================================================== */
-
-    .brand-link {
-        display: inline-flex;
-        align-items: center;
-        gap: 11px;
-        color: #172033;
-        text-decoration: none;
-        min-width: 0;
-    }
-
-
-    .brand-icon {
-        width: 43px;
-        height: 43px;
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 13px;
-        color: white;
-        font-size: 1.15rem;
-        background: linear-gradient( 135deg, #1a73e8, #42a5f5 );
-        box-shadow: 0 8px 20px rgba(26, 115, 232, 0.24);
-    }
-
-
-    .brand-text {
-        display: flex;
-        flex-direction: column;
-        min-width: 0;
-    }
-
-
-    .brand-name {
-        color: #172033;
-        font-size: 1.1rem;
-        font-weight: 750;
-        line-height: 1.1;
-        white-space: nowrap;
-    }
-
-
-        .brand-name strong {
-            color: #1a73e8;
-        }
-
-
-    .brand-tagline {
-        margin-top: 3px;
-        color: #98a2b3;
-        font-size: 0.64rem;
-        font-weight: 600;
-        letter-spacing: 0.02em;
-        white-space: nowrap;
-    }
-
-
-    /* =====================================================
-               NAVIGATION
-               ===================================================== */
-
-    .navbar-nav {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-    }
-
-
-    .nav-link {
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        padding: 9px 15px;
-        color: #475467;
-        text-decoration: none;
-        border-radius: 11px;
-        font-size: 0.83rem;
-        font-weight: 650;
-        transition: all 0.2s ease;
-    }
-
-
-        .nav-link i {
-            color: #1a73e8;
-        }
-
-
-        .nav-link:hover {
-            color: #1a73e8;
-            background: rgba(26, 115, 232, 0.07);
-        }
-
-
-    .nav-status {
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        padding: 8px 13px;
-        color: #147a4c;
-        border: 1px solid rgba(20, 122, 76, 0.12);
-        border-radius: 50px;
-        background: rgba(20, 122, 76, 0.06);
-        font-size: 0.72rem;
-        font-weight: 650;
-    }
-
-
-    .status-dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background: #22c55e;
-        box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.10);
-    }
-
-
-    /* =====================================================
                MAIN CONTENT
                ===================================================== */
 
@@ -830,7 +606,8 @@
         box-sizing: border-box;
         display: grid;
         grid-template-columns: minmax(380px, 480px) minmax(400px, 1fr);
-        align-items: center;
+        align-items: stretch;
+        align-content: center;
         justify-content: center;
         gap: 90px;
     }
@@ -842,13 +619,16 @@
 
     .login-card {
         width: 100%;
-        padding: 40px;
+        padding: 32px 40px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
         box-sizing: border-box;
         background: rgba(255, 255, 255, 0.88);
         backdrop-filter: blur(22px);
         -webkit-backdrop-filter: blur(22px);
         border: 1px solid rgba(255, 255, 255, 0.95);
-        border-radius: 28px;
+        border-radius: var(--smart-radius);
         box-shadow: 0 30px 80px rgba(26, 115, 232, 0.13), 0 5px 20px rgba(26, 115, 232, 0.05);
         animation: cardAppear 0.7s ease-out;
     }
@@ -885,7 +665,7 @@
         align-items: center;
         justify-content: center;
         margin: 0 auto 17px;
-        border-radius: 21px;
+        border-radius: var(--smart-radius);
         color: white;
         font-size: 1.7rem;
         background: linear-gradient( 135deg, #1a73e8, #42a5f5 );
@@ -933,7 +713,7 @@
         gap: 10px;
         padding: 13px 15px;
         margin-bottom: 21px;
-        border-radius: 13px;
+        border-radius: var(--smart-radius);
         color: #b42318;
         background: rgba(220, 53, 69, 0.08);
         border: 1px solid rgba(220, 53, 69, 0.12);
@@ -1019,7 +799,7 @@
         padding: 0 16px 0 46px;
         box-sizing: border-box;
         border: 1px solid #d0d5dd;
-        border-radius: 14px;
+        border-radius: var(--smart-radius);
         outline: none;
         background: rgba(255, 255, 255, 0.78);
         color: #172033;
@@ -1055,7 +835,7 @@
         place-items: center;
         transform: translateY(-50%);
         border: 0;
-        border-radius: 10px;
+        border-radius: var(--smart-radius);
         background: transparent;
         color: #98a2b3;
         cursor: pointer;
@@ -1087,7 +867,7 @@
                ===================================================== */
 
     .remember-row {
-        margin: 3px 0 21px;
+        margin: 3px 0 16px;
     }
 
 
@@ -1119,7 +899,7 @@
         align-items: center;
         justify-content: center;
         border: 1.5px solid #d0d5dd;
-        border-radius: 5px;
+        border-radius: var(--smart-radius);
         background: white;
         transition: all 0.2s ease;
     }
@@ -1128,6 +908,25 @@
     .remember-label input:checked + .custom-checkbox {
         background: #1a73e8;
         border-color: #1a73e8;
+    }
+
+    .remember-label input:focus-visible + .custom-checkbox {
+        outline: 2px solid #1a73e8;
+        outline-offset: 2px;
+    }
+
+    .remember-label input:disabled + .custom-checkbox {
+        opacity: 0.5;
+    }
+
+    .remember-error {
+        margin: 6px 0 0;
+        font-size: 0.8rem;
+        color: #b42318;
+    }
+
+    .remember-error:empty {
+        display: none;
     }
 
 
@@ -1151,7 +950,7 @@
         justify-content: center;
         gap: 10px;
         border: none;
-        border-radius: 50px;
+        border-radius: var(--smart-radius);
         color: white;
         font-size: 0.94rem;
         font-weight: 650;
@@ -1180,78 +979,6 @@
 
 
     /* =====================================================
-               SECURITY NOTICE
-               ===================================================== */
-
-    .security-notice {
-        display: flex;
-        align-items: center;
-        gap: 11px;
-        margin-top: 22px;
-        padding: 13px 14px;
-        border-radius: 14px;
-        background: rgba(26, 115, 232, 0.045);
-        border: 1px solid rgba(26, 115, 232, 0.08);
-    }
-
-
-    .security-icon {
-        width: 34px;
-        height: 34px;
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 10px;
-        color: #1a73e8;
-        background: rgba(26, 115, 232, 0.09);
-        font-size: 0.8rem;
-    }
-
-
-    .security-notice strong {
-        display: block;
-        margin-bottom: 2px;
-        color: #344054;
-        font-size: 0.76rem;
-    }
-
-
-    .security-notice span {
-        display: block;
-        color: #98a2b3;
-        font-size: 0.7rem;
-        line-height: 1.4;
-    }
-
-
-    /* =====================================================
-               BACK HOME
-               ===================================================== */
-
-    .back-home {
-        margin-top: 21px;
-        text-align: center;
-    }
-
-
-        .back-home a {
-            display: inline-flex;
-            align-items: center;
-            gap: 7px;
-            color: #667085;
-            text-decoration: none;
-            font-size: 0.8rem;
-            transition: color 0.2s ease;
-        }
-
-
-            .back-home a:hover {
-                color: #1a73e8;
-            }
-
-
-    /* =====================================================
                INFORMATION PANEL
                ===================================================== */
 
@@ -1259,7 +986,7 @@
         position: relative;
         width: 100%;
         max-width: 560px;
-        padding: 42px 0;
+        padding: 0;
         animation: infoAppear 0.8s ease-out;
     }
 
@@ -1310,40 +1037,6 @@
 
 
     /* =====================================================
-               INFO BADGE
-               ===================================================== */
-
-    .info-badge {
-        position: relative;
-        z-index: 2;
-        display: inline-flex;
-        align-items: center;
-        gap: 9px;
-        margin-bottom: 20px;
-        padding: 7px 13px 7px 8px;
-        color: #1a73e8;
-        background: rgba(26, 115, 232, 0.07);
-        border: 1px solid rgba(26, 115, 232, 0.10);
-        border-radius: 50px;
-        font-size: 0.72rem;
-        font-weight: 700;
-    }
-
-
-    .badge-icon {
-        width: 25px;
-        height: 25px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 50%;
-        color: white;
-        background: linear-gradient( 135deg, #1a73e8, #42a5f5 );
-        font-size: 0.65rem;
-    }
-
-
-    /* =====================================================
                INFO HEADING
                ===================================================== */
 
@@ -1351,9 +1044,9 @@
         position: relative;
         z-index: 2;
         max-width: 550px;
-        margin: 0 0 18px;
+        margin: 0 0 14px;
         color: #172033;
-        font-size: clamp(2.5rem, 4vw, 3.45rem);
+        font-size: clamp(2rem, 3.2vw, 2.7rem);
         font-weight: 780;
         line-height: 1.08;
         letter-spacing: -0.045em;
@@ -1373,10 +1066,10 @@
         position: relative;
         z-index: 2;
         max-width: 510px;
-        margin: 0 0 25px;
+        margin: 0 0 16px;
         color: #667085;
-        font-size: 0.95rem;
-        line-height: 1.8;
+        font-size: 0.9rem;
+        line-height: 1.6;
     }
 
 
@@ -1386,12 +1079,12 @@
 
     .smart-ac-visual {
         position: relative;
-        height: 190px;
-        margin: 10px 0 22px;
+        height: 150px;
+        margin: 0 0 14px;
         display: flex;
         align-items: center;
         justify-content: center;
-        border-radius: 25px;
+        border-radius: var(--smart-radius);
         overflow: hidden;
         background: linear-gradient( 135deg, rgba(255, 255, 255, 0.72), rgba(225, 242, 253, 0.62) );
         border: 1px solid rgba(255, 255, 255, 0.9);
@@ -1430,7 +1123,7 @@
         height: 105px;
         padding: 14px 18px;
         box-sizing: border-box;
-        border-radius: 18px;
+        border-radius: var(--smart-radius);
         background: linear-gradient( 145deg, #ffffff, #e9f4fc );
         border: 1px solid rgba(255, 255, 255, 0.95);
         box-shadow: 0 18px 35px rgba(30, 90, 140, 0.14);
@@ -1497,7 +1190,7 @@
         .ac-air-lines span {
             width: 35px;
             height: 3px;
-            border-radius: 10px;
+            border-radius: var(--smart-radius);
             background: #b9ddf7;
             transform: skewX(-25deg);
         }
@@ -1516,7 +1209,7 @@
         align-items: center;
         gap: 9px;
         padding: 10px 12px;
-        border-radius: 14px;
+        border-radius: var(--smart-radius);
         background: rgba(255, 255, 255, 0.88);
         border: 1px solid rgba(255, 255, 255, 0.95);
         box-shadow: 0 10px 25px rgba(26, 115, 232, 0.10);
@@ -1530,7 +1223,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        border-radius: 9px;
+        border-radius: var(--smart-radius);
         color: #1a73e8;
         background: rgba(26, 115, 232, 0.08);
         font-size: 0.75rem;
@@ -1584,7 +1277,7 @@
         position: relative;
         min-width: 0;
         padding: 14px;
-        border-radius: 17px;
+        border-radius: var(--smart-radius);
         background: rgba(255, 255, 255, 0.58);
         border: 1px solid rgba(255, 255, 255, 0.85);
         backdrop-filter: blur(10px);
@@ -1606,7 +1299,7 @@
         align-items: center;
         justify-content: center;
         margin-bottom: 10px;
-        border-radius: 11px;
+        border-radius: var(--smart-radius);
         font-size: 0.78rem;
     }
 
@@ -1666,9 +1359,9 @@
         display: flex;
         align-items: center;
         gap: 10px;
-        margin-top: 14px;
-        padding: 12px 14px;
-        border-radius: 15px;
+        margin-top: 10px;
+        padding: 10px 14px;
+        border-radius: var(--smart-radius);
         background: rgba(255, 255, 255, 0.40);
         border: 1px solid rgba(255, 255, 255, 0.65);
     }
@@ -1681,7 +1374,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        border-radius: 9px;
+        border-radius: var(--smart-radius);
         color: #1a73e8;
         background: rgba(26, 115, 232, 0.08);
         font-size: 0.7rem;
@@ -1781,26 +1474,13 @@
 
     @@media (max-width: 850px) {
 
-        .login-navbar {
-            padding: 15px 20px;
-        }
-
-
-        .navbar-inner {
-            min-height: 58px;
-        }
-
-
-        .brand-tagline {
-            display: none;
-        }
-
-
         .login-content {
             grid-template-columns: 1fr;
             max-width: 650px;
             gap: 35px;
             padding: 25px 25px 45px;
+            align-items: center;
+            align-content: normal;
         }
 
 
@@ -1810,11 +1490,6 @@
             margin: 0 auto;
             padding: 15px 0 0;
             text-align: center;
-        }
-
-
-        .info-badge {
-            margin-bottom: 15px;
         }
 
 
@@ -1895,59 +1570,6 @@
         }
 
 
-        .login-navbar {
-            padding: 10px 12px;
-        }
-
-
-        .navbar-inner {
-            min-height: 53px;
-            padding: 7px 8px 7px 10px;
-            border-radius: 16px;
-        }
-
-
-        .brand-icon {
-            width: 38px;
-            height: 38px;
-            border-radius: 11px;
-            font-size: 1rem;
-        }
-
-
-        .brand-name {
-            font-size: 0.95rem;
-        }
-
-
-        .navbar-nav {
-            gap: 5px;
-        }
-
-
-        .nav-link {
-            padding: 8px 10px;
-            font-size: 0;
-        }
-
-
-            .nav-link i {
-                font-size: 0.85rem;
-            }
-
-
-        .nav-status {
-            padding: 7px 9px;
-            font-size: 0;
-        }
-
-
-        .status-dot {
-            width: 7px;
-            height: 7px;
-        }
-
-
         .login-content {
             gap: 22px;
             padding: 18px 14px 35px;
@@ -1961,19 +1583,6 @@
 
         .info-decoration {
             display: none;
-        }
-
-
-        .info-badge {
-            margin-bottom: 13px;
-            padding: 6px 10px 6px 7px;
-            font-size: 0.62rem;
-        }
-
-
-        .badge-icon {
-            width: 22px;
-            height: 22px;
         }
 
 
@@ -1993,7 +1602,7 @@
         .smart-ac-visual {
             height: 155px;
             margin-bottom: 15px;
-            border-radius: 20px;
+            border-radius: var(--smart-radius);
         }
 
 
@@ -2001,7 +1610,7 @@
             width: 220px;
             height: 88px;
             padding: 11px 14px;
-            border-radius: 15px;
+            border-radius: var(--smart-radius);
         }
 
 
@@ -2095,7 +1704,7 @@
 
         .login-card {
             padding: 28px 20px;
-            border-radius: 23px;
+            border-radius: var(--smart-radius);
         }
 
 
@@ -2108,7 +1717,7 @@
             width: 58px;
             height: 58px;
             margin-bottom: 14px;
-            border-radius: 18px;
+            border-radius: var(--smart-radius);
             font-size: 1.45rem;
         }
 
@@ -2128,10 +1737,6 @@
             font-size: 0.9rem;
         }
 
-
-        .security-notice {
-            align-items: flex-start;
-        }
 
 
         .login-footer {
@@ -2153,16 +1758,6 @@
                ===================================================== */
 
     @@media (max-width: 380px) {
-
-        .brand-name {
-            font-size: 0.88rem;
-        }
-
-
-        .nav-status {
-            display: none;
-        }
-
 
         .login-content {
             padding-left: 10px;
@@ -2219,8 +1814,7 @@
 
         .login-submit,
         .info-feature,
-        .login-input,
-        .nav-link {
+        .login-input {
             transition: none !important;
         }
     }

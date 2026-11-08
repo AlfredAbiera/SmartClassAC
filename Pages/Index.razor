@@ -174,7 +174,7 @@
             <!-- HERO TEXT -->
             <div class="col-lg-7 text-center text-lg-start">
 
-                <div class="badge hero-badge px-4 py-2 rounded-pill mb-4">
+                <div class="badge hero-badge px-4 py-2 rounded-compact mb-4">
 
                     <i class="fas fa-bolt me-2"></i>
 
@@ -204,7 +204,7 @@
                 <div class="d-flex flex-wrap gap-3 justify-content-center justify-content-lg-start">
 
                     <a href="/login"
-                       class="btn btn-primary btn-lg px-5 py-3 rounded-pill shadow-lg hero-button">
+                       class="btn btn-primary btn-lg px-5 py-3 rounded-compact shadow-lg hero-button">
 
                         <i class="fas fa-right-to-bracket me-2"></i>
 
@@ -214,7 +214,7 @@
 
 
                     <a href="#features"
-                       class="btn btn-outline-secondary btn-lg px-5 py-3 rounded-pill explore-button">
+                       class="btn btn-outline-secondary btn-lg px-5 py-3 rounded-compact explore-button">
 
                         <i class="fas fa-chevron-down me-2"></i>
 
@@ -701,7 +701,7 @@
 
 
                         <a href="/login"
-                           class="btn btn-primary rounded-pill px-4 mt-3">
+                           class="btn btn-primary rounded-compact px-4 mt-3">
 
                             Access Dashboard
 
@@ -863,7 +863,7 @@
         align-items: center;
         justify-content: space-between;
         padding: 10px 14px 10px 16px;
-        border-radius: 20px;
+        border-radius: var(--smart-radius);
         background: rgba(255,255,255,0.86);
         backdrop-filter: blur(20px);
         -webkit-backdrop-filter: blur(20px);
@@ -891,7 +891,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        border-radius: 14px;
+        border-radius: var(--smart-radius);
         color: white;
         font-size: 1.25rem;
         background: linear-gradient( 135deg, #1a73e8, #42a5f5 );
@@ -935,7 +935,7 @@
         text-decoration: none;
         font-size: 0.9rem;
         font-weight: 600;
-        border-radius: 12px;
+        border-radius: var(--smart-radius);
         transition: color 0.25s ease, background 0.25s ease, transform 0.25s ease, box-shadow 0.25s ease;
     }
 
@@ -1001,7 +1001,7 @@
         width: 42px;
         height: 42px;
         border: none;
-        border-radius: 13px;
+        border-radius: var(--smart-radius);
         color: #1a73e8;
         background: rgba(26,115,232,0.09);
         cursor: pointer;
@@ -1026,7 +1026,7 @@
         display: none;
         margin-top: 8px;
         padding: 10px;
-        border-radius: 18px;
+        border-radius: var(--smart-radius);
         background: rgba(255,255,255,0.94);
         backdrop-filter: blur(20px);
         -webkit-backdrop-filter: blur(20px);
@@ -1049,7 +1049,7 @@
         text-decoration: none;
         font-size: 0.95rem;
         font-weight: 600;
-        border-radius: 12px;
+        border-radius: var(--smart-radius);
         transition: all 0.2s ease;
     }
 
@@ -1292,7 +1292,7 @@
         z-index: 5;
         width: clamp(260px, 27vw, 350px);
         padding: 22px;
-        border-radius: 28px;
+        border-radius: var(--smart-radius);
         background: linear-gradient( 145deg, rgba(255,255,255,0.96), rgba(235,245,255,0.92) );
         border: 1px solid rgba(255,255,255,0.95);
         box-shadow: 0 25px 70px rgba(26,115,232,0.18), inset 0 1px 0 rgba(255,255,255,0.9);
@@ -1347,7 +1347,7 @@
     .ac-display {
         padding: 20px;
         text-align: center;
-        border-radius: 20px;
+        border-radius: var(--smart-radius);
         background: linear-gradient( 145deg, #eaf5ff, #dceeff );
         border: 1px solid rgba(26,115,232,0.08);
     }
@@ -1392,7 +1392,7 @@
         align-items: center;
         gap: 8px;
         padding: 11px;
-        border-radius: 13px;
+        border-radius: var(--smart-radius);
         color: #526174;
         background: rgba(255,255,255,0.75);
         font-size: 0.58rem;
@@ -1420,7 +1420,7 @@
         .ac-airflow span {
             width: 35px;
             height: 4px;
-            border-radius: 20px;
+            border-radius: var(--smart-radius);
             background: linear-gradient( 90deg, transparent, #42a5f5 );
             animation: airflow 1.5s ease-in-out infinite;
         }
@@ -1455,7 +1455,7 @@
         align-items: center;
         gap: 10px;
         padding: 12px 15px;
-        border-radius: 16px;
+        border-radius: var(--smart-radius);
         background: rgba(255,255,255,0.92);
         border: 1px solid rgba(255,255,255,0.95);
         box-shadow: 0 15px 40px rgba(26,115,232,0.12);
@@ -1470,7 +1470,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        border-radius: 11px;
+        border-radius: var(--smart-radius);
         color: #1a73e8;
         background: rgba(26,115,232,0.10);
     }
@@ -1510,7 +1510,7 @@
         align-items: center;
         gap: clamp(8px, 1vw, 14px);
         padding: clamp(10px,1.2vw,16px) clamp(13px,1.6vw,22px);
-        border-radius: clamp(14px,1.5vw,20px);
+        border-radius: var(--smart-radius);
         background: rgba(255,255,255,0.90);
         border: 1px solid rgba(255,255,255,0.9);
         backdrop-filter: blur(14px);
@@ -1526,7 +1526,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        border-radius: clamp(10px,1vw,14px);
+        border-radius: var(--smart-radius);
         color: white;
         background: linear-gradient( 135deg, #42a5f5, #1a73e8 );
     }
@@ -1564,7 +1564,7 @@
         align-items: center;
         gap: clamp(8px,1vw,12px);
         padding: clamp(10px,1.2vw,15px) clamp(13px,1.5vw,20px);
-        border-radius: clamp(14px,1.5vw,20px);
+        border-radius: var(--smart-radius);
         background: rgba(255,255,255,0.90);
         border: 1px solid rgba(255,255,255,0.9);
         backdrop-filter: blur(14px);
@@ -1611,7 +1611,7 @@
         align-items: center;
         gap: 9px;
         padding: clamp(9px,1vw,13px) clamp(12px,1.3vw,18px);
-        border-radius: clamp(12px,1.2vw,17px);
+        border-radius: var(--smart-radius);
         color: #1a73e8;
         background: rgba(255,255,255,0.88);
         border: 1px solid rgba(255,255,255,0.9);
@@ -1628,7 +1628,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        border-radius: 10px;
+        border-radius: var(--smart-radius);
         color: #1a73e8;
         background: rgba(26,115,232,0.10);
     }
@@ -1665,7 +1665,7 @@
         gap: .6rem;
         padding: .85rem;
         border: 1px solid rgba(26, 115, 232, .12);
-        border-radius: .9rem;
+        border-radius: var(--smart-radius);
         background: rgba(255, 255, 255, .7);
         box-shadow: 0 10px 25px rgba(26, 115, 232, .05);
     }
@@ -1677,7 +1677,7 @@
         flex: 0 0 2rem;
         place-items: center;
         color: #1a73e8;
-        border-radius: .6rem;
+        border-radius: var(--smart-radius);
         background: rgba(26, 115, 232, .1);
         font-size: .8rem;
     }
@@ -1734,7 +1734,7 @@
         background: rgba(255,255,255,0.62);
         backdrop-filter: blur(10px);
         -webkit-backdrop-filter: blur(10px);
-        border-radius: 1.5rem;
+        border-radius: var(--smart-radius);
         border: 1px solid rgba(255,255,255,0.8);
         transition: all 0.3s ease;
         box-shadow: 0 8px 32px rgba(0,0,0,0.05);
@@ -1771,7 +1771,7 @@
         align-items: center;
         justify-content: center;
         margin: 0 auto 1.5rem;
-        border-radius: 22px;
+        border-radius: var(--smart-radius);
         font-size: 2rem;
         color: #1a73e8;
         background: rgba(26,115,232,0.10);
@@ -1808,7 +1808,7 @@
         background: rgba(255,255,255,0.70);
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
-        border-radius: 25px;
+        border-radius: var(--smart-radius);
         border: 1px solid rgba(255,255,255,0.9);
         box-shadow: 0 15px 45px rgba(26,115,232,0.08);
     }
@@ -1822,7 +1822,7 @@
         margin-bottom: 20px;
         color: white;
         font-size: 1.5rem;
-        border-radius: 18px;
+        border-radius: var(--smart-radius);
         background: linear-gradient( 135deg, #1a73e8, #42a5f5 );
     }
 
@@ -1859,7 +1859,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        border-radius: 30px;
+        border-radius: var(--smart-radius);
         background: radial-gradient( circle at center, rgba(66,165,245,0.18), transparent 60% );
     }
 
@@ -1884,7 +1884,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        border-radius: 20px;
+        border-radius: var(--smart-radius);
         color: #1a73e8;
         font-size: clamp(1rem,1.5vw,1.4rem);
         background: rgba(255,255,255,0.85);
@@ -2244,7 +2244,7 @@
 
         .navbar-content {
             padding: 9px 11px 9px 13px;
-            border-radius: 17px;
+            border-radius: var(--smart-radius);
         }
 
         .smart-nav-links {
@@ -2260,7 +2260,7 @@
         .brand-icon {
             width: 40px;
             height: 40px;
-            border-radius: 12px;
+            border-radius: var(--smart-radius);
         }
 
         .brand-text {
@@ -2296,7 +2296,7 @@
         .smart-ac-device {
             width: 270px;
             padding: 17px;
-            border-radius: 23px;
+            border-radius: var(--smart-radius);
         }
 
         .ac-ring.ring-1 {

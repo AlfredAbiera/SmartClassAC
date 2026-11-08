@@ -18,6 +18,10 @@ body {
     --smart-blue: #1a73e8;
     --smart-navy: #0d47a1;
     --smart-ink: #172033;
+    --smart-radius: .25rem;
+    --bs-border-radius: var(--smart-radius);
+    --bs-border-radius-sm: var(--smart-radius);
+    --bs-border-radius-lg: var(--smart-radius);
 }
 
 html {
@@ -54,6 +58,10 @@ body {
     outline-offset: 3px;
 }
 
+.rounded-compact {
+    border-radius: var(--smart-radius);
+}
+
 /* A single, clear access pair in the landing navigation. */
 .nav-auth-actions {
     display: flex;
@@ -68,7 +76,7 @@ body {
     justify-content: center;
     min-height: 40px;
     padding: .55rem .9rem;
-    border-radius: 999px;
+    border-radius: var(--smart-radius);
     font-size: .86rem;
     font-weight: 700;
     text-decoration: none;
@@ -108,7 +116,7 @@ body {
     padding: .9rem 1rem .75rem;
     text-align: left;
     border: 1px solid rgba(26, 115, 232, .12);
-    border-radius: 1rem;
+    border-radius: var(--smart-radius);
     background: rgba(255, 255, 255, .72);
     box-shadow: 0 12px 30px rgba(26, 115, 232, .07);
     backdrop-filter: blur(12px);
@@ -127,7 +135,7 @@ body {
 .comfort-control output {
     padding: .2rem .55rem;
     color: var(--smart-blue);
-    border-radius: .5rem;
+    border-radius: var(--smart-radius);
     background: rgba(26, 115, 232, .1);
 }
 

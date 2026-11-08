@@ -18,18 +18,18 @@ headers {
 body:json {
   {
     "templateId": {{templateId}},
-    "deviceCode": "{{deviceCode}}"
+    "deviceId": "{{deviceId}}"
   }
 }
 
 docs {
-  Looks up templateId at a specific room scanner (deviceCode) and starts or ends class attendance.
+  Looks up templateId at a registered device (deviceId) and starts or ends class attendance in its assigned room.
 
   action values:
   - started — began today's in-window schedule for this classroom
   - ended — closed an active attendance row for this classroom
   - unknown — template not enrolled (404)
-  - unknown_device — deviceCode not registered (404)
+  - unknown_device — deviceId not registered (404)
   - wrong_room — active class is in a different classroom (409)
   - no_schedule — teacher matched but no current schedule in this room (409)
 }

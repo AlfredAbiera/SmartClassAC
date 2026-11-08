@@ -1,0 +1,52 @@
+@implements IDisposable
+
+@if (Active)
+{
+    @ChildContent
+}
+
+@code {
+    [Parameter] public bool Active { get; set; }
+    [Parameter] public long Version { get; set; }
+    [Parameter] public EventCallback<long> Dismissed { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private CancellationTokenSource? timeout;
+    private long scheduledVersion;
+    private bool scheduled;
+
+    protected override void OnParametersSet()
+    {
+        if (Active && scheduled && scheduledVersion == Version) return;
+        timeout?.Cancel();
+        timeout?.Dispose();
+        timeout = null;
+        scheduled = Active;
+        if (!Active) return;
+        scheduledVersion = Version;
+        timeout = new CancellationTokenSource();
+        _ = DismissAfterDelayAsync(Version, timeout.Token);
+    }
+
+    private async Task DismissAfterDelayAsync(long version, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+            await InvokeAsync(async () =>
+            {
+                if (!cancellationToken.IsCancellationRequested)
+                    await Dismissed.InvokeAsync(version);
+            });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    public void Dispose()
+    {
+        timeout?.Cancel();
+        timeout?.Dispose();
+    }
+}

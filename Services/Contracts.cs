@@ -131,9 +131,9 @@ public sealed record OperationResult(bool Succeeded, string? Error = null)
 public sealed record CreateTeacherRequest(string DisplayName, string Username, string EmployeeNumber, string? Email, string Phone, string Password, string? DevicePin = null, string? RegistrationOtp = null);
 public sealed record UpdateAdminTeacherRequest(long AccountId, string DisplayName, string Username, string EmployeeNumber, string? Email, string Phone, string? DevicePin, string? NewPassword);
 public sealed record TeacherDirectoryEntry(long Id, string DisplayName, string Username, string? EmployeeNumber, string? Email, string? Phone, int FingerprintTemplateCount, bool IsActive);
-public sealed record ClassroomEntry(long Id, string Name, int Capacity, int TargetTemperature, decimal? CurrentTemperature, string AcStatus, bool IsActive);
-public sealed record CreateClassroomRequest(string Name, int Capacity, int TargetTemperature);
-public sealed record UpdateClassroomRequest(long Id, string Name, int Capacity, int TargetTemperature, bool IsActive);
+public sealed record ClassroomEntry(long Id, string Name, int Capacity, int TargetTemperature, decimal? CurrentTemperature, string AcStatus, bool IsActive, int MinimumTemperature = 16);
+public sealed record CreateClassroomRequest(string Name, int Capacity, int TargetTemperature, int MinimumTemperature = 16);
+public sealed record UpdateClassroomRequest(long Id, string Name, int Capacity, int TargetTemperature, bool IsActive, int MinimumTemperature = 16);
 
 public sealed record CreateScheduleRequest(
     long TeacherAccountId,
@@ -360,17 +360,97 @@ public sealed class DeviceApiOptions
     public string ApiKey { get; set; } = string.Empty;
 }
 
-public sealed record EnrollFingerprintRequest(string PinCode, long TemplateId, string DeviceCode);
+public static class BiometricDeviceSettingsPolicy
+{
+    public const int DefaultStatusPollingIntervalSeconds = 30;
+    public const int MinStatusPollingIntervalSeconds = 5;
+    public const int MaxStatusPollingIntervalSeconds = 3600;
+}
 
-public sealed record DeviceScanRequest(long TemplateId, string? DeviceCode);
+public sealed record EnrollFingerprintRequest(string PinCode, long TemplateId, string DeviceId);
 
-public sealed record DeviceStatusRequest(string? DeviceCode);
+public sealed record DeviceScanRequest(long TemplateId, string? DeviceId);
 
-public sealed record BiometricDeviceEntry(long Id, long ClassroomId, string ClassroomName, string DeviceCode, string DisplayName, bool IsActive);
+public sealed record DeviceStatusRequest(string? DeviceId);
 
-public sealed record CreateBiometricDeviceRequest(long ClassroomId, string DeviceCode, string DisplayName);
+public sealed record DeviceAdminRoomsRequest(string? DeviceId, string? AdminPin);
+
+public sealed record DeviceAdminAssignRequest(string? DeviceId, string? AdminPin, long? ClassroomId);
+
+public sealed record DeviceRoomOption(long Id, string Name, bool IsCurrent);
+
+public sealed record DeviceAdminResult(
+    bool Ok,
+    int StatusCode = 200,
+    string? Error = null,
+    IReadOnlyList<DeviceRoomOption>? Rooms = null,
+    string? ClassroomName = null,
+    string? DeviceId = null,
+    string? DisplayName = null);
+
+public sealed record DevicePairRequest(string? AdminPin, string? PairingCode);
+
+public static class AdminDevicePinCodes
+{
+    public const int Length = 6;
+    public const string RequirementMessage = "Admin device PIN must be exactly 6 digits.";
+
+    public static bool IsValid(string? pin) =>
+        pin is { Length: Length } && pin.All(char.IsAsciiDigit);
+}
+
+public sealed record BiometricDeviceEntry(
+    long Id,
+    long? ClassroomId,
+    string? ClassroomName,
+    string DeviceId,
+    string DisplayName,
+    bool IsActive,
+    int? TargetTemperature,
+    int StatusPollingIntervalSeconds,
+    bool FingerprintEnrollmentEnabled,
+    bool AttendanceScanEnabled,
+    string? PairingCode = null,
+    bool IsPaired = false,
+    bool IsEnrollmentScanner = false);
+
+public sealed record CreateBiometricDeviceRequest(
+    long? ClassroomId = null,
+    int? TargetTemperature = null,
+    int StatusPollingIntervalSeconds = BiometricDeviceSettingsPolicy.DefaultStatusPollingIntervalSeconds,
+    bool IsActive = true,
+    bool FingerprintEnrollmentEnabled = true,
+    bool AttendanceScanEnabled = true);
+
+public sealed record UpdateBiometricDeviceRequest(
+    long Id,
+    long? ClassroomId,
+    int? TargetTemperature,
+    int StatusPollingIntervalSeconds,
+    bool IsActive,
+    bool FingerprintEnrollmentEnabled,
+    bool AttendanceScanEnabled);
 
 public sealed record FingerprintTeacherMatch(long TeacherAccountId, string DisplayName, string Username);
+
+public sealed record FingerprintSlotInspection(long Slot, bool IsBlocked, string? TeacherName, bool? TeacherIsActive);
+
+public sealed record TeacherFingerprint(string FingerPosition, long Slot, string? DeviceId, bool IsBlocked);
+
+public static class FingerprintReplacementAvailability
+{
+    public static bool IsEnabled(IConfiguration? configuration) =>
+        configuration?.GetValue<bool>("EnrollmentSecurity:EnableSameSlotReplacement") == true &&
+        configuration.GetValue<bool>("EnrollmentSecurity:EnableReplacementOperationApi") &&
+        configuration.GetValue<bool>("EnrollmentSecurity:EnableReplacementGuardReserveApi") &&
+        configuration.GetValue<bool>("EnrollmentSecurity:EnableReplacementWriteClaimApi") &&
+        configuration.GetValue<bool>("EnrollmentSecurity:EnableReplacementFinishApi");
+}
+
+public sealed record FingerprintEnrollmentPreparation(
+    string Id, long Slot, string FingerPosition, string TeacherName, string DeviceName, DateTime CreatedUtc,
+    bool HasUnresolvedWrite = false, bool HasActiveAuthorization = false, bool AllowsOccupiedSlot = false, long TeacherId = 0,
+    bool IsReplacement = false, long DeviceRowId = 0);
 
 /// <summary>
 /// Room + AC + teacher snapshot for a biometric device (used after power-loss recovery).
@@ -378,7 +458,7 @@ public sealed record FingerprintTeacherMatch(long TeacherAccountId, string Displ
 public sealed record DeviceRoomStatusResult(
     bool Ok,
     string? Error = null,
-    string? DeviceCode = null,
+    string? DeviceId = null,
     long? ClassroomId = null,
     string? ClassroomName = null,
     string? AcStatus = null,
@@ -387,7 +467,12 @@ public sealed record DeviceRoomStatusResult(
     long? TeacherAccountId = null,
     string? TeacherDisplayName = null,
     long? ScheduleId = null,
-    bool ClearFingerprints = false);
+    bool ClearFingerprints = false,
+    string? DeviceDisplayName = null,
+    int? TargetTemperature = null,
+    int StatusPollingIntervalSeconds = BiometricDeviceSettingsPolicy.DefaultStatusPollingIntervalSeconds,
+    bool FingerprintEnrollmentEnabled = true,
+    bool AttendanceScanEnabled = true);
 
 public sealed record DeviceFingerprintEnrollResult(
     bool Ok,
@@ -404,7 +489,7 @@ public sealed record DeviceFingerprintEnrollResult(
     string? FingerPosition = null,
     long? ClassroomId = null,
     string? ClassroomName = null,
-    string? DeviceCode = null);
+    string? DeviceId = null);
 
 public sealed record DeviceFingerprintScanResult(
     bool Ok,
@@ -414,7 +499,7 @@ public sealed record DeviceFingerprintScanResult(
     long? ScheduleId = null,
     long? ClassroomId = null,
     string? ClassroomName = null,
-    string? DeviceCode = null,
+    string? DeviceId = null,
     string? Message = null);
 
 /// <summary>
@@ -526,20 +611,39 @@ public interface IUserAccountRepository
     Task<OperationResult> ReviewSupportTicketAsync(long adminAccountId, ReviewSupportTicket request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TemperatureLogEntry>> GetTemperatureLogsAsync(long? classroomId = null, CancellationToken cancellationToken = default);
     Task<OperationResult> SetTemperatureAsync(long actorAccountId, SetTemperatureRequest request, CancellationToken cancellationToken = default);
-    Task ResetSystemToFirstAccessAsync(DefaultAdminOptions defaultAdmin, string passwordHash, CancellationToken cancellationToken = default);
+    Task<OperationResult> ResetSystemToFirstAccessAsync(DefaultAdminOptions defaultAdmin, string passwordHash, CancellationToken cancellationToken = default);
     Task<OperationResult> EnrollFingerprintAsync(long teacherAccountId, string fingerPosition, long templateId, CancellationToken cancellationToken = default);
     Task<DeviceFingerprintEnrollResult> EnrollFingerprintByPinAsync(string pinCode, long templateId, CancellationToken cancellationToken = default);
     Task<TeacherProfileEntry?> FindTeacherProfileByPinAsync(string pinCode, CancellationToken cancellationToken = default);
-    Task<FingerprintTeacherMatch?> FindTeacherByFingerprintTemplateIdAsync(long templateId, CancellationToken cancellationToken = default);
-    Task<BiometricDeviceEntry?> FindBiometricDeviceByCodeAsync(string deviceCode, CancellationToken cancellationToken = default);
+    Task<FingerprintTeacherMatch?> FindTeacherByFingerprintTemplateIdAsync(long templateId, string deviceId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<long>> GetBlockedFingerprintSlotsAsync(CancellationToken cancellationToken = default);
+    Task<FingerprintSlotInspection> InspectFingerprintSlotAsync(long templateId, CancellationToken cancellationToken = default);
+    Task<OperationResult> SetFingerprintSlotBlockedAsync(long templateId, bool blocked, CancellationToken cancellationToken = default);
+    Task<OperationResult> PrepareFingerprintEnrollmentAsync(long teacherId, string fingerPosition, long templateId, CancellationToken cancellationToken = default);
+    Task<OperationResult> PrepareFingerprintEnrollmentAutomaticallyAsync(long teacherId, string fingerPosition, CancellationToken cancellationToken = default);
+    Task<OperationResult> PrepareFingerprintReplacementAsync(long scannerId, long teacherId, string fingerPosition, long slot, CancellationToken cancellationToken = default);
+    Task<OperationResult> AuthorizeFingerprintReplacementAsync(long adminAccountId, long scannerId, long teacherId, string fingerPosition, long slot, string id, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<TeacherFingerprint>> GetTeacherFingerprintsAsync(long teacherId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<FingerprintEnrollmentPreparation>> GetFingerprintEnrollmentPreparationsAsync(CancellationToken cancellationToken = default);
+    Task<OperationResult> CancelFingerprintEnrollmentPreparationAsync(string id, CancellationToken cancellationToken = default);
+    Task<OperationResult> AuthorizeFingerprintEnrollmentAsync(long adminAccountId, string id, bool allowOccupiedSlot, CancellationToken cancellationToken = default);
+    Task<OperationResult> RevokeFingerprintEnrollmentAuthorizationAsync(string id, CancellationToken cancellationToken = default);
+    Task<BiometricDeviceEntry?> FindBiometricDeviceByIdAsync(string deviceId, CancellationToken cancellationToken = default);
+    Task<OperationResult> SetAdminDevicePinHashAsync(long adminAccountId, string pinHash, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<string>> GetAdminDevicePinHashesAsync(CancellationToken cancellationToken = default);
+    Task<OperationResult> RegenerateDevicePairingCodeAsync(long deviceRowId, CancellationToken cancellationToken = default);
+    Task<BiometricDeviceEntry?> PairDeviceByCodeAsync(string pairingCode, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<BiometricDeviceEntry>> GetBiometricDevicesAsync(CancellationToken cancellationToken = default);
+    Task<OperationResult> SetEnrollmentScannerAsync(long? deviceRowId, CancellationToken cancellationToken = default);
     Task<OperationResult> CreateBiometricDeviceAsync(CreateBiometricDeviceRequest request, CancellationToken cancellationToken = default);
-    Task<DeviceRoomStatusResult> GetDeviceRoomStatusAsync(string deviceCode, DateOnly schoolDate, TimeOnly schoolTime, CancellationToken cancellationToken = default);
+    Task<OperationResult> UpdateBiometricDeviceAsync(UpdateBiometricDeviceRequest request, CancellationToken cancellationToken = default);
+    Task<OperationResult> DeleteBiometricDeviceAsync(long id, CancellationToken cancellationToken = default);
+    Task<DeviceRoomStatusResult> GetDeviceRoomStatusAsync(string deviceId, DateOnly schoolDate, TimeOnly schoolTime, CancellationToken cancellationToken = default);
     /// <summary>
     /// Ends any active attendance in this device's classroom and sets AC Off (e.g. after sensor DELETEALL).
     /// Also clears any pending remote fingerprint-wipe flag for the device.
     /// </summary>
-    Task<OperationResult> ClearRoomSessionByDeviceCodeAsync(string deviceCode, CancellationToken cancellationToken = default);
+    Task<OperationResult> ClearRoomSessionByDeviceIdAsync(string deviceId, CancellationToken cancellationToken = default);
     /// <summary>
     /// Deletes all enrolled fingerprint template rows and marks every active scanner to wipe its sensor on next status poll.
     /// </summary>
@@ -602,8 +706,26 @@ public interface IAuthService
     Task<IReadOnlyList<TemperatureLogEntry>> GetTemperatureLogsAsync(long? classroomId = null);
     Task<OperationResult> SetTemperatureAsync(SetTemperatureRequest request);
     Task<IReadOnlyList<BiometricDeviceEntry>> GetBiometricDevicesAsync();
+    Task<OperationResult> SetEnrollmentScannerAsync(long? deviceRowId);
+    Task<IReadOnlyList<long>> GetBlockedFingerprintSlotsAsync();
+    Task<FingerprintSlotInspection> InspectFingerprintSlotAsync(long templateId);
+    Task<OperationResult> SetFingerprintSlotBlockedAsync(long templateId, bool blocked);
+    Task<OperationResult> PrepareFingerprintEnrollmentAsync(long teacherId, string fingerPosition, long templateId);
+    Task<OperationResult> PrepareFingerprintEnrollmentAutomaticallyAsync(long teacherId, string fingerPosition);
+    Task<OperationResult> PrepareFingerprintReplacementAsync(long scannerId, long teacherId, string fingerPosition, long slot);
+    Task<OperationResult> AuthorizeFingerprintReplacementAsync(long scannerId, long teacherId, string fingerPosition, long slot, string id);
+    Task<IReadOnlyList<TeacherFingerprint>> GetTeacherFingerprintsAsync(long teacherId);
+    Task<IReadOnlyList<FingerprintEnrollmentPreparation>> GetFingerprintEnrollmentPreparationsAsync();
+    Task<OperationResult> CancelFingerprintEnrollmentPreparationAsync(string id);
+    Task<OperationResult> AuthorizeFingerprintEnrollmentAsync(string id, bool allowOccupiedSlot);
+    Task<OperationResult> RevokeFingerprintEnrollmentAuthorizationAsync(string id);
     Task<OperationResult> CreateBiometricDeviceAsync(CreateBiometricDeviceRequest request);
+    Task<OperationResult> UpdateBiometricDeviceAsync(UpdateBiometricDeviceRequest request);
+    Task<OperationResult> DeleteBiometricDeviceAsync(long id);
+    Task<OperationResult> SetMyAdminDevicePinAsync(string pin);
+    Task<OperationResult> RegenerateDevicePairingCodeAsync(long deviceRowId);
+    Task<bool> HasAdminDevicePinAsync();
     Task<OperationResult> RequestClearAllFingerprintDevicesAsync();
     Task<int> CountFingerprintTemplatesAsync();
-    Task<OperationResult> ResetSystemToFirstAccessAsync(string currentPassword);
+    Task<OperationResult> ResetSystemToFirstAccessAsync();
 }

@@ -15,11 +15,18 @@ if (builder.Environment.IsDevelopment())
     builder.Configuration.AddUserSecrets<Program>();
 }
 
+if (args.Length > 0 && args[0] == "--enrollment-local-key")
+{
+    Environment.ExitCode = await EnrollmentLocalProvisioning.RunAsync(args, builder.Configuration);
+    return;
+}
+
 builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ProtectedSessionStorage>();
 builder.Services.AddAuthorizationCore();
+builder.Services.AddAuthorization();
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
     {
@@ -48,6 +55,10 @@ builder.Services.AddSingleton<IPasswordResetEmailSender, SmtpPasswordResetEmailS
 builder.Services.AddScoped<IUserAccountRepository, MariaDbUserAccountRepository>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<DeviceFingerprintService>();
+builder.Services.AddScoped<GsmModemSettingsStore>();
+builder.Services.AddScoped<BuzzerSettingsStore>();
+builder.Services.AddScoped<AcIrAdministration>();
+builder.Services.AddSingleton<GsmSmsTransport>();
 builder.Services.AddScoped<DemoDataSeeder>();
 builder.Services.AddScoped<DatabaseMigrationRunner>();
 // DatabaseInitializationService attempts to seed the default admin on startup.
@@ -136,7 +147,7 @@ app.MapPost("/api/device/clear-session", async (
 
     try
     {
-        var result = await fingerprints.ClearRoomSessionAsync(request.DeviceCode ?? string.Empty, cancellationToken);
+        var result = await fingerprints.ClearRoomSessionAsync(request.DeviceId ?? string.Empty, cancellationToken);
         if (!result.Succeeded)
         {
             return Results.Json(new
@@ -150,14 +161,14 @@ app.MapPost("/api/device/clear-session", async (
         return Results.Json(new
         {
             ok = true,
-            deviceCode = request.DeviceCode?.Trim(),
+            deviceId = request.DeviceId?.Trim(),
             acOn = false,
             message = "Room session ended and AC turned off."
         });
     }
     catch (Exception exception)
     {
-        loggerFactory.CreateLogger("DeviceClearSession").LogError(exception, "Clear session failed for device {DeviceCode}", request.DeviceCode);
+        loggerFactory.CreateLogger("DeviceClearSession").LogError(exception, "Clear session failed for device {DeviceId}", request.DeviceId);
         return Results.Json(new
         {
             ok = false,
@@ -182,7 +193,7 @@ app.MapPost("/api/device/status", async (
 
     try
     {
-        var result = await fingerprints.GetStatusAsync(request.DeviceCode ?? string.Empty, cancellationToken);
+        var result = await fingerprints.GetStatusAsync(request.DeviceId ?? string.Empty, cancellationToken);
         if (!result.Ok)
         {
             return Results.Json(new
@@ -196,7 +207,7 @@ app.MapPost("/api/device/status", async (
         return Results.Json(new
         {
             ok = true,
-            deviceCode = result.DeviceCode,
+            deviceId = result.DeviceId,
             classroomId = result.ClassroomId,
             classroomName = result.ClassroomName,
             acStatus = result.AcStatus,
@@ -205,12 +216,17 @@ app.MapPost("/api/device/status", async (
             teacherAccountId = result.TeacherAccountId,
             teacherDisplayName = result.TeacherDisplayName,
             scheduleId = result.ScheduleId,
-            clearFingerprints = result.ClearFingerprints
+            clearFingerprints = result.ClearFingerprints,
+            deviceDisplayName = result.DeviceDisplayName,
+            targetTemperature = result.TargetTemperature,
+            statusPollingIntervalSeconds = result.StatusPollingIntervalSeconds,
+            fingerprintEnrollmentEnabled = result.FingerprintEnrollmentEnabled,
+            attendanceScanEnabled = result.AttendanceScanEnabled
         });
     }
     catch (Exception exception)
     {
-        loggerFactory.CreateLogger("DeviceStatus").LogError(exception, "Device status failed for device {DeviceCode}", request.DeviceCode);
+        loggerFactory.CreateLogger("DeviceStatus").LogError(exception, "Device status failed for device {DeviceId}", request.DeviceId);
         return Results.Json(new
         {
             ok = false,
@@ -235,7 +251,13 @@ app.MapPost("/api/device/fingerprint/enroll", async (
     var result = await fingerprints.EnrollAsync(request, cancellationToken);
     if (!result.Ok)
     {
-        var status = result.Error?.Contains("already", StringComparison.OrdinalIgnoreCase) == true
+        var status = result.Error?.Contains("disabled", StringComparison.OrdinalIgnoreCase) == true
+            ? StatusCodes.Status403Forbidden
+            : result.Error?.Contains("unavailable", StringComparison.OrdinalIgnoreCase) == true
+            ? StatusCodes.Status503ServiceUnavailable
+            : result.Error?.Contains("assign this device", StringComparison.OrdinalIgnoreCase) == true
+            ? StatusCodes.Status409Conflict
+            : result.Error?.Contains("already", StringComparison.OrdinalIgnoreCase) == true
             || result.Error?.Contains("full", StringComparison.OrdinalIgnoreCase) == true
             ? StatusCodes.Status409Conflict
             : StatusCodes.Status400BadRequest;
@@ -257,9 +279,16 @@ app.MapPost("/api/device/fingerprint/enroll", async (
         fingerPosition = result.FingerPosition,
         classroomId = result.ClassroomId,
         classroomName = result.ClassroomName,
-        deviceCode = result.DeviceCode
+        deviceId = result.DeviceId
     });
 });
+
+app.MapEnrollmentRecoveryRoutes(IsAuthorizedDevice);
+app.MapFacultyOtpRoutes(IsAuthorizedDevice);
+app.MapFacultyDeviceMenuRoutes(IsAuthorizedDevice);
+app.MapAcIrRoutes(IsAuthorizedDevice);
+app.MapBuzzerRoutes(IsAuthorizedDevice);
+app.MapAttendanceReportRoutes();
 
 app.MapPost("/api/device/fingerprint/scan", async (
     DeviceScanRequest request,
@@ -276,14 +305,16 @@ app.MapPost("/api/device/fingerprint/scan", async (
 
     try
     {
-        var result = await fingerprints.ScanAsync(request.TemplateId, request.DeviceCode ?? string.Empty, cancellationToken);
+        var result = await fingerprints.ScanAsync(request.TemplateId, request.DeviceId ?? string.Empty, cancellationToken);
         var status = result.Action switch
         {
             "unknown" => StatusCodes.Status404NotFound,
             "unknown_device" => StatusCodes.Status404NotFound,
+            "unassigned" => StatusCodes.Status409Conflict,
             "wrong_room" => StatusCodes.Status409Conflict,
             "no_schedule" => StatusCodes.Status409Conflict,
             "error" => StatusCodes.Status409Conflict,
+            "disabled" => StatusCodes.Status403Forbidden,
             "unauthorized" => StatusCodes.Status401Unauthorized,
             _ => StatusCodes.Status200OK
         };
@@ -297,14 +328,14 @@ app.MapPost("/api/device/fingerprint/scan", async (
             scheduleId = result.ScheduleId,
             classroomId = result.ClassroomId,
             classroomName = result.ClassroomName,
-            deviceCode = result.DeviceCode,
+            deviceId = result.DeviceId,
             message = result.Message,
             error = result.Message
         }, statusCode: status);
     }
     catch (Exception exception)
     {
-        loggerFactory.CreateLogger("DeviceFingerprintScan").LogError(exception, "Device scan failed for template {TemplateId} device {DeviceCode}", request.TemplateId, request.DeviceCode);
+        loggerFactory.CreateLogger("DeviceFingerprintScan").LogError(exception, "Device scan failed for template {TemplateId} device {DeviceId}", request.TemplateId, request.DeviceId);
         return Results.Json(new
         {
             ok = false,
@@ -313,6 +344,67 @@ app.MapPost("/api/device/fingerprint/scan", async (
             error = exception.Message
         }, statusCode: StatusCodes.Status500InternalServerError);
     }
+});
+
+app.MapPost("/api/device/admin/pair", async (
+    DevicePairRequest request,
+    HttpContext context,
+    DeviceFingerprintService fingerprints,
+    IConfiguration configuration,
+    CancellationToken cancellationToken) =>
+{
+    if (!IsAuthorizedDevice(context, configuration))
+    {
+        return Results.Json(new { ok = false, error = "Unauthorized device.", message = "Unauthorized device." }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+
+    var result = await fingerprints.PairAsync(request.AdminPin, request.PairingCode, context.Connection.RemoteIpAddress?.ToString(), cancellationToken);
+    return result.Ok
+        ? Results.Json(new { ok = true, deviceId = result.DeviceId, deviceDisplayName = result.DisplayName })
+        : Results.Json(new { ok = false, error = result.Error, message = result.Error }, statusCode: result.StatusCode);
+});
+
+app.MapPost("/api/device/admin/rooms", async (
+    DeviceAdminRoomsRequest request,
+    HttpContext context,
+    DeviceFingerprintService fingerprints,
+    IConfiguration configuration,
+    CancellationToken cancellationToken) =>
+{
+    if (!IsAuthorizedDevice(context, configuration))
+    {
+        return Results.Json(new { ok = false, error = "Unauthorized device.", message = "Unauthorized device." }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+
+    var result = await fingerprints.ListAssignableRoomsAsync(request.DeviceId, request.AdminPin, cancellationToken);
+    if (!result.Ok)
+    {
+        return Results.Json(new { ok = false, error = result.Error, message = result.Error }, statusCode: result.StatusCode);
+    }
+
+    // Compact "id|name|current;" list so firmware can parse it without a JSON library.
+    var rooms = result.Rooms ?? [];
+    var roomList = string.Concat(rooms.Select(room =>
+        $"{room.Id}|{room.Name.Replace('|', ' ').Replace(';', ' ').Replace('"', ' ').Replace('\\', ' ')}|{(room.IsCurrent ? 1 : 0)};"));
+    return Results.Json(new { ok = true, rooms, roomList });
+});
+
+app.MapPost("/api/device/admin/assign", async (
+    DeviceAdminAssignRequest request,
+    HttpContext context,
+    DeviceFingerprintService fingerprints,
+    IConfiguration configuration,
+    CancellationToken cancellationToken) =>
+{
+    if (!IsAuthorizedDevice(context, configuration))
+    {
+        return Results.Json(new { ok = false, error = "Unauthorized device.", message = "Unauthorized device." }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+
+    var result = await fingerprints.AssignRoomAsync(request.DeviceId, request.AdminPin, request.ClassroomId, cancellationToken);
+    return result.Ok
+        ? Results.Json(new { ok = true, classroomName = result.ClassroomName })
+        : Results.Json(new { ok = false, error = result.Error, message = result.Error }, statusCode: result.StatusCode);
 });
 
 app.MapRazorPages();

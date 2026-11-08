@@ -26,8 +26,8 @@
       "secret": false
     },
     {
-      "name": "deviceCode",
-      "value": "ROOM-101",
+      "name": "deviceId",
+      "value": "1000000001",
       "enabled": true,
       "secret": false
     }

@@ -415,9 +415,16 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             DELETE FROM user_accounts
             WHERE id = @id AND role = 'Teacher';";
         command.Parameters.Add("@id", MySqlDbType.Int64).Value = accountId;
-        return await command.ExecuteNonQueryAsync(cancellationToken) == 1
-            ? OperationResult.Success()
-            : OperationResult.Failure("The teacher account was not found.");
+        try
+        {
+            return await command.ExecuteNonQueryAsync(cancellationToken) == 1
+                ? OperationResult.Success()
+                : OperationResult.Failure("The teacher account was not found.");
+        }
+        catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.RowIsReferenced2)
+        {
+            return OperationResult.Failure("This teacher has an unresolved fingerprint write or other dependent records.");
+        }
     }
 
     public async Task<OperationResult> SetTeacherActiveAsync(long accountId, bool isActive, CancellationToken cancellationToken = default)
@@ -430,8 +437,13 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         if (!isActive)
         {
             await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+            await LockFingerprintDevicesAsync(connection, transaction, cancellationToken);
+            if (await HasFingerprintWriteForAsync(connection, transaction, "p.teacher_account_id", accountId, cancellationToken))
+                return OperationResult.Failure("This teacher has an unresolved fingerprint write.");
             await using (var scheduled = connection.CreateCommand())
             {
+                scheduled.Transaction = transaction;
                 scheduled.CommandText = @"
                     SELECT EXISTS(
                         SELECT 1 FROM class_schedules
@@ -445,14 +457,16 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             }
 
             await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
             command.CommandText = @"
                 UPDATE user_accounts
                 SET is_active = FALSE
                 WHERE id = @id AND role = 'Teacher';";
             command.Parameters.Add("@id", MySqlDbType.Int64).Value = accountId;
-            return await command.ExecuteNonQueryAsync(cancellationToken) == 1
-                ? OperationResult.Success()
-                : OperationResult.Failure("The teacher account was not found.");
+            if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+                return OperationResult.Failure("The teacher account was not found.");
+            await transaction.CommitAsync(cancellationToken);
+            return OperationResult.Success();
         }
 
         await using (var connection = await OpenConnectionAsync(cancellationToken))
@@ -475,12 +489,12 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            SELECT id, name, capacity, target_temperature, current_temperature, ac_status, is_active
+            SELECT id, name, capacity, target_temperature, current_temperature, ac_status, is_active, minimum_temperature
             FROM classrooms WHERE is_active = TRUE ORDER BY name;";
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            items.Add(new ClassroomEntry(reader.GetInt64(0), reader.GetString(1), reader.GetInt32(2), reader.GetInt32(3), reader.IsDBNull(4) ? null : reader.GetDecimal(4), reader.GetString(5), reader.GetBoolean(6)));
+            items.Add(new ClassroomEntry(reader.GetInt64(0), reader.GetString(1), reader.GetInt32(2), reader.GetInt32(3), reader.IsDBNull(4) ? null : reader.GetDecimal(4), reader.GetString(5), reader.GetBoolean(6), reader.GetInt32(7)));
         }
         return items;
     }
@@ -494,22 +508,11 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             await using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = @"
-                INSERT INTO classrooms (name, capacity, target_temperature, current_temperature, ac_status)
-                VALUES (@name, @capacity, @targetTemperature, @targetTemperature, 'Idle');";
+                INSERT INTO classrooms (name, capacity, target_temperature, current_temperature, ac_status, minimum_temperature)
+                VALUES (@name, @capacity, @targetTemperature, NULL, 'Idle', @minimumTemperature);";
             AddClassroomParameters(command, request.Name, request.Capacity, request.TargetTemperature);
+            command.Parameters.Add("@minimumTemperature", MySqlDbType.Int32).Value = request.MinimumTemperature;
             await command.ExecuteNonQueryAsync(cancellationToken);
-            var classroomId = command.LastInsertedId;
-
-            var deviceCode = request.Name.Trim().ToUpperInvariant().Replace(' ', '-');
-            await using var device = connection.CreateCommand();
-            device.Transaction = transaction;
-            device.CommandText = @"
-                INSERT INTO biometric_devices (classroom_id, device_code, display_name, is_active)
-                VALUES (@classroomId, @deviceCode, @displayName, TRUE);";
-            device.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = classroomId;
-            device.Parameters.Add("@deviceCode", MySqlDbType.VarChar).Value = deviceCode;
-            device.Parameters.Add("@displayName", MySqlDbType.VarChar).Value = $"{request.Name.Trim()} scanner";
-            await device.ExecuteNonQueryAsync(cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
             return OperationResult.Success();
@@ -517,7 +520,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
         {
             await transaction.RollbackAsync(cancellationToken);
-            return OperationResult.Failure("A classroom or scanner with that name/code already exists.");
+            return OperationResult.Failure("A classroom with that name already exists.");
         }
         catch
         {
@@ -529,19 +532,32 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
     public async Task<OperationResult> UpdateClassroomAsync(UpdateClassroomRequest request, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        if (!request.IsActive)
+        {
+            await LockFingerprintDevicesAsync(connection, transaction, cancellationToken);
+            if (await HasFingerprintWriteForAsync(connection, transaction, "d.classroom_id", request.Id, cancellationToken))
+                return OperationResult.Failure("This classroom has an unresolved fingerprint write.");
+            if (await HasInFlightIrForRoomAsync(connection, transaction, request.Id, cancellationToken))
+                return OperationResult.Failure("This classroom has an unresolved IR command. Stop and reconcile the scanner before retiring it.");
+            await InvalidateIrForRoomAsync(connection, transaction, request.Id, cancellationToken);
+        }
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = @"
             UPDATE classrooms
-            SET name = @name, capacity = @capacity, target_temperature = @targetTemperature, is_active = @isActive
+            SET name = @name, capacity = @capacity, target_temperature = @targetTemperature, is_active = @isActive, minimum_temperature = @minimumTemperature
             WHERE id = @id;";
         command.Parameters.Add("@id", MySqlDbType.Int64).Value = request.Id;
         AddClassroomParameters(command, request.Name, request.Capacity, request.TargetTemperature);
+        command.Parameters.Add("@minimumTemperature", MySqlDbType.Int32).Value = request.MinimumTemperature;
         command.Parameters.Add("@isActive", MySqlDbType.Bool).Value = request.IsActive;
         try
         {
-            return await command.ExecuteNonQueryAsync(cancellationToken) == 1
-                ? OperationResult.Success()
-                : OperationResult.Failure("The classroom was not found.");
+            if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+                return OperationResult.Failure("The classroom was not found.");
+            await transaction.CommitAsync(cancellationToken);
+            return OperationResult.Success();
         }
         catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
         {
@@ -552,9 +568,16 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
     public async Task<OperationResult> DeleteClassroomAsync(long classroomId, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await LockFingerprintDevicesAsync(connection, transaction, cancellationToken);
+        if (await HasFingerprintWriteForAsync(connection, transaction, "d.classroom_id", classroomId, cancellationToken))
+            return OperationResult.Failure("This classroom has an unresolved fingerprint write.");
+        if (await HasInFlightIrForRoomAsync(connection, transaction, classroomId, cancellationToken))
+            return OperationResult.Failure("This classroom has an unresolved IR command. Stop and reconcile the scanner before retiring it.");
 
         await using (var scheduled = connection.CreateCommand())
         {
+            scheduled.Transaction = transaction;
             scheduled.CommandText = @"
                 SELECT EXISTS(
                     SELECT 1 FROM class_schedules
@@ -568,14 +591,17 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         }
 
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = @"
             UPDATE classrooms
             SET is_active = FALSE, ac_status = 'Retired'
             WHERE id = @id AND is_active = TRUE;";
         command.Parameters.Add("@id", MySqlDbType.Int64).Value = classroomId;
-        return await command.ExecuteNonQueryAsync(cancellationToken) == 1
-            ? OperationResult.Success()
-            : OperationResult.Failure("The active classroom was not found.");
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+            return OperationResult.Failure("The active classroom was not found.");
+        await InvalidateIrForRoomAsync(connection, transaction, classroomId, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return OperationResult.Success();
     }
 
     public async Task<OperationResult> CreateScheduleAsync(CreateScheduleRequest request, CancellationToken cancellationToken = default)
@@ -1754,6 +1780,400 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         return OperationResult.Success();
     }
 
+    public async Task<IReadOnlyList<TeacherFingerprint>> GetTeacherFingerprintsAsync(long teacherId, CancellationToken cancellationToken = default)
+    {
+        if (teacherId <= 0) throw new ArgumentOutOfRangeException(nameof(teacherId));
+        var fingerprints = new List<TeacherFingerprint>();
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"SELECT f.finger_position, f.template_identifier, d.device_id, b.template_identifier IS NOT NULL
+            FROM fingerprint_templates f
+            LEFT JOIN fingerprint_template_device_bindings d ON d.fingerprint_template_id = f.id
+            LEFT JOIN fingerprint_slot_blocks b ON b.template_identifier = f.template_identifier
+            WHERE f.user_account_id = @teacher ORDER BY f.template_identifier;";
+        command.Parameters.Add("@teacher", MySqlDbType.Int64).Value = teacherId;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            fingerprints.Add(new TeacherFingerprint(reader.GetString(0), reader.GetInt64(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetBoolean(3)));
+        return fingerprints;
+    }
+
+    public async Task<OperationResult> PrepareFingerprintEnrollmentAsync(long teacherId, string fingerPosition, long templateId, CancellationToken cancellationToken = default)
+        => await PrepareFingerprintEnrollmentCoreAsync(teacherId, fingerPosition, templateId, cancellationToken);
+
+    public async Task<OperationResult> PrepareFingerprintEnrollmentAutomaticallyAsync(long teacherId, string fingerPosition, CancellationToken cancellationToken = default)
+        => await PrepareFingerprintEnrollmentCoreAsync(teacherId, fingerPosition, null, cancellationToken);
+
+    public async Task<OperationResult> PrepareFingerprintReplacementAsync(
+        long scannerId, long teacherId, string fingerPosition, long slot, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var target = await FingerprintReplacementTarget.LockAndCheckAsync(
+            connection, transaction, scannerId, teacherId, fingerPosition, slot, cancellationToken);
+        if (!target.Succeeded) return target;
+
+        try
+        {
+            await using var block = connection.CreateCommand();
+            block.Transaction = transaction;
+            block.CommandText = "INSERT INTO fingerprint_slot_blocks (template_identifier) VALUES (@slot);";
+            block.Parameters.Add("@slot", MySqlDbType.Int64).Value = slot;
+            await block.ExecuteNonQueryAsync(cancellationToken);
+
+            await using var insert = connection.CreateCommand();
+            insert.Transaction = transaction;
+            insert.CommandText = @"
+                INSERT INTO fingerprint_enrollment_preparations
+                    (id, device_id, teacher_account_id, finger_position, template_identifier, replacement_template_id)
+                SELECT @id, @device, f.user_account_id, f.finger_position, f.template_identifier, f.id
+                FROM fingerprint_templates f
+                WHERE f.user_account_id = @teacher AND f.finger_position = @finger COLLATE utf8mb4_unicode_ci
+                  AND f.template_identifier = @slot;";
+            insert.Parameters.Add("@id", MySqlDbType.VarChar).Value = Guid.NewGuid().ToString("D");
+            insert.Parameters.Add("@device", MySqlDbType.Int64).Value = scannerId;
+            insert.Parameters.Add("@teacher", MySqlDbType.Int64).Value = teacherId;
+            insert.Parameters.Add("@finger", MySqlDbType.VarChar).Value = fingerPosition;
+            insert.Parameters.Add("@slot", MySqlDbType.Int64).Value = slot;
+            if (await insert.ExecuteNonQueryAsync(cancellationToken) != 1)
+                return OperationResult.Failure("The replacement fingerprint no longer exists.");
+            await transaction.CommitAsync(cancellationToken);
+            return OperationResult.Success();
+        }
+        catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
+        {
+            return OperationResult.Failure("This scanner, slot, or teacher's finger is already reserved or the slot is blocked.");
+        }
+    }
+
+    private async Task<OperationResult> PrepareFingerprintEnrollmentCoreAsync(long teacherId, string fingerPosition, long? requestedSlot, CancellationToken cancellationToken)
+    {
+        if (teacherId <= 0 || !FingerprintSlots.IsValid(fingerPosition) ||
+            (requestedSlot is not null && (requestedSlot <= 0 || requestedSlot > ushort.MaxValue)))
+            return OperationResult.Failure("Select a teacher, a finger, and a sensor slot between 1 and 65535.");
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            await using var scanner = connection.CreateCommand();
+            scanner.Transaction = transaction;
+            scanner.CommandText = @"
+                SELECT d.id FROM fingerprint_enrollment_scanner e
+                INNER JOIN biometric_devices d ON d.id = e.device_id
+                INNER JOIN classrooms c ON c.id = d.classroom_id
+                WHERE e.singleton_id = 1 AND d.is_active = TRUE AND d.paired_at IS NOT NULL
+                  AND d.fingerprint_enrollment_enabled = TRUE AND d.pending_clear_fingerprints = FALSE
+                  AND c.is_active = TRUE FOR UPDATE;";
+            var deviceId = await scanner.ExecuteScalarAsync(cancellationToken);
+            if (deviceId is null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return OperationResult.Failure("Select an active, paired enrollment scanner assigned to an active room, with enrollment enabled and no pending sensor clear.");
+            }
+
+            await using var teacher = connection.CreateCommand();
+            teacher.Transaction = transaction;
+            teacher.CommandText = "SELECT id FROM user_accounts WHERE id = @id AND role = 'Teacher' AND is_active = TRUE FOR UPDATE;";
+            teacher.Parameters.Add("@id", MySqlDbType.Int64).Value = teacherId;
+            if (await teacher.ExecuteScalarAsync(cancellationToken) is null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return OperationResult.Failure("The teacher account was not found or is inactive.");
+            }
+
+            await using var fingerprintCount = connection.CreateCommand();
+            fingerprintCount.Transaction = transaction;
+            fingerprintCount.CommandText = "SELECT COUNT(*) FROM fingerprint_templates WHERE user_account_id = @teacher;";
+            fingerprintCount.Parameters.Add("@teacher", MySqlDbType.Int64).Value = teacherId;
+            if (Convert.ToInt64(await fingerprintCount.ExecuteScalarAsync(cancellationToken)) >= 2)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return OperationResult.Failure("This teacher already has two or more fingerprints. New enrollment is not allowed.");
+            }
+
+            long templateId;
+            if (requestedSlot is long specifiedSlot)
+            {
+                templateId = specifiedSlot;
+            }
+            else
+            {
+                await using var inventory = connection.CreateCommand();
+                inventory.Transaction = transaction;
+                inventory.CommandText = @"SELECT capacity, bitmap FROM fingerprint_sensor_inventory
+                    WHERE device_id = @device AND observed_after_utc > DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 90 SECOND)
+                    FOR UPDATE;";
+                inventory.Parameters.Add("@device", MySqlDbType.Int64).Value = Convert.ToInt64(deviceId);
+                int capacity;
+                byte[] bitmap;
+                await using (var reader = await inventory.ExecuteReaderAsync(cancellationToken))
+                {
+                    if (!await reader.ReadAsync(cancellationToken))
+                        return OperationResult.Failure("No recent scanner inventory is available. Wait for the scanner to refresh.");
+                    capacity = reader.GetInt32(0);
+                    bitmap = (byte[])reader.GetValue(1);
+                }
+                if (capacity is < 2 or > FingerprintSensorInventory.MaximumCapacity || bitmap.Length != (capacity + 7) / 8)
+                    return OperationResult.Failure("The scanner inventory is invalid. Wait for the scanner to refresh.");
+
+                await using var unavailable = connection.CreateCommand();
+                unavailable.Transaction = transaction;
+                unavailable.CommandText = @"SELECT template_identifier FROM fingerprint_templates
+                    UNION SELECT template_identifier FROM fingerprint_slot_blocks
+                    UNION SELECT template_identifier FROM fingerprint_enrollment_preparations;";
+                var reserved = new HashSet<long>();
+                await using (var reader = await unavailable.ExecuteReaderAsync(cancellationToken))
+                    while (await reader.ReadAsync(cancellationToken)) reserved.Add(reader.GetInt64(0));
+                templateId = 0;
+                for (var slot = 1; slot < capacity; slot++)
+                {
+                    if ((bitmap[slot / 8] & (1 << (slot % 8))) == 0 && !reserved.Contains(slot))
+                    {
+                        templateId = slot;
+                        break;
+                    }
+                }
+                if (templateId == 0)
+                    return OperationResult.Failure("No available scanner slot was found in the recent inventory.");
+            }
+
+            await using var block = connection.CreateCommand();
+            block.Transaction = transaction;
+            block.CommandText = requestedSlot is null
+                ? "INSERT INTO fingerprint_slot_blocks (template_identifier) VALUES (@id);"
+                : "INSERT INTO fingerprint_slot_blocks (template_identifier) VALUES (@id) ON DUPLICATE KEY UPDATE template_identifier = VALUES(template_identifier);";
+            block.Parameters.Add("@id", MySqlDbType.Int64).Value = templateId;
+            await block.ExecuteNonQueryAsync(cancellationToken);
+
+            await using var mapping = connection.CreateCommand();
+            mapping.Transaction = transaction;
+            mapping.CommandText = @"
+                SELECT id FROM fingerprint_templates
+                WHERE template_identifier = @slot OR (user_account_id = @teacher AND finger_position = @finger)
+                LIMIT 1 FOR UPDATE;";
+            mapping.Parameters.Add("@slot", MySqlDbType.Int64).Value = templateId;
+            mapping.Parameters.Add("@teacher", MySqlDbType.Int64).Value = teacherId;
+            mapping.Parameters.Add("@finger", MySqlDbType.VarChar).Value = fingerPosition;
+            if (await mapping.ExecuteScalarAsync(cancellationToken) is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return OperationResult.Failure("The server slot or this teacher's finger already has a mapping; replacement of mapped fingerprints is not supported yet.");
+            }
+
+            await using var insert = connection.CreateCommand();
+            insert.Transaction = transaction;
+            insert.CommandText = @"
+                INSERT INTO fingerprint_enrollment_preparations
+                    (id, device_id, teacher_account_id, finger_position, template_identifier)
+                VALUES (@id, @device, @teacher, @finger, @slot);";
+            insert.Parameters.Add("@id", MySqlDbType.VarChar).Value = Guid.NewGuid().ToString("D");
+            insert.Parameters.Add("@device", MySqlDbType.Int64).Value = Convert.ToInt64(deviceId);
+            insert.Parameters.Add("@teacher", MySqlDbType.Int64).Value = teacherId;
+            insert.Parameters.Add("@finger", MySqlDbType.VarChar).Value = fingerPosition;
+            insert.Parameters.Add("@slot", MySqlDbType.Int64).Value = templateId;
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return OperationResult.Success();
+        }
+        catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return OperationResult.Failure("This scanner, slot, or teacher's finger already has an enrollment preparation.");
+        }
+    }
+
+    public async Task<IReadOnlyList<FingerprintEnrollmentPreparation>> GetFingerprintEnrollmentPreparationsAsync(CancellationToken cancellationToken = default)
+    {
+        var preparations = new List<FingerprintEnrollmentPreparation>();
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT p.id, p.template_identifier, p.finger_position, u.display_name, d.display_name, p.created_utc,
+                   g.preparation_id IS NOT NULL,
+                   a.expires_utc > UTC_TIMESTAMP(6),
+                   a.allow_occupied_slot, p.teacher_account_id, p.replacement_template_id IS NOT NULL, p.device_id
+            FROM fingerprint_enrollment_preparations p
+            INNER JOIN user_accounts u ON u.id = p.teacher_account_id
+            INNER JOIN biometric_devices d ON d.id = p.device_id
+            LEFT JOIN fingerprint_enrollment_write_guards g ON g.preparation_id = p.id
+            LEFT JOIN fingerprint_enrollment_authorizations a ON a.preparation_id = p.id
+            ORDER BY p.created_utc, p.id;";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            preparations.Add(new FingerprintEnrollmentPreparation(reader.GetString(0), reader.GetInt64(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetDateTime(5), reader.GetBoolean(6),
+                !reader.IsDBNull(7) && reader.GetBoolean(7), !reader.IsDBNull(8) && reader.GetBoolean(8), reader.GetInt64(9),
+                reader.GetBoolean(10), reader.GetInt64(11)));
+        return preparations;
+    }
+
+    public async Task<OperationResult> AuthorizeFingerprintEnrollmentAsync(long adminAccountId, string id, bool allowOccupiedSlot, CancellationToken cancellationToken = default)
+    {
+        if (adminAccountId <= 0 || !Guid.TryParseExact(id, "D", out var preparationId) || preparationId == Guid.Empty)
+            return OperationResult.Failure("Select a valid preparation and administrator.");
+        if (allowOccupiedSlot)
+            return OperationResult.Failure("Replacement of an occupied fingerprint slot is not available yet.");
+        id = preparationId.ToString("D");
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await LockFingerprintDevicesAsync(connection, transaction, cancellationToken);
+        await using (var admin = connection.CreateCommand())
+        {
+            admin.Transaction = transaction;
+            admin.CommandText = "SELECT id FROM user_accounts WHERE id = @id AND role = 'Admin' AND is_active = TRUE FOR UPDATE;";
+            admin.Parameters.Add("@id", MySqlDbType.Int64).Value = adminAccountId;
+            if (await admin.ExecuteScalarAsync(cancellationToken) is null)
+                return OperationResult.Failure("The administrator account is no longer active.");
+        }
+        await using (var check = connection.CreateCommand())
+        {
+            check.Transaction = transaction;
+            check.CommandText = @"
+                SELECT p.id FROM fingerprint_enrollment_preparations p
+                INNER JOIN biometric_devices d ON d.id = p.device_id
+                INNER JOIN fingerprint_enrollment_scanner s ON s.singleton_id = 1 AND s.device_id = d.id
+                INNER JOIN classrooms c ON c.id = d.classroom_id
+                INNER JOIN user_accounts u ON u.id = p.teacher_account_id
+                INNER JOIN fingerprint_slot_blocks b ON b.template_identifier = p.template_identifier
+                WHERE p.id = @id AND p.replacement_template_id IS NULL AND d.is_active = TRUE AND d.paired_at IS NOT NULL
+                  AND d.fingerprint_enrollment_enabled = TRUE AND d.pending_clear_fingerprints = FALSE
+                  AND c.is_active = TRUE AND u.is_active = TRUE AND u.role = 'Teacher'
+                  AND NOT EXISTS (SELECT 1 FROM fingerprint_enrollment_write_guards g WHERE g.preparation_id = p.id)
+                  AND NOT EXISTS (SELECT 1 FROM fingerprint_templates f WHERE f.template_identifier = p.template_identifier
+                                  OR (f.user_account_id = p.teacher_account_id AND f.finger_position = p.finger_position COLLATE utf8mb4_unicode_ci))
+                FOR UPDATE;";
+            check.Parameters.Add("@id", MySqlDbType.VarChar).Value = id;
+            if (await check.ExecuteScalarAsync(cancellationToken) is null)
+                return OperationResult.Failure("The preparation is no longer eligible, has a mapping, or has an unresolved write.");
+        }
+        var saved = await SaveFingerprintAuthorizationAsync(connection, transaction, adminAccountId, id, false, cancellationToken);
+        if (!saved.Succeeded) return saved;
+        await transaction.CommitAsync(cancellationToken);
+        return OperationResult.Success();
+    }
+
+    // Internal consent prerequisite only; normal operation and claim paths still reject replacement.
+    public async Task<OperationResult> AuthorizeFingerprintReplacementAsync(
+        long adminAccountId, long scannerId, long teacherId, string fingerPosition, long slot, string id,
+        CancellationToken cancellationToken = default)
+    {
+        if (adminAccountId <= 0 || !Guid.TryParseExact(id, "D", out var preparationId) || preparationId == Guid.Empty)
+            return OperationResult.Failure("Select a valid preparation and administrator.");
+        id = preparationId.ToString("D");
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await LockFingerprintDevicesAsync(connection, transaction, cancellationToken);
+        await using (var admin = connection.CreateCommand())
+        {
+            admin.Transaction = transaction;
+            admin.CommandText = "SELECT id FROM user_accounts WHERE id = @id AND role = 'Admin' AND is_active = TRUE FOR UPDATE;";
+            admin.Parameters.Add("@id", MySqlDbType.Int64).Value = adminAccountId;
+            if (await admin.ExecuteScalarAsync(cancellationToken) is null)
+                return OperationResult.Failure("The administrator account is no longer active.");
+        }
+        var target = await FingerprintReplacementTarget.LockAndCheckAsync(
+            connection, transaction, scannerId, teacherId, fingerPosition, slot, cancellationToken);
+        if (!target.Succeeded) return target;
+
+        await using (var check = connection.CreateCommand())
+        {
+            check.Transaction = transaction;
+            check.CommandText = @"
+                SELECT p.id FROM fingerprint_enrollment_preparations p
+                INNER JOIN fingerprint_slot_blocks b ON b.template_identifier = p.template_identifier
+                INNER JOIN fingerprint_templates f ON f.id = p.replacement_template_id
+                  AND f.user_account_id = p.teacher_account_id
+                  AND f.finger_position = p.finger_position COLLATE utf8mb4_unicode_ci
+                  AND f.template_identifier = p.template_identifier
+                WHERE p.id = @id AND p.device_id = @scanner AND p.teacher_account_id = @teacher
+                  AND p.finger_position = @finger COLLATE utf8mb4_unicode_ci AND p.template_identifier = @slot
+                  AND NOT EXISTS (SELECT 1 FROM fingerprint_enrollment_write_guards g WHERE g.preparation_id = p.id)
+                FOR UPDATE;";
+            check.Parameters.Add("@id", MySqlDbType.VarChar).Value = id;
+            check.Parameters.Add("@scanner", MySqlDbType.Int64).Value = scannerId;
+            check.Parameters.Add("@teacher", MySqlDbType.Int64).Value = teacherId;
+            check.Parameters.Add("@finger", MySqlDbType.VarChar).Value = fingerPosition;
+            check.Parameters.Add("@slot", MySqlDbType.Int64).Value = slot;
+            if (await check.ExecuteScalarAsync(cancellationToken) is null)
+                return OperationResult.Failure("The replacement preparation no longer matches or has an unresolved write.");
+        }
+        var saved = await SaveFingerprintAuthorizationAsync(connection, transaction, adminAccountId, id, true, cancellationToken);
+        if (!saved.Succeeded) return saved;
+        await transaction.CommitAsync(cancellationToken);
+        return OperationResult.Success();
+    }
+
+    private static async Task<OperationResult> SaveFingerprintAuthorizationAsync(
+        MySqlConnection connection, MySqlTransaction transaction, long adminAccountId, string id,
+        bool allowOccupiedSlot, CancellationToken cancellationToken)
+    {
+        await using (var existing = connection.CreateCommand())
+        {
+            existing.Transaction = transaction;
+            existing.CommandText = "SELECT expires_utc > UTC_TIMESTAMP(6) FROM fingerprint_enrollment_authorizations WHERE preparation_id = @id FOR UPDATE;";
+            existing.Parameters.Add("@id", MySqlDbType.VarChar).Value = id;
+            var active = await existing.ExecuteScalarAsync(cancellationToken);
+            if (active is not null && Convert.ToBoolean(active))
+                return OperationResult.Failure("This preparation already has active authorization. Revoke it before changing consent.");
+        }
+        await using (var save = connection.CreateCommand())
+        {
+            save.Transaction = transaction;
+            save.CommandText = @"
+                INSERT INTO fingerprint_enrollment_authorizations
+                    (preparation_id, operation_id, authorized_by, allow_occupied_slot, created_utc, expires_utc)
+                VALUES (@id, @operation, @admin, @occupied, UTC_TIMESTAMP(6), DATE_ADD(UTC_TIMESTAMP(6), INTERVAL 5 MINUTE))
+                ON DUPLICATE KEY UPDATE operation_id = VALUES(operation_id), authorized_by = VALUES(authorized_by),
+                    allow_occupied_slot = VALUES(allow_occupied_slot), created_utc = VALUES(created_utc), expires_utc = VALUES(expires_utc);";
+            save.Parameters.Add("@id", MySqlDbType.VarChar).Value = id;
+            save.Parameters.Add("@operation", MySqlDbType.VarChar).Value = Guid.NewGuid().ToString("D");
+            save.Parameters.Add("@admin", MySqlDbType.Int64).Value = adminAccountId;
+            save.Parameters.Add("@occupied", MySqlDbType.Bool).Value = allowOccupiedSlot;
+            await save.ExecuteNonQueryAsync(cancellationToken);
+        }
+        return OperationResult.Success();
+    }
+
+    public async Task<OperationResult> RevokeFingerprintEnrollmentAuthorizationAsync(string id, CancellationToken cancellationToken = default)
+    {
+        if (!Guid.TryParseExact(id, "D", out var preparationId) || preparationId == Guid.Empty)
+            return OperationResult.Failure("Select a valid preparation.");
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await LockFingerprintDevicesAsync(connection, transaction, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = @"DELETE a FROM fingerprint_enrollment_authorizations a
+            WHERE a.preparation_id = @id
+              AND NOT EXISTS (SELECT 1 FROM fingerprint_enrollment_write_guards g WHERE g.preparation_id = a.preparation_id);";
+        command.Parameters.Add("@id", MySqlDbType.VarChar).Value = preparationId.ToString("D");
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+            return OperationResult.Failure("Authorization was not found or the sensor write is unresolved.");
+        await transaction.CommitAsync(cancellationToken);
+        return OperationResult.Success();
+    }
+
+    public async Task<OperationResult> CancelFingerprintEnrollmentPreparationAsync(string id, CancellationToken cancellationToken = default)
+    {
+        if (!Guid.TryParseExact(id, "D", out _))
+            return OperationResult.Failure("Select a valid preparation.");
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM fingerprint_enrollment_preparations WHERE id = @id;";
+        command.Parameters.Add("@id", MySqlDbType.VarChar).Value = id;
+        try
+        {
+            return await command.ExecuteNonQueryAsync(cancellationToken) == 1
+                ? OperationResult.Success()
+                : OperationResult.Failure("The enrollment preparation no longer exists.");
+        }
+        catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.RowIsReferenced2)
+        {
+            return OperationResult.Failure("This preparation has an unresolved sensor write and cannot be cancelled.");
+        }
+    }
+
     public async Task<OperationResult> ReviewSupportTicketAsync(long adminAccountId, ReviewSupportTicket request, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -1799,6 +2219,41 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            await using var actor = connection.CreateCommand();
+            actor.Transaction = transaction;
+            actor.CommandText = "SELECT role, is_active FROM user_accounts WHERE id = @actor FOR UPDATE;";
+            actor.Parameters.Add("@actor", MySqlDbType.Int64).Value = actorAccountId;
+            string? role = null;
+            await using (var reader = await actor.ExecuteReaderAsync(cancellationToken))
+            {
+                if (await reader.ReadAsync(cancellationToken) && reader.GetBoolean(1))
+                    role = reader.GetString(0);
+            }
+            if (role is not ("Admin" or "Teacher"))
+                return OperationResult.Failure("An active account is required.");
+            if (role == "Teacher")
+            {
+                await using var attendance = connection.CreateCommand();
+                attendance.Transaction = transaction;
+                attendance.CommandText = """
+                    SELECT id FROM attendance_logs
+                    WHERE teacher_account_id = @teacher AND classroom_id = @room
+                      AND status = 'Active' AND time_out_utc IS NULL LIMIT 1 FOR UPDATE;
+                    """;
+                attendance.Parameters.Add("@teacher", MySqlDbType.Int64).Value = actorAccountId;
+                attendance.Parameters.Add("@room", MySqlDbType.Int64).Value = request.ClassroomId;
+                if (await attendance.ExecuteScalarAsync(cancellationToken) is null)
+                    return OperationResult.Failure("Only the teacher with an active class in this room can adjust its temperature.");
+
+                await using var room = connection.CreateCommand();
+                room.Transaction = transaction;
+                room.CommandText = "SELECT minimum_temperature FROM classrooms WHERE id = @room AND is_active = TRUE FOR UPDATE;";
+                room.Parameters.Add("@room", MySqlDbType.Int64).Value = request.ClassroomId;
+                var minimum = await room.ExecuteScalarAsync(cancellationToken);
+                if (minimum is null) return OperationResult.Failure("The active classroom was not found.");
+                if (request.TargetTemperature < Convert.ToInt32(minimum))
+                    return OperationResult.Failure($"The classroom minimum is {Convert.ToInt32(minimum)}°C.");
+            }
             var status = request.EventType switch
             {
                 "HardShutdown" or "RemoteOff" => "Off",
@@ -1810,7 +2265,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             update.Transaction = transaction;
             update.CommandText = @"
                 UPDATE classrooms
-                SET target_temperature = @targetTemperature, current_temperature = @targetTemperature, ac_status = @status
+                SET target_temperature = @targetTemperature, ac_status = @status
                 WHERE id = @classroomId AND is_active = TRUE;";
             update.Parameters.Add("@targetTemperature", MySqlDbType.Int32).Value = request.TargetTemperature;
             update.Parameters.Add("@status", MySqlDbType.VarChar).Value = status;
@@ -1832,12 +2287,25 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         }
     }
 
-    public async Task ResetSystemToFirstAccessAsync(DefaultAdminOptions defaultAdmin, string passwordHash, CancellationToken cancellationToken = default)
+    public async Task<OperationResult> ResetSystemToFirstAccessAsync(DefaultAdminOptions defaultAdmin, string passwordHash, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            if (await HasUnresolvedFingerprintWritesAsync(connection, transaction, cancellationToken))
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return OperationResult.Failure("Resolve outstanding fingerprint writes before resetting the system.");
+            }
+            await LockFingerprintDevicesAsync(connection, transaction, cancellationToken);
+            await using (var pendingIr = connection.CreateCommand())
+            {
+                pendingIr.Transaction = transaction;
+                pendingIr.CommandText = "SELECT device_id FROM ac_ir_state WHERE state = 'inflight' LIMIT 1 FOR UPDATE;";
+                if (await pendingIr.ExecuteScalarAsync(cancellationToken) is not null)
+                    return OperationResult.Failure("Resolve outstanding IR commands before resetting the system.");
+            }
             foreach (var table in new[]
             {
                 "temperature_logs", "attendance_logs", "teacher_requests", "support_tickets",
@@ -1853,6 +2321,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
 
             await SeedDefaultAdminAsync(connection, defaultAdmin, passwordHash, cancellationToken, transaction);
             await transaction.CommitAsync(cancellationToken);
+            return OperationResult.Success();
         }
         catch
         {
@@ -2039,21 +2508,45 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             }
         }
 
-        await using var command = connection.CreateCommand();
-        command.CommandText = @"
-            INSERT INTO fingerprint_templates (user_account_id, finger_position, template_identifier)
-            VALUES (@teacherId, @fingerPosition, @templateId)
-            ON DUPLICATE KEY UPDATE template_identifier = VALUES(template_identifier);";
-        command.Parameters.Add("@teacherId", MySqlDbType.Int64).Value = teacherAccountId;
-        command.Parameters.Add("@fingerPosition", MySqlDbType.VarChar).Value = fingerPosition;
-        command.Parameters.Add("@templateId", MySqlDbType.Int64).Value = templateId;
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            if (await IsFingerprintSlotBlockedForUpdateAsync(connection, transaction, templateId, cancellationToken))
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return OperationResult.Failure("That sensor slot is blocked and cannot be enrolled.");
+            }
+
+            await using var existing = connection.CreateCommand();
+            existing.Transaction = transaction;
+            existing.CommandText = @"
+                SELECT id FROM fingerprint_templates
+                WHERE user_account_id = @teacherId AND finger_position = @fingerPosition
+                FOR UPDATE;";
+            existing.Parameters.Add("@teacherId", MySqlDbType.Int64).Value = teacherAccountId;
+            existing.Parameters.Add("@fingerPosition", MySqlDbType.VarChar).Value = fingerPosition;
+            var existingId = await existing.ExecuteScalarAsync(cancellationToken);
+
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = existingId is null
+                ? @"INSERT INTO fingerprint_templates (user_account_id, finger_position, template_identifier)
+                    VALUES (@teacherId, @fingerPosition, @templateId);"
+                : "UPDATE fingerprint_templates SET template_identifier = @templateId WHERE id = @id;";
+            command.Parameters.Add("@teacherId", MySqlDbType.Int64).Value = teacherAccountId;
+            command.Parameters.Add("@fingerPosition", MySqlDbType.VarChar).Value = fingerPosition;
+            command.Parameters.Add("@templateId", MySqlDbType.Int64).Value = templateId;
+            if (existingId is not null)
+            {
+                command.Parameters.Add("@id", MySqlDbType.Int64).Value = Convert.ToInt64(existingId);
+            }
             await command.ExecuteNonQueryAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
             return OperationResult.Success();
         }
         catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
         {
+            await transaction.RollbackAsync(cancellationToken);
             return OperationResult.Failure("That fingerprint template ID is already enrolled to another teacher or finger.");
         }
     }
@@ -2103,16 +2596,10 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
-            // Sensor IDs are authoritative after a device DELETEALL — reclaim any DB row
-            // still holding this template_identifier (orphan from a wiped sensor).
-            await using (var reclaim = connection.CreateCommand())
+            if (await IsFingerprintSlotBlockedForUpdateAsync(connection, transaction, templateId, cancellationToken))
             {
-                reclaim.Transaction = transaction;
-                reclaim.CommandText = @"
-                    DELETE FROM fingerprint_templates
-                    WHERE template_identifier = @templateId;";
-                reclaim.Parameters.Add("@templateId", MySqlDbType.Int64).Value = templateId;
-                await reclaim.ExecuteNonQueryAsync(cancellationToken);
+                await transaction.RollbackAsync(cancellationToken);
+                return new DeviceFingerprintEnrollResult(false, "That sensor slot is blocked and cannot be enrolled.");
             }
 
             var usedSlots = new HashSet<string>(StringComparer.Ordinal);
@@ -2178,7 +2665,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
         {
             await transaction.RollbackAsync(cancellationToken);
-            return new DeviceFingerprintEnrollResult(false, "That fingerprint template ID is already enrolled to another teacher or finger.");
+            return new DeviceFingerprintEnrollResult(false, "That sensor slot already has a fingerprint mapping. Explicit replacement is not yet available.");
         }
         catch
         {
@@ -2242,7 +2729,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken) ?? 0L) != 0;
     }
 
-    public async Task<FingerprintTeacherMatch?> FindTeacherByFingerprintTemplateIdAsync(long templateId, CancellationToken cancellationToken = default)
+    public async Task<FingerprintTeacherMatch?> FindTeacherByFingerprintTemplateIdAsync(long templateId, string deviceId, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
@@ -2251,19 +2738,140 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             FROM fingerprint_templates f
             INNER JOIN user_accounts u ON u.id = f.user_account_id
             WHERE f.template_identifier = @templateId
+              AND NOT EXISTS (
+                  SELECT 1 FROM fingerprint_slot_blocks b
+                  WHERE b.template_identifier = f.template_identifier
+              )
+              AND (
+                  NOT EXISTS (SELECT 1 FROM fingerprint_template_device_bindings b WHERE b.fingerprint_template_id = f.id)
+                  OR EXISTS (SELECT 1 FROM fingerprint_template_device_bindings b
+                             WHERE b.fingerprint_template_id = f.id AND b.device_id = @deviceId)
+              )
               AND u.role = 'Teacher'
               AND u.is_active = TRUE
             LIMIT 1;";
         command.Parameters.Add("@templateId", MySqlDbType.Int64).Value = templateId;
+        command.Parameters.Add("@deviceId", MySqlDbType.VarChar).Value = deviceId;
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)
             ? new FingerprintTeacherMatch(reader.GetInt64(0), reader.GetString(1), reader.GetString(2))
             : null;
     }
 
-    public async Task<BiometricDeviceEntry?> FindBiometricDeviceByCodeAsync(string deviceCode, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<long>> GetBlockedFingerprintSlotsAsync(CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(deviceCode))
+        var slots = new List<long>();
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT template_identifier FROM fingerprint_slot_blocks ORDER BY template_identifier;";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            slots.Add(reader.GetInt64(0));
+        }
+        return slots;
+    }
+
+    public async Task<FingerprintSlotInspection> InspectFingerprintSlotAsync(long templateId, CancellationToken cancellationToken = default)
+    {
+        if (templateId <= 0 || templateId > ushort.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(templateId));
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT EXISTS(SELECT 1 FROM fingerprint_slot_blocks WHERE template_identifier = @id),
+                   u.display_name, u.is_active
+            FROM (SELECT @id AS slot_id) AS requested
+            LEFT JOIN fingerprint_templates f ON f.template_identifier = requested.slot_id
+            LEFT JOIN user_accounts u ON u.id = f.user_account_id;";
+        command.Parameters.Add("@id", MySqlDbType.Int64).Value = templateId;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            throw new InvalidOperationException("Fingerprint slot inspection returned no result.");
+        }
+        return new FingerprintSlotInspection(
+            templateId,
+            reader.GetBoolean(0),
+            reader.IsDBNull(1) ? null : reader.GetString(1),
+            reader.IsDBNull(2) ? null : reader.GetBoolean(2));
+    }
+
+    public async Task<OperationResult> SetFingerprintSlotBlockedAsync(long templateId, bool blocked, CancellationToken cancellationToken = default)
+    {
+        if (templateId <= 0 || templateId > ushort.MaxValue)
+        {
+            return OperationResult.Failure("Enter a sensor slot between 1 and 65535.");
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = blocked
+            ? "INSERT INTO fingerprint_slot_blocks (template_identifier) VALUES (@id) ON DUPLICATE KEY UPDATE template_identifier = VALUES(template_identifier);"
+            : "DELETE FROM fingerprint_slot_blocks WHERE template_identifier = @id;";
+        command.Parameters.Add("@id", MySqlDbType.Int64).Value = templateId;
+        try
+        {
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (MySqlException exception) when (!blocked && exception.ErrorCode == MySqlErrorCode.RowIsReferenced2)
+        {
+            return OperationResult.Failure("Cancel the enrollment preparation before removing its slot block.");
+        }
+        return OperationResult.Success();
+    }
+
+    private static async Task<bool> IsFingerprintSlotBlockedForUpdateAsync(
+        MySqlConnection connection,
+        MySqlTransaction transaction,
+        long templateId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT template_identifier FROM fingerprint_slot_blocks WHERE template_identifier = @id FOR UPDATE;";
+        command.Parameters.Add("@id", MySqlDbType.Int64).Value = templateId;
+        return await command.ExecuteScalarAsync(cancellationToken) is not null;
+    }
+
+    public async Task<OperationResult> SetAdminDevicePinHashAsync(long adminAccountId, string pinHash, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            UPDATE user_accounts
+            SET admin_device_pin_hash = @hash
+            WHERE id = @id AND role = 'Admin' AND is_active = TRUE;";
+        command.Parameters.Add("@hash", MySqlDbType.VarChar).Value = pinHash;
+        command.Parameters.Add("@id", MySqlDbType.Int64).Value = adminAccountId;
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1
+            ? OperationResult.Success()
+            : OperationResult.Failure("Administrator account was not found.");
+    }
+
+    public async Task<IReadOnlyList<string>> GetAdminDevicePinHashesAsync(CancellationToken cancellationToken = default)
+    {
+        var hashes = new List<string>();
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = @"
+            SELECT admin_device_pin_hash FROM user_accounts
+            WHERE role = 'Admin' AND is_active = TRUE AND admin_device_pin_hash IS NOT NULL;";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            hashes.Add(reader.GetString(0));
+        }
+
+        return hashes;
+    }
+
+    public async Task<BiometricDeviceEntry?> FindBiometricDeviceByIdAsync(string deviceId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId))
         {
             return null;
         }
@@ -2271,14 +2879,17 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            SELECT d.id, d.classroom_id, c.name, d.device_code, d.display_name, d.is_active
+            SELECT d.id, d.classroom_id, c.name, d.device_id, d.display_name, d.is_active,
+                   c.target_temperature, d.status_poll_interval_seconds,
+                   d.fingerprint_enrollment_enabled, d.attendance_scan_enabled
             FROM biometric_devices d
-            INNER JOIN classrooms c ON c.id = d.classroom_id
-            WHERE UPPER(d.device_code) = @deviceCode
+            LEFT JOIN classrooms c ON c.id = d.classroom_id
+            WHERE UPPER(d.device_id) = @deviceId
               AND d.is_active = TRUE
-              AND c.is_active = TRUE
+              AND d.paired_at IS NOT NULL
+              AND (d.classroom_id IS NULL OR c.is_active = TRUE)
             LIMIT 1;";
-        command.Parameters.Add("@deviceCode", MySqlDbType.VarChar).Value = deviceCode.Trim().ToUpperInvariant();
+        command.Parameters.Add("@deviceId", MySqlDbType.VarChar).Value = deviceId.Trim().ToUpperInvariant();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
         {
@@ -2287,11 +2898,15 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
 
         return new BiometricDeviceEntry(
             reader.GetInt64(0),
-            reader.GetInt64(1),
-            reader.GetString(2),
+            reader.IsDBNull(1) ? null : reader.GetInt64(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
             reader.GetString(3),
             reader.GetString(4),
-            reader.GetBoolean(5));
+            reader.GetBoolean(5),
+            reader.IsDBNull(6) ? null : reader.GetInt32(6),
+            reader.GetInt32(7),
+            reader.GetBoolean(8),
+            reader.GetBoolean(9));
     }
 
     public async Task<IReadOnlyList<BiometricDeviceEntry>> GetBiometricDevicesAsync(CancellationToken cancellationToken = default)
@@ -2300,61 +2915,434 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            SELECT d.id, d.classroom_id, c.name, d.device_code, d.display_name, d.is_active
+            SELECT d.id, d.classroom_id, c.name, d.device_id, d.display_name, d.is_active,
+                   c.target_temperature, d.status_poll_interval_seconds,
+                   d.fingerprint_enrollment_enabled, d.attendance_scan_enabled,
+                   d.pairing_code, d.paired_at IS NOT NULL, e.device_id IS NOT NULL
             FROM biometric_devices d
-            INNER JOIN classrooms c ON c.id = d.classroom_id
-            ORDER BY c.name, d.device_code;";
+            LEFT JOIN classrooms c ON c.id = d.classroom_id
+            LEFT JOIN fingerprint_enrollment_scanner e ON e.device_id = d.id
+            ORDER BY d.id;";
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
             items.Add(new BiometricDeviceEntry(
                 reader.GetInt64(0),
-                reader.GetInt64(1),
-                reader.GetString(2),
+                reader.IsDBNull(1) ? null : reader.GetInt64(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
                 reader.GetString(3),
                 reader.GetString(4),
-                reader.GetBoolean(5)));
+                reader.GetBoolean(5),
+                reader.IsDBNull(6) ? null : reader.GetInt32(6),
+                reader.GetInt32(7),
+                reader.GetBoolean(8),
+                reader.GetBoolean(9),
+                reader.IsDBNull(10) ? null : reader.GetString(10),
+                reader.GetBoolean(11),
+                reader.GetBoolean(12)));
         }
         return items;
     }
 
+    public async Task<OperationResult> SetEnrollmentScannerAsync(long? deviceRowId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var hasUnresolvedWrite = await HasUnresolvedFingerprintWritesAsync(connection, transaction, cancellationToken);
+        await using var current = connection.CreateCommand();
+        current.Transaction = transaction;
+        current.CommandText = "SELECT device_id FROM fingerprint_enrollment_scanner WHERE singleton_id = 1 FOR UPDATE;";
+        var selected = await current.ExecuteScalarAsync(cancellationToken);
+        long? selectedId = selected is null ? null : Convert.ToInt64(selected);
+        if (selectedId == deviceRowId)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return OperationResult.Success();
+        }
+        if (hasUnresolvedWrite)
+            return OperationResult.Failure("The enrollment scanner cannot be changed while a fingerprint write is unresolved.");
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        if (deviceRowId is null)
+        {
+            command.CommandText = "DELETE FROM fingerprint_enrollment_scanner WHERE singleton_id = 1;";
+            await command.ExecuteNonQueryAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return OperationResult.Success();
+        }
+
+        command.CommandText = @"
+            INSERT INTO fingerprint_enrollment_scanner (singleton_id, device_id)
+            SELECT 1, id FROM biometric_devices WHERE id = @id
+            ON DUPLICATE KEY UPDATE device_id = VALUES(device_id);";
+        command.Parameters.Add("@id", MySqlDbType.Int64).Value = deviceRowId.Value;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+
+        await using var verify = connection.CreateCommand();
+        verify.Transaction = transaction;
+        verify.CommandText = "SELECT 1 FROM fingerprint_enrollment_scanner WHERE singleton_id = 1 AND device_id = @id;";
+        verify.Parameters.Add("@id", MySqlDbType.Int64).Value = deviceRowId.Value;
+        if (await verify.ExecuteScalarAsync(cancellationToken) is null)
+            return OperationResult.Failure("The selected scanner no longer exists or the selection changed. Try again.");
+        await transaction.CommitAsync(cancellationToken);
+        return OperationResult.Success();
+    }
+
+    private static async Task AssignNewPairingCodeAsync(MySqlConnection connection, MySqlTransaction? transaction, long deviceRowId, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "UPDATE biometric_devices SET pairing_code = @code WHERE id = @id;";
+            command.Parameters.Add("@code", MySqlDbType.VarChar).Value = RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");
+            command.Parameters.Add("@id", MySqlDbType.Int64).Value = deviceRowId;
+            try
+            {
+                await command.ExecuteNonQueryAsync(cancellationToken);
+                return;
+            }
+            catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
+            {
+                // Another pending device uses this code; draw a new one.
+            }
+        }
+
+        throw new InvalidOperationException("Could not generate a unique pairing code.");
+    }
+
+    public async Task<OperationResult> RegenerateDevicePairingCodeAsync(long deviceRowId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var exists = connection.CreateCommand();
+        exists.CommandText = "SELECT COUNT(*) FROM biometric_devices WHERE id = @id;";
+        exists.Parameters.Add("@id", MySqlDbType.Int64).Value = deviceRowId;
+        if (Convert.ToInt64(await exists.ExecuteScalarAsync(cancellationToken) ?? 0L) == 0)
+        {
+            return OperationResult.Failure("Device was not found.");
+        }
+
+        await AssignNewPairingCodeAsync(connection, null, deviceRowId, cancellationToken);
+        return OperationResult.Success();
+    }
+
+    public async Task<BiometricDeviceEntry?> PairDeviceByCodeAsync(string pairingCode, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var find = connection.CreateCommand();
+        find.Transaction = transaction;
+        find.CommandText = "SELECT device_id FROM biometric_devices WHERE pairing_code = @code AND is_active = TRUE LIMIT 1 FOR UPDATE;";
+        find.Parameters.Add("@code", MySqlDbType.VarChar).Value = pairingCode;
+        var deviceId = await find.ExecuteScalarAsync(cancellationToken) as string;
+        if (deviceId is null)
+        {
+            return null;
+        }
+
+        await using var update = connection.CreateCommand();
+        update.Transaction = transaction;
+        update.CommandText = """
+            SELECT d.id FROM biometric_devices d
+            INNER JOIN ac_ir_state s ON s.device_id = d.id AND s.state = 'inflight'
+            WHERE d.device_id = @deviceId FOR UPDATE;
+            """;
+        update.Parameters.Add("@deviceId", MySqlDbType.VarChar).Value = deviceId;
+        if (await update.ExecuteScalarAsync(cancellationToken) is not null) return null;
+        update.CommandText = @"
+            UPDATE biometric_devices
+            SET paired_at = UTC_TIMESTAMP(), pairing_code = NULL
+            WHERE device_id = @deviceId AND pairing_code = @code;";
+        update.Parameters.Add("@code", MySqlDbType.VarChar).Value = pairingCode;
+        if (await update.ExecuteNonQueryAsync(cancellationToken) != 1) return null;
+        update.CommandText = """
+            DELETE s FROM ac_ir_state s INNER JOIN biometric_devices d ON d.id = s.device_id WHERE d.device_id = @deviceId;
+            """;
+        await update.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return await FindBiometricDeviceByIdAsync(deviceId, cancellationToken);
+    }
+
     public async Task<OperationResult> CreateBiometricDeviceAsync(CreateBiometricDeviceRequest request, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(request.DeviceCode) || request.DeviceCode.Trim().Length > 64)
+        if (request.ClassroomId is not null && request.TargetTemperature is not (>= 16 and <= 30))
         {
-            return OperationResult.Failure("Enter a device code of 64 characters or fewer.");
+            return OperationResult.Failure("Target temperature must be between 16°C and 30°C for an assigned device.");
         }
 
-        if (string.IsNullOrWhiteSpace(request.DisplayName) || request.DisplayName.Trim().Length > 120)
+        if (request.StatusPollingIntervalSeconds is < BiometricDeviceSettingsPolicy.MinStatusPollingIntervalSeconds
+            or > BiometricDeviceSettingsPolicy.MaxStatusPollingIntervalSeconds)
         {
-            return OperationResult.Failure("Enter a device name of 120 characters or fewer.");
-        }
-
-        if (request.ClassroomId <= 0)
-        {
-            return OperationResult.Failure("Select a classroom for this scanner.");
+            return OperationResult.Failure("Enter a valid status polling interval.");
         }
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = @"
-            INSERT INTO biometric_devices (classroom_id, device_code, display_name, is_active)
-            SELECT c.id, @deviceCode, @displayName, TRUE
-            FROM classrooms c
-            WHERE c.id = @classroomId AND c.is_active = TRUE;";
-        command.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = request.ClassroomId;
-        command.Parameters.Add("@deviceCode", MySqlDbType.VarChar).Value = request.DeviceCode.Trim().ToUpperInvariant();
-        command.Parameters.Add("@displayName", MySqlDbType.VarChar).Value = request.DisplayName.Trim();
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
-            return await command.ExecuteNonQueryAsync(cancellationToken) == 1
-                ? OperationResult.Success()
-                : OperationResult.Failure("Classroom was not found or is inactive.");
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.Parameters.Add("@classroomId", MySqlDbType.Int64).Value =
+                request.ClassroomId is long classroomId ? classroomId : DBNull.Value;
+            command.Parameters.Add("@isActive", MySqlDbType.Bool).Value = request.IsActive;
+            command.Parameters.Add("@pollInterval", MySqlDbType.UInt16).Value = request.StatusPollingIntervalSeconds;
+            command.Parameters.Add("@enrollmentEnabled", MySqlDbType.Bool).Value = request.FingerprintEnrollmentEnabled;
+            command.Parameters.Add("@scanningEnabled", MySqlDbType.Bool).Value = request.AttendanceScanEnabled;
+            command.CommandText = request.ClassroomId is null
+                ? @"
+                    INSERT INTO biometric_devices (
+                        classroom_id, device_id, display_name, is_active,
+                        status_poll_interval_seconds, fingerprint_enrollment_enabled,
+                        attendance_scan_enabled)
+                    VALUES (NULL, UUID(), '', @isActive, @pollInterval, @enrollmentEnabled, @scanningEnabled);"
+                : @"
+                    INSERT INTO biometric_devices (
+                        classroom_id, device_id, display_name, is_active,
+                        status_poll_interval_seconds, fingerprint_enrollment_enabled,
+                        attendance_scan_enabled)
+                    SELECT c.id, UUID(), '', @isActive, @pollInterval, @enrollmentEnabled, @scanningEnabled
+                    FROM classrooms c
+                    WHERE c.id = @classroomId AND c.is_active = TRUE;";
+            if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return OperationResult.Failure("Classroom was not found or is inactive.");
+            }
+
+            var deviceId = command.LastInsertedId;
+            await using (var updateName = connection.CreateCommand())
+            {
+                updateName.Transaction = transaction;
+                updateName.CommandText = @"
+                    UPDATE biometric_devices
+                    SET device_id = CAST(1000000000 + id AS CHAR),
+                        display_name = CONCAT('Device ', id)
+                    WHERE id = @deviceId;";
+                updateName.Parameters.Add("@deviceId", MySqlDbType.Int64).Value = deviceId;
+                await updateName.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await AssignNewPairingCodeAsync(connection, transaction, deviceId, cancellationToken);
+
+            if (request.ClassroomId is long assignedClassroomId && request.TargetTemperature is int targetTemperature)
+            {
+                await using var updateClassroom = connection.CreateCommand();
+                updateClassroom.Transaction = transaction;
+                updateClassroom.CommandText = @"
+                    UPDATE classrooms
+                    SET target_temperature = @targetTemperature
+                    WHERE id = @classroomId;";
+                updateClassroom.Parameters.Add("@targetTemperature", MySqlDbType.Int32).Value = targetTemperature;
+                updateClassroom.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = assignedClassroomId;
+                await updateClassroom.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return OperationResult.Success();
         }
         catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
         {
+            await transaction.RollbackAsync(cancellationToken);
             return OperationResult.Failure("That device code or classroom already has a scanner assigned.");
         }
+    }
+
+    public async Task<OperationResult> UpdateBiometricDeviceAsync(
+        UpdateBiometricDeviceRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request.ClassroomId is not null && request.TargetTemperature is not (>= 16 and <= 30))
+        {
+            return OperationResult.Failure("Target temperature must be between 16°C and 30°C for an assigned device.");
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            long? currentClassroomId;
+            await using (var findDevice = connection.CreateCommand())
+            {
+                findDevice.Transaction = transaction;
+                findDevice.CommandText = @"
+                    SELECT classroom_id
+                    FROM biometric_devices
+                    WHERE id = @deviceId
+                    FOR UPDATE;";
+                findDevice.Parameters.Add("@deviceId", MySqlDbType.Int64).Value = request.Id;
+                var result = await findDevice.ExecuteScalarAsync(cancellationToken);
+                if (result is null)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return OperationResult.Failure("The selected device no longer exists.");
+                }
+
+                currentClassroomId = result is DBNull ? null : Convert.ToInt64(result);
+            }
+
+            if (request.ClassroomId is long requestedClassroomId && requestedClassroomId != currentClassroomId)
+            {
+                await using var findClassroom = connection.CreateCommand();
+                findClassroom.Transaction = transaction;
+                findClassroom.CommandText = @"
+                    SELECT id
+                    FROM classrooms
+                    WHERE id = @classroomId AND is_active = TRUE
+                    FOR UPDATE;";
+                findClassroom.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = requestedClassroomId;
+                if (await findClassroom.ExecuteScalarAsync(cancellationToken) is null)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return OperationResult.Failure("Select an active classroom for this device.");
+                }
+            }
+
+            var assignmentChanged = currentClassroomId != request.ClassroomId;
+            if (assignmentChanged || !request.IsActive)
+            {
+                if (await HasInFlightIrAsync(connection, transaction, request.Id, cancellationToken))
+                    return OperationResult.Failure("This scanner has an unresolved IR command. Stop and reconcile it before changing its assignment or status.");
+                await InvalidateIrAsync(connection, transaction, request.Id, cancellationToken);
+            }
+            if ((assignmentChanged || !request.IsActive || !request.FingerprintEnrollmentEnabled) &&
+                await HasFingerprintWriteForAsync(connection, transaction, "p.device_id", request.Id, cancellationToken))
+                return OperationResult.Failure("This scanner has an unresolved fingerprint write.");
+            if (assignmentChanged || !request.IsActive || !request.AttendanceScanEnabled)
+            {
+                await using var activeSession = connection.CreateCommand();
+                activeSession.Transaction = transaction;
+                activeSession.CommandText = @"
+                    SELECT id
+                    FROM attendance_logs
+                    WHERE ((@currentClassroomId IS NOT NULL AND classroom_id = @currentClassroomId)
+                       OR (@targetClassroomId IS NOT NULL AND classroom_id = @targetClassroomId))
+                      AND time_out_utc IS NULL
+                      AND status = 'Active'
+                    LIMIT 1
+                    FOR UPDATE;";
+                activeSession.Parameters.Add("@currentClassroomId", MySqlDbType.Int64).Value = currentClassroomId is long oldClassroomId ? oldClassroomId : DBNull.Value;
+                activeSession.Parameters.Add("@targetClassroomId", MySqlDbType.Int64).Value = request.ClassroomId is long newClassroomId ? newClassroomId : DBNull.Value;
+                if (await activeSession.ExecuteScalarAsync(cancellationToken) is not null)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return OperationResult.Failure("End active class sessions in the affected classroom(s) before changing this device assignment or scan setting.");
+                }
+            }
+
+            await using (var updateDevice = connection.CreateCommand())
+            {
+                updateDevice.Transaction = transaction;
+                updateDevice.CommandText = @"
+                    UPDATE biometric_devices
+                    SET classroom_id = @classroomId,
+                        display_name = CONCAT('Device ', id),
+                        is_active = @isActive,
+                        status_poll_interval_seconds = @pollInterval,
+                        fingerprint_enrollment_enabled = @enrollmentEnabled,
+                        attendance_scan_enabled = @scanningEnabled
+                    WHERE id = @deviceId;";
+                updateDevice.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = request.ClassroomId is long classroomId ? classroomId : DBNull.Value;
+                updateDevice.Parameters.Add("@isActive", MySqlDbType.Bool).Value = request.IsActive;
+                updateDevice.Parameters.Add("@pollInterval", MySqlDbType.UInt16).Value = request.StatusPollingIntervalSeconds;
+                updateDevice.Parameters.Add("@enrollmentEnabled", MySqlDbType.Bool).Value = request.FingerprintEnrollmentEnabled;
+                updateDevice.Parameters.Add("@scanningEnabled", MySqlDbType.Bool).Value = request.AttendanceScanEnabled;
+                updateDevice.Parameters.Add("@deviceId", MySqlDbType.Int64).Value = request.Id;
+                await updateDevice.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            if (request.ClassroomId is long assignedClassroomId && request.TargetTemperature is int targetTemperature)
+            {
+                await using var updateClassroom = connection.CreateCommand();
+                updateClassroom.Transaction = transaction;
+                updateClassroom.CommandText = @"
+                    UPDATE classrooms
+                    SET target_temperature = @targetTemperature
+                    WHERE id = @classroomId;";
+                updateClassroom.Parameters.Add("@targetTemperature", MySqlDbType.Int32).Value = targetTemperature;
+                updateClassroom.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = assignedClassroomId;
+                await updateClassroom.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return OperationResult.Success();
+        }
+        catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return OperationResult.Failure("That classroom already has a scanner assigned.");
+        }
+    }
+
+    public async Task<OperationResult> DeleteBiometricDeviceAsync(long id, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+        long? classroomId;
+        await using (var device = connection.CreateCommand())
+        {
+            device.Transaction = transaction;
+            device.CommandText = "SELECT classroom_id FROM biometric_devices WHERE id = @id FOR UPDATE;";
+            device.Parameters.Add("@id", MySqlDbType.Int64).Value = id;
+            var result = await device.ExecuteScalarAsync(cancellationToken);
+            if (result is null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return OperationResult.Failure("The selected device no longer exists.");
+            }
+
+            classroomId = result is DBNull ? null : Convert.ToInt64(result);
+        }
+
+        if (await HasInFlightIrAsync(connection, transaction, id, cancellationToken))
+            return OperationResult.Failure("This scanner has an unresolved IR command. Stop and reconcile it before deleting the device.");
+
+        if (classroomId is long assignedClassroomId)
+        {
+            await using var activeSession = connection.CreateCommand();
+            activeSession.Transaction = transaction;
+            activeSession.CommandText = @"
+                SELECT id FROM attendance_logs
+                WHERE classroom_id = @classroomId AND time_out_utc IS NULL AND status = 'Active'
+                LIMIT 1 FOR UPDATE;";
+            activeSession.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = assignedClassroomId;
+            if (await activeSession.ExecuteScalarAsync(cancellationToken) is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return OperationResult.Failure("End the active classroom session before deleting its device.");
+            }
+
+            await using var room = connection.CreateCommand();
+            room.Transaction = transaction;
+            room.CommandText = "SELECT ac_status FROM classrooms WHERE id = @classroomId FOR UPDATE;";
+            room.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = assignedClassroomId;
+            var acStatus = await room.ExecuteScalarAsync(cancellationToken) as string;
+            if (acStatus is "Cooling" or "Override" or "Remote")
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return OperationResult.Failure("Turn off the classroom AC before deleting its device.");
+            }
+        }
+
+        await using (var delete = connection.CreateCommand())
+        {
+            delete.Transaction = transaction;
+            delete.CommandText = "DELETE FROM biometric_devices WHERE id = @id;";
+            delete.Parameters.Add("@id", MySqlDbType.Int64).Value = id;
+            try
+            {
+                await delete.ExecuteNonQueryAsync(cancellationToken);
+            }
+            catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.RowIsReferenced2)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return OperationResult.Failure("This scanner has an unresolved fingerprint write or other dependent records.");
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return OperationResult.Success();
     }
 
     public async Task<bool> HasActiveAttendanceAsync(long teacherAccountId, CancellationToken cancellationToken = default)
@@ -2413,38 +3401,69 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
     }
 
     public async Task<DeviceRoomStatusResult> GetDeviceRoomStatusAsync(
-        string deviceCode,
+        string deviceId,
         DateOnly schoolDate,
         TimeOnly schoolTime,
         CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
 
-        long classroomId;
-        string classroomName;
+        long? classroomId;
+        string? classroomName;
         string acStatus;
-        string resolvedDeviceCode;
+        string resolvedDeviceId;
+        string deviceDisplayName;
+        int? targetTemperature;
+        int statusPollingIntervalSeconds;
+        bool fingerprintEnrollmentEnabled;
+        bool attendanceScanEnabled;
         bool clearFingerprints;
         await using (var device = connection.CreateCommand())
         {
             device.CommandText = @"
-                SELECT d.classroom_id, c.name, c.ac_status, d.device_code, d.pending_clear_fingerprints
+                SELECT d.classroom_id, c.name, c.ac_status, d.device_id, d.pending_clear_fingerprints,
+                       d.display_name, c.target_temperature, d.status_poll_interval_seconds,
+                       d.fingerprint_enrollment_enabled, d.attendance_scan_enabled
                 FROM biometric_devices d
-                INNER JOIN classrooms c ON c.id = d.classroom_id AND c.is_active = TRUE
-                WHERE d.device_code = @deviceCode AND d.is_active = TRUE
+                LEFT JOIN classrooms c ON c.id = d.classroom_id
+                WHERE d.device_id = @deviceId AND d.is_active = TRUE
+                  AND (d.classroom_id IS NULL OR c.is_active = TRUE)
                 LIMIT 1;";
-            device.Parameters.Add("@deviceCode", MySqlDbType.VarChar).Value = deviceCode.Trim();
+            device.Parameters.Add("@deviceId", MySqlDbType.VarChar).Value = deviceId.Trim().ToUpperInvariant();
             await using var reader = await device.ExecuteReaderAsync(cancellationToken);
             if (!await reader.ReadAsync(cancellationToken))
             {
                 return new DeviceRoomStatusResult(false, "Unknown or inactive biometric device.");
             }
 
-            classroomId = reader.GetInt64(0);
-            classroomName = reader.GetString(1);
-            acStatus = reader.GetString(2);
-            resolvedDeviceCode = reader.GetString(3);
+            classroomId = reader.IsDBNull(0) ? null : reader.GetInt64(0);
+            classroomName = reader.IsDBNull(1) ? null : reader.GetString(1);
+            acStatus = reader.IsDBNull(2) ? "Off" : reader.GetString(2);
+            resolvedDeviceId = reader.GetString(3);
             clearFingerprints = reader.GetBoolean(4);
+            deviceDisplayName = reader.GetString(5);
+            targetTemperature = reader.IsDBNull(6) ? null : reader.GetInt32(6);
+            statusPollingIntervalSeconds = reader.GetInt32(7);
+            fingerprintEnrollmentEnabled = reader.GetBoolean(8);
+            attendanceScanEnabled = reader.GetBoolean(9);
+        }
+
+        if (classroomId is not long assignedClassroomId)
+        {
+            return new DeviceRoomStatusResult(
+                true,
+                DeviceId: resolvedDeviceId,
+                ClassroomId: null,
+                ClassroomName: null,
+                AcStatus: "Off",
+                AcOn: false,
+                SessionActive: false,
+                ClearFingerprints: clearFingerprints,
+                DeviceDisplayName: deviceDisplayName,
+                TargetTemperature: null,
+                StatusPollingIntervalSeconds: statusPollingIntervalSeconds,
+                FingerprintEnrollmentEnabled: fingerprintEnrollmentEnabled,
+                AttendanceScanEnabled: attendanceScanEnabled);
         }
 
         var acOn = acStatus is "Cooling" or "Override" or "Remote";
@@ -2464,7 +3483,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                   AND a.status = 'Active'
                 ORDER BY a.time_in_utc DESC
                 LIMIT 1;";
-            active.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = classroomId;
+            active.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = assignedClassroomId;
             await using var reader = await active.ExecuteReaderAsync(cancellationToken);
             if (await reader.ReadAsync(cancellationToken))
             {
@@ -2490,7 +3509,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                   AND @schoolTime < schedule.end_time
                 ORDER BY a.time_in_utc DESC
                 LIMIT 1;";
-            inWindow.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = classroomId;
+            inWindow.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = assignedClassroomId;
             inWindow.Parameters.Add("@schoolDate", MySqlDbType.Date).Value = schoolDate;
             inWindow.Parameters.Add("@schoolTime", MySqlDbType.Time).Value = schoolTime;
             await using var reader = await inWindow.ExecuteReaderAsync(cancellationToken);
@@ -2514,7 +3533,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                   AND t.event_type IN ('ClassStarted', 'AcReentryOn', 'TargetSet')
                 ORDER BY t.recorded_utc DESC
                 LIMIT 1;";
-            log.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = classroomId;
+            log.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = assignedClassroomId;
             await using var reader = await log.ExecuteReaderAsync(cancellationToken);
             if (await reader.ReadAsync(cancellationToken))
             {
@@ -2531,8 +3550,8 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         return new DeviceRoomStatusResult(
             true,
             null,
-            resolvedDeviceCode,
-            classroomId,
+            resolvedDeviceId,
+            assignedClassroomId,
             classroomName,
             acStatus,
             acOn,
@@ -2540,97 +3559,111 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             teacherId,
             teacherName,
             scheduleId,
-            clearFingerprints);
+            clearFingerprints,
+            deviceDisplayName,
+            targetTemperature,
+            statusPollingIntervalSeconds,
+            fingerprintEnrollmentEnabled,
+            attendanceScanEnabled);
     }
 
-    public async Task<OperationResult> ClearRoomSessionByDeviceCodeAsync(string deviceCode, CancellationToken cancellationToken = default)
+    public async Task<OperationResult> ClearRoomSessionByDeviceIdAsync(string deviceId, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(deviceCode))
+        if (string.IsNullOrWhiteSpace(deviceId))
         {
-            return OperationResult.Failure("deviceCode is required.");
+            return OperationResult.Failure("deviceId is required.");
         }
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
-            long classroomId;
+            long? classroomId;
             await using (var device = connection.CreateCommand())
             {
                 device.Transaction = transaction;
                 device.CommandText = @"
                     SELECT d.classroom_id
                     FROM biometric_devices d
-                    INNER JOIN classrooms c ON c.id = d.classroom_id AND c.is_active = TRUE
-                    WHERE d.device_code = @deviceCode AND d.is_active = TRUE
+                    LEFT JOIN classrooms c ON c.id = d.classroom_id
+                    WHERE d.device_id = @deviceId AND d.is_active = TRUE
+                      AND (d.classroom_id IS NULL OR c.is_active = TRUE)
                     LIMIT 1
                     FOR UPDATE;";
-                device.Parameters.Add("@deviceCode", MySqlDbType.VarChar).Value = deviceCode.Trim();
+                device.Parameters.Add("@deviceId", MySqlDbType.VarChar).Value = deviceId.Trim().ToUpperInvariant();
                 var id = await device.ExecuteScalarAsync(cancellationToken);
-                if (id is null or DBNull)
+                if (id is null)
                 {
                     await transaction.RollbackAsync(cancellationToken);
                     return OperationResult.Failure("Unknown or inactive biometric device.");
                 }
 
-                classroomId = Convert.ToInt64(id);
+                classroomId = id is DBNull ? null : Convert.ToInt64(id);
             }
 
             var recordedAt = SchoolNow();
             var sessions = new List<(long AttendanceId, long TeacherId)>();
-            await using (var find = connection.CreateCommand())
+            if (classroomId is long assignedClassroomId)
             {
-                find.Transaction = transaction;
-                find.CommandText = @"
-                    SELECT id, teacher_account_id
-                    FROM attendance_logs
-                    WHERE classroom_id = @classroomId
-                      AND time_out_utc IS NULL
-                      AND status = 'Active'
-                    FOR UPDATE;";
-                find.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = classroomId;
-                await using var reader = await find.ExecuteReaderAsync(cancellationToken);
-                while (await reader.ReadAsync(cancellationToken))
+                await using (var find = connection.CreateCommand())
                 {
-                    sessions.Add((reader.GetInt64(0), reader.GetInt64(1)));
+                    find.Transaction = transaction;
+                    find.CommandText = @"
+                        SELECT id, teacher_account_id
+                        FROM attendance_logs
+                        WHERE classroom_id = @classroomId
+                          AND time_out_utc IS NULL
+                          AND status = 'Active'
+                        FOR UPDATE;";
+                    find.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = assignedClassroomId;
+                    await using var reader = await find.ExecuteReaderAsync(cancellationToken);
+                    while (await reader.ReadAsync(cancellationToken))
+                    {
+                        sessions.Add((reader.GetInt64(0), reader.GetInt64(1)));
+                    }
                 }
-            }
 
-            foreach (var session in sessions)
-            {
-                await using var close = connection.CreateCommand();
-                close.Transaction = transaction;
-                close.CommandText = @"
-                    UPDATE attendance_logs
-                    SET time_out_utc = @recordedAt,
-                        status = 'Completed',
-                        outcome = COALESCE(outcome, 'OnTime')
-                    WHERE id = @id AND time_out_utc IS NULL;";
-                close.Parameters.Add("@id", MySqlDbType.Int64).Value = session.AttendanceId;
-                close.Parameters.Add("@recordedAt", MySqlDbType.DateTime).Value = recordedAt;
-                await close.ExecuteNonQueryAsync(cancellationToken);
-            }
+                foreach (var session in sessions)
+                {
+                    await using var close = connection.CreateCommand();
+                    close.Transaction = transaction;
+                    close.CommandText = @"
+                        UPDATE attendance_logs
+                        SET time_out_utc = @recordedAt,
+                            status = 'Completed',
+                            outcome = COALESCE(outcome, 'OnTime')
+                        WHERE id = @id AND time_out_utc IS NULL;";
+                    close.Parameters.Add("@id", MySqlDbType.Int64).Value = session.AttendanceId;
+                    close.Parameters.Add("@recordedAt", MySqlDbType.DateTime).Value = recordedAt;
+                    await close.ExecuteNonQueryAsync(cancellationToken);
+                }
 
-            var actorId = sessions.Count > 0 ? sessions[0].TeacherId : (long?)null;
-            await SetClassroomStatusAndLogAsync(
-                connection,
-                transaction,
-                classroomId,
-                actorId,
-                "Off",
-                "ClassEnded",
-                "Device DELETEALL: fingerprints cleared — session and AC reset",
-                recordedAt,
-                cancellationToken);
+                var actorId = sessions.Count > 0 ? sessions[0].TeacherId : (long?)null;
+                await SetClassroomStatusAndLogAsync(
+                    connection,
+                    transaction,
+                    assignedClassroomId,
+                    actorId,
+                    "Off",
+                    "ClassEnded",
+                    "Device DELETEALL: fingerprints cleared — session and AC reset",
+                    recordedAt,
+                    cancellationToken);
+            }
 
             await using (var clearPending = connection.CreateCommand())
             {
                 clearPending.Transaction = transaction;
                 clearPending.CommandText = @"
+                    DELETE i FROM fingerprint_sensor_inventory i
+                    INNER JOIN biometric_devices d ON d.id = i.device_id WHERE d.device_id = @deviceId;
+                    DELETE c FROM fingerprint_enrollment_challenges c
+                    INNER JOIN biometric_devices d ON d.id = c.device_id
+                    WHERE d.device_id = @deviceId AND c.operation_name = 'inventory';
                     UPDATE biometric_devices
                     SET pending_clear_fingerprints = 0
-                    WHERE device_code = @deviceCode AND is_active = TRUE;";
-                clearPending.Parameters.Add("@deviceCode", MySqlDbType.VarChar).Value = deviceCode.Trim();
+                    WHERE device_id = @deviceId AND is_active = TRUE;";
+                clearPending.Parameters.Add("@deviceId", MySqlDbType.VarChar).Value = deviceId.Trim().ToUpperInvariant();
                 await clearPending.ExecuteNonQueryAsync(cancellationToken);
             }
 
@@ -2650,6 +3683,18 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            if (await HasUnresolvedFingerprintWritesAsync(connection, transaction, cancellationToken))
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return OperationResult.Failure("Resolve outstanding fingerprint writes before clearing scanner data.");
+            }
+            await using (var invalidate = connection.CreateCommand())
+            {
+                invalidate.Transaction = transaction;
+                invalidate.CommandText = @"DELETE FROM fingerprint_sensor_inventory;
+                    DELETE FROM fingerprint_enrollment_challenges WHERE operation_name = 'inventory';";
+                await invalidate.ExecuteNonQueryAsync(cancellationToken);
+            }
             await using (var wipe = connection.CreateCommand())
             {
                 wipe.Transaction = transaction;
@@ -2675,6 +3720,87 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             await transaction.RollbackAsync(cancellationToken);
             throw;
         }
+    }
+
+    private static async Task<bool> HasUnresolvedFingerprintWritesAsync(MySqlConnection connection, MySqlTransaction transaction, CancellationToken cancellationToken)
+    {
+        await LockFingerprintDevicesAsync(connection, transaction, cancellationToken);
+        await using var guard = connection.CreateCommand();
+        guard.Transaction = transaction;
+        guard.CommandText = "SELECT preparation_id FROM fingerprint_enrollment_write_guards LIMIT 1 FOR UPDATE;";
+        return await guard.ExecuteScalarAsync(cancellationToken) is not null;
+    }
+
+    private static async Task LockFingerprintDevicesAsync(MySqlConnection connection, MySqlTransaction transaction, CancellationToken cancellationToken)
+    {
+        await using (var devices = connection.CreateCommand())
+        {
+            devices.Transaction = transaction;
+            devices.CommandText = "SELECT id FROM biometric_devices ORDER BY id FOR UPDATE;";
+            await using var reader = await devices.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken)) { }
+        }
+    }
+
+    private static async Task<bool> HasInFlightIrAsync(MySqlConnection connection, MySqlTransaction transaction,
+        long deviceId, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT device_id FROM ac_ir_state WHERE device_id = @id AND state = 'inflight' FOR UPDATE;";
+        command.Parameters.Add("@id", MySqlDbType.Int64).Value = deviceId;
+        return await command.ExecuteScalarAsync(cancellationToken) is not null;
+    }
+
+    private static async Task<bool> HasInFlightIrForRoomAsync(MySqlConnection connection, MySqlTransaction transaction,
+        long roomId, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT s.device_id FROM ac_ir_state s INNER JOIN biometric_devices d ON d.id = s.device_id
+            WHERE d.classroom_id = @room AND s.state = 'inflight' LIMIT 1 FOR UPDATE;
+            """;
+        command.Parameters.Add("@room", MySqlDbType.Int64).Value = roomId;
+        return await command.ExecuteScalarAsync(cancellationToken) is not null;
+    }
+
+    private static async Task InvalidateIrAsync(MySqlConnection connection, MySqlTransaction transaction,
+        long deviceId, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "DELETE FROM ac_ir_state WHERE device_id = @id;";
+        command.Parameters.Add("@id", MySqlDbType.Int64).Value = deviceId;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task InvalidateIrForRoomAsync(MySqlConnection connection, MySqlTransaction transaction,
+        long roomId, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            DELETE s FROM ac_ir_state s INNER JOIN biometric_devices d ON d.id = s.device_id WHERE d.classroom_id = @room;
+            """;
+        command.Parameters.Add("@room", MySqlDbType.Int64).Value = roomId;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<bool> HasFingerprintWriteForAsync(
+        MySqlConnection connection, MySqlTransaction transaction, string field, long id, CancellationToken cancellationToken)
+    {
+        if (field is not ("p.teacher_account_id" or "d.classroom_id" or "p.device_id"))
+            throw new ArgumentOutOfRangeException(nameof(field));
+        await using var guard = connection.CreateCommand();
+        guard.Transaction = transaction;
+        guard.CommandText = $@"SELECT g.preparation_id
+            FROM fingerprint_enrollment_write_guards g
+            INNER JOIN fingerprint_enrollment_preparations p ON p.id = g.preparation_id
+            INNER JOIN biometric_devices d ON d.id = p.device_id
+            WHERE {field} = @id LIMIT 1 FOR UPDATE;";
+        guard.Parameters.Add("@id", MySqlDbType.Int64).Value = id;
+        return await guard.ExecuteScalarAsync(cancellationToken) is not null;
     }
 
     public async Task<int> CountFingerprintTemplatesAsync(CancellationToken cancellationToken = default)

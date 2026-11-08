@@ -19,13 +19,13 @@ body:json {
   {
     "pinCode": "{{pinCode}}",
     "templateId": {{templateId}},
-    "deviceCode": "{{deviceCode}}"
+    "deviceId": "{{deviceId}}"
   }
 }
 
 docs {
   Enrolls a device-assigned fingerprint template ID for a teacher looked up by device PIN.
-  deviceCode identifies which room scanner is calling (e.g. ROOM-101).
+  deviceId identifies the registered device independently of its assigned room (e.g. 1000000001).
 
   pinCode must match user_accounts.device_pin (4–6 digits). Demo Maria PIN is 1001.
   templateId is the numeric ID stored on the fingerprint sensor.

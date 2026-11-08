@@ -1,6 +1,57 @@
 (function () {
     "use strict";
 
+    window.smartClassRememberUsername = {
+        initialize(form) {
+            const username = form.elements.username;
+            const remember = form.querySelector("#remember-username");
+            const error = form.querySelector("#remember-error");
+            const key = "smartclassac.rememberedUsername";
+
+            function reportStorageError(exception) {
+                console.error("Unable to access the remembered username.", exception);
+                error.textContent = "Remember username is unavailable. A previously saved username may still be stored; check your browser storage settings.";
+            }
+
+            try {
+                const savedUsername = localStorage.getItem(key);
+                if (savedUsername !== null) {
+                    if (!username.value) username.value = savedUsername;
+                    remember.checked = true;
+                }
+                remember.disabled = false;
+            } catch (exception) {
+                reportStorageError(exception);
+                return;
+            }
+
+            remember.addEventListener("change", () => {
+                if (!remember.checked) {
+                    try {
+                        localStorage.removeItem(key);
+                        error.textContent = "";
+                    } catch (exception) {
+                        reportStorageError(exception);
+                    }
+                }
+            });
+
+            form.addEventListener("submit", event => {
+                try {
+                    if (remember.checked && username.value.trim()) {
+                        localStorage.setItem(key, username.value.trim());
+                    } else {
+                        localStorage.removeItem(key);
+                    }
+                    error.textContent = "";
+                } catch (exception) {
+                    event.preventDefault();
+                    reportStorageError(exception);
+                }
+            });
+        }
+    };
+
     function getMenuElements() {
         return {
             menu: document.getElementById("smartMobileMenu"),

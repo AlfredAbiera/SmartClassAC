@@ -15,6 +15,7 @@ public sealed class AuthService : IAuthService
     private readonly IPasswordResetEmailSender _passwordResetEmailSender;
     private readonly LoginAttemptLimiter _loginAttemptLimiter;
     private readonly SchoolTimeOptions _schoolTime;
+    private readonly IConfiguration? _configuration;
     private AuthenticatedUser? _currentUser;
 
     public AuthService(
@@ -24,7 +25,8 @@ public sealed class AuthService : IAuthService
         IOptions<PasswordResetOptions> passwordReset,
         IPasswordResetEmailSender passwordResetEmailSender,
         LoginAttemptLimiter loginAttemptLimiter,
-        IOptions<SchoolTimeOptions> schoolTime)
+        IOptions<SchoolTimeOptions> schoolTime,
+        IConfiguration? configuration = null)
     {
         _accounts = accounts;
         _passwordHasher = passwordHasher;
@@ -33,6 +35,7 @@ public sealed class AuthService : IAuthService
         _passwordResetEmailSender = passwordResetEmailSender;
         _loginAttemptLimiter = loginAttemptLimiter;
         _schoolTime = schoolTime.Value;
+        _configuration = configuration;
     }
 
     public async Task<LoginResult> LoginAsync(string usernameOrEmail, string password)
@@ -361,9 +364,9 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("Classroom capacity must be between 1 and 1,000.");
         }
 
-        if (request.TargetTemperature is < 16 or > 30)
+        if (request.TargetTemperature is < 16 or > 30 || request.MinimumTemperature is < 16 or > 30)
         {
-            return OperationResult.Failure("Target temperature must be between 16°C and 30°C.");
+            return OperationResult.Failure("Target and minimum temperatures must be between 16°C and 30°C.");
         }
 
         return await _accounts.CreateClassroomAsync(request with { Name = request.Name.Trim() });
@@ -382,9 +385,9 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("Enter a valid classroom name.");
         }
 
-        if (request.Capacity is < 1 or > 1000 || request.TargetTemperature is < 16 or > 30)
+        if (request.Capacity is < 1 or > 1000 || request.TargetTemperature is < 16 or > 30 || request.MinimumTemperature is < 16 or > 30)
         {
-            return OperationResult.Failure("Enter a capacity from 1 to 1,000 and a target temperature from 16°C to 30°C.");
+            return OperationResult.Failure("Enter a capacity from 1 to 1,000 and temperatures from 16°C to 30°C.");
         }
 
         return await _accounts.UpdateClassroomAsync(request with { Name = request.Name.Trim() });
@@ -742,28 +745,259 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("Enter a valid classroom, temperature, and command type.");
         }
 
-        if (_currentUser.Role == UserRole.Teacher)
-        {
-            var today = SchoolClock.Today(_schoolTime);
-            var allowed = (await _accounts.GetTeacherSchedulesAsync(_currentUser.Id))
-                .Any(schedule => schedule.ClassroomId == request.ClassroomId && schedule.ScheduleDate == today);
-            if (!allowed)
-            {
-                return OperationResult.Failure("Teachers can adjust only a classroom assigned to them today.");
-            }
-        }
-
         return await _accounts.SetTemperatureAsync(_currentUser.Id, request);
     }
 
     public Task<IReadOnlyList<BiometricDeviceEntry>> GetBiometricDevicesAsync() => _accounts.GetBiometricDevicesAsync();
 
+    public async Task<OperationResult> SetEnrollmentScannerAsync(long? deviceRowId)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null)
+        {
+            return authorization;
+        }
+
+        if (deviceRowId is <= 0)
+        {
+            return OperationResult.Failure("Select a valid enrollment scanner.");
+        }
+
+        return await _accounts.SetEnrollmentScannerAsync(deviceRowId);
+    }
+
+    public async Task<IReadOnlyList<long>> GetBlockedFingerprintSlotsAsync()
+    {
+        if (RequireAdmin() is not null)
+        {
+            throw new UnauthorizedAccessException("Only administrators can view blocked fingerprint slots.");
+        }
+        return await _accounts.GetBlockedFingerprintSlotsAsync();
+    }
+
+    public async Task<FingerprintSlotInspection> InspectFingerprintSlotAsync(long templateId)
+    {
+        if (RequireAdmin() is not null)
+        {
+            throw new UnauthorizedAccessException("Only administrators can inspect fingerprint slots.");
+        }
+        if (templateId <= 0 || templateId > ushort.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(templateId), "Enter a sensor slot between 1 and 65535.");
+        }
+        return await _accounts.InspectFingerprintSlotAsync(templateId);
+    }
+
+    public async Task<OperationResult> SetFingerprintSlotBlockedAsync(long templateId, bool blocked)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null)
+        {
+            return authorization;
+        }
+        if (templateId <= 0 || templateId > ushort.MaxValue)
+        {
+            return OperationResult.Failure("Enter a sensor slot between 1 and 65535.");
+        }
+        return await _accounts.SetFingerprintSlotBlockedAsync(templateId, blocked);
+    }
+
+    public async Task<OperationResult> PrepareFingerprintEnrollmentAsync(long teacherId, string fingerPosition, long templateId)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return authorization;
+        if (teacherId <= 0 || !FingerprintSlots.IsValid(fingerPosition) || templateId <= 0 || templateId > ushort.MaxValue)
+            return OperationResult.Failure("Select a teacher, a finger, and a sensor slot between 1 and 65535.");
+        return await _accounts.PrepareFingerprintEnrollmentAsync(teacherId, fingerPosition, templateId);
+    }
+
+    public async Task<OperationResult> PrepareFingerprintEnrollmentAutomaticallyAsync(long teacherId, string fingerPosition)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return authorization;
+        if (teacherId <= 0 || !FingerprintSlots.IsValid(fingerPosition))
+            return OperationResult.Failure("Select a teacher and a valid finger.");
+        return await _accounts.PrepareFingerprintEnrollmentAutomaticallyAsync(teacherId, fingerPosition);
+    }
+
+    public async Task<OperationResult> PrepareFingerprintReplacementAsync(long scannerId, long teacherId, string fingerPosition, long slot)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return authorization;
+        if (!FingerprintReplacementAvailability.IsEnabled(_configuration))
+            return OperationResult.Failure("Same-slot replacement is disabled.");
+        if (scannerId <= 0 || teacherId <= 0 || !FingerprintSlots.IsValid(fingerPosition) || slot <= 0 || slot > ushort.MaxValue)
+            return OperationResult.Failure("Select a valid scanner, teacher, finger, and slot.");
+        return await _accounts.PrepareFingerprintReplacementAsync(scannerId, teacherId, fingerPosition, slot);
+    }
+
+    public async Task<OperationResult> AuthorizeFingerprintReplacementAsync(long scannerId, long teacherId, string fingerPosition, long slot, string id)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return authorization;
+        if (!FingerprintReplacementAvailability.IsEnabled(_configuration))
+            return OperationResult.Failure("Same-slot replacement is disabled.");
+        if (scannerId <= 0 || teacherId <= 0 || !FingerprintSlots.IsValid(fingerPosition) || slot <= 0 || slot > ushort.MaxValue ||
+            !Guid.TryParseExact(id, "D", out var preparation) || preparation == Guid.Empty)
+            return OperationResult.Failure("Select a valid replacement preparation.");
+        return await _accounts.AuthorizeFingerprintReplacementAsync(_currentUser!.Id, scannerId, teacherId, fingerPosition, slot, preparation.ToString("D"));
+    }
+
+    public async Task<IReadOnlyList<TeacherFingerprint>> GetTeacherFingerprintsAsync(long teacherId)
+    {
+        if (RequireAdmin() is not null)
+            throw new UnauthorizedAccessException("Only administrators can view teacher fingerprints.");
+        if (teacherId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(teacherId));
+        return await _accounts.GetTeacherFingerprintsAsync(teacherId);
+    }
+
+    public async Task<IReadOnlyList<FingerprintEnrollmentPreparation>> GetFingerprintEnrollmentPreparationsAsync()
+    {
+        if (RequireAdmin() is not null)
+            throw new UnauthorizedAccessException("Only administrators can view enrollment preparations.");
+        return await _accounts.GetFingerprintEnrollmentPreparationsAsync();
+    }
+
+    public async Task<OperationResult> CancelFingerprintEnrollmentPreparationAsync(string id)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return authorization;
+        if (!Guid.TryParseExact(id, "D", out _))
+            return OperationResult.Failure("Select a valid preparation.");
+        return await _accounts.CancelFingerprintEnrollmentPreparationAsync(id);
+    }
+
+    public async Task<OperationResult> AuthorizeFingerprintEnrollmentAsync(string id, bool allowOccupiedSlot)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return authorization;
+        if (!Guid.TryParseExact(id, "D", out var preparation) || preparation == Guid.Empty)
+            return OperationResult.Failure("Select a valid preparation.");
+        if (allowOccupiedSlot)
+            return OperationResult.Failure("Replacement of an occupied fingerprint slot is not available yet.");
+        return await _accounts.AuthorizeFingerprintEnrollmentAsync(_currentUser!.Id, preparation.ToString("D"), allowOccupiedSlot);
+    }
+
+    public async Task<OperationResult> RevokeFingerprintEnrollmentAuthorizationAsync(string id)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return authorization;
+        if (!Guid.TryParseExact(id, "D", out var preparation) || preparation == Guid.Empty)
+            return OperationResult.Failure("Select a valid preparation.");
+        return await _accounts.RevokeFingerprintEnrollmentAuthorizationAsync(preparation.ToString("D"));
+    }
+
     public async Task<OperationResult> CreateBiometricDeviceAsync(CreateBiometricDeviceRequest request)
     {
         var authorization = RequireAdmin();
-        return authorization is not null
-            ? authorization
-            : await _accounts.CreateBiometricDeviceAsync(request);
+        if (authorization is not null)
+        {
+            return authorization;
+        }
+
+        if (request.ClassroomId is <= 0)
+        {
+            return OperationResult.Failure("Select an active classroom or leave the device unassigned.");
+        }
+
+        if (request.ClassroomId is not null && request.TargetTemperature is not (>= 16 and <= 30))
+        {
+            return OperationResult.Failure("Target temperature must be between 16°C and 30°C for an assigned device.");
+        }
+
+        if (request.StatusPollingIntervalSeconds is < BiometricDeviceSettingsPolicy.MinStatusPollingIntervalSeconds
+            or > BiometricDeviceSettingsPolicy.MaxStatusPollingIntervalSeconds)
+        {
+            return OperationResult.Failure(
+                $"Status polling interval must be between {BiometricDeviceSettingsPolicy.MinStatusPollingIntervalSeconds} and {BiometricDeviceSettingsPolicy.MaxStatusPollingIntervalSeconds} seconds.");
+        }
+
+        return await _accounts.CreateBiometricDeviceAsync(request);
+    }
+
+    public async Task<OperationResult> UpdateBiometricDeviceAsync(UpdateBiometricDeviceRequest request)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null)
+        {
+            return authorization;
+        }
+
+        if (request.Id <= 0 || request.ClassroomId is <= 0)
+        {
+            return OperationResult.Failure("Select an active classroom or leave the device unassigned.");
+        }
+
+        if (request.ClassroomId is not null && request.TargetTemperature is not (>= 16 and <= 30))
+        {
+            return OperationResult.Failure("Target temperature must be between 16°C and 30°C for an assigned device.");
+        }
+
+        if (request.StatusPollingIntervalSeconds is < BiometricDeviceSettingsPolicy.MinStatusPollingIntervalSeconds
+            or > BiometricDeviceSettingsPolicy.MaxStatusPollingIntervalSeconds)
+        {
+            return OperationResult.Failure(
+                $"Status polling interval must be between {BiometricDeviceSettingsPolicy.MinStatusPollingIntervalSeconds} and {BiometricDeviceSettingsPolicy.MaxStatusPollingIntervalSeconds} seconds.");
+        }
+
+        return await _accounts.UpdateBiometricDeviceAsync(request);
+    }
+
+    public async Task<OperationResult> DeleteBiometricDeviceAsync(long id)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null)
+        {
+            return authorization;
+        }
+
+        if (id <= 0)
+        {
+            return OperationResult.Failure("Select a valid device to delete.");
+        }
+
+        return await _accounts.DeleteBiometricDeviceAsync(id);
+    }
+
+    public async Task<OperationResult> SetMyAdminDevicePinAsync(string pin)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null)
+        {
+            return authorization;
+        }
+
+        var clean = pin?.Trim();
+        if (!AdminDevicePinCodes.IsValid(clean))
+        {
+            return OperationResult.Failure(AdminDevicePinCodes.RequirementMessage);
+        }
+
+        return await _accounts.SetAdminDevicePinHashAsync(_currentUser!.Id, _passwordHasher.Hash(clean!));
+    }
+
+    public async Task<OperationResult> RegenerateDevicePairingCodeAsync(long deviceRowId)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null)
+        {
+            return authorization;
+        }
+
+        return deviceRowId <= 0
+            ? OperationResult.Failure("Select a valid device.")
+            : await _accounts.RegenerateDevicePairingCodeAsync(deviceRowId);
+    }
+
+    public async Task<bool> HasAdminDevicePinAsync()
+    {
+        if (RequireAdmin() is not null)
+        {
+            return false;
+        }
+
+        return (await _accounts.GetAdminDevicePinHashesAsync()).Count > 0;
     }
 
     public async Task<OperationResult> RequestClearAllFingerprintDevicesAsync()
@@ -779,16 +1013,11 @@ public sealed class AuthService : IAuthService
 
     public Task<int> CountFingerprintTemplatesAsync() => _accounts.CountFingerprintTemplatesAsync();
 
-    public async Task<OperationResult> ResetSystemToFirstAccessAsync(string currentPassword)
+    public async Task<OperationResult> ResetSystemToFirstAccessAsync()
     {
         if (_currentUser is not { Role: UserRole.Admin, IsDefaultAdmin: true })
         {
             return OperationResult.Failure("Only the default administrator can reset the system.");
-        }
-
-        if (!await IsCurrentPasswordValidAsync(_currentUser.Id, currentPassword))
-        {
-            return OperationResult.Failure("The current administrator password is incorrect.");
         }
 
         if (string.IsNullOrWhiteSpace(_defaultAdmin.Username) || string.IsNullOrWhiteSpace(_defaultAdmin.Password))
@@ -796,7 +1025,8 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("Configure DefaultAdmin credentials in User Secrets before resetting the system.");
         }
 
-        await _accounts.ResetSystemToFirstAccessAsync(_defaultAdmin, _passwordHasher.Hash(_defaultAdmin.Password));
+        var result = await _accounts.ResetSystemToFirstAccessAsync(_defaultAdmin, _passwordHasher.Hash(_defaultAdmin.Password));
+        if (!result.Succeeded) return result;
         _currentUser = null;
         return OperationResult.Success();
     }
