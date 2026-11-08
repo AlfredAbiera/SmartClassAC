@@ -64,6 +64,7 @@ struct EnrollmentSensorAdapter;
 // Also print/show via Serial boot banner, LCD splash, and STATUS command.
 // Changelog:
 //
+//   1.6.64 2026-11-08  Add USB-only orphan retirement with verified sensor clear.
 //   1.6.63 2026-11-08  Add confirmed, guarded local-only unpairing.
 //   1.6.62 2026-11-08  Offer guarded pairing after a saved device ID is rejected.
 //   1.6.61 2026-11-08  Enable guarded fingerprint enrollment and inventory.
@@ -82,7 +83,7 @@ struct EnrollmentSensorAdapter;
 //   1.6.48 2026-11-08  Authenticate Faculty login with server SMS OTP.
 //   1.6.47 2026-11-08  Remove boot SMS sending.
 // ---------------------------------------------------------------------------
-const char* FIRMWARE_VERSION = "1.6.63";
+const char* FIRMWARE_VERSION = "1.6.64";
 
 // USB Serial Monitor MUST match this baud (115200). Boxes/diamonds = wrong baud
 // or fingerprint TX wired to GPIO1/3 (USB UART) instead of FINGERPRINT_RX/TX.
@@ -255,9 +256,11 @@ uint32_t healthGeneration = 0;
 uint32_t statusGeneration = 0;
 uint32_t pairingGeneration = 0;
 BackgroundResult backgroundResult;
+bool retirementBlocked = false;
+String retirementDeviceId;
 
 bool isDevicePaired() {
-  return deviceId[0] != '\0';
+  return !retirementBlocked && deviceId[0] != '\0';
 }
 
 struct EnrollmentJournalStorage {
@@ -304,17 +307,26 @@ struct EnrollmentJournalStorage {
 };
 
 bool enrollmentJournalIsClear() {
+  if (retirementBlocked) return false;
   EnrollmentJournalStorage storage;
   EnrollmentJournal::Record record{};
   return storage.read(record) == EnrollmentJournal::ReadStatus::Empty;
 }
 
 void loadDeviceId() {
-  devicePrefs.begin("smartclass", true);
+  if (!devicePrefs.begin("smartclass", true)) {
+    retirementBlocked = true;
+    Serial.println("Device storage unavailable; pairing and scanning blocked.");
+    return;
+  }
   String stored = devicePrefs.getString("deviceId", "");
+  retirementBlocked = devicePrefs.isKey("retireId");
+  retirementDeviceId = retirementBlocked ? devicePrefs.getString("retireId", "") : "";
   devicePrefs.end();
   strncpy(deviceId, stored.c_str(), sizeof(deviceId) - 1);
   deviceId[sizeof(deviceId) - 1] = '\0';
+  if (retirementBlocked)
+    Serial.println("Incomplete USB retirement; scanning and pairing blocked. Resume the retirement tool.");
 }
 
 bool saveDeviceId(const String& id) {
@@ -3198,8 +3210,69 @@ void pollScanAndLog() {
 // ---------------------------------------------------------------------------
 // Serial: ENROLL | STATUS | HEALTH | GSM | HELP
 // Non-blocking: only process complete lines ending in \n / \r.
-// Keypad # opens the Admin / Faculty menu (dummy login for now).
+// Keypad # opens the server-authenticated Admin / Faculty menu.
 // ---------------------------------------------------------------------------
+void retireOrphanDevice(const String& expectedId) {
+  String actualId = retirementBlocked ? retirementDeviceId : String(deviceId);
+  bool validId = expectedId.length() > 0 && expectedId.length() < sizeof(deviceId);
+  for (size_t i = 0; i < expectedId.length(); ++i)
+    if (expectedId[i] < '0' || expectedId[i] > '9') validId = false;
+  EnrollmentJournalStorage journal;
+  EnrollmentJournal::Record record{};
+  if (!validId || expectedId != actualId || currentDisplayState != STATE_SCANNING ||
+      journal.read(record) != EnrollmentJournal::ReadStatus::Empty) {
+    Serial.println("SC-RETIRE-ERROR identity, menu state, or write journal blocks retirement");
+    return;
+  }
+  if (!devicePrefs.begin("smartclass", false)) {
+    Serial.println("SC-RETIRE-ERROR storage unavailable");
+    return;
+  }
+  bool marked = devicePrefs.putString("retireId", expectedId) == expectedId.length() &&
+                devicePrefs.getString("retireId", "") == expectedId;
+  devicePrefs.end();
+  // Even an uncertain marker write blocks this boot.
+  retirementBlocked = true;
+  retirementDeviceId = expectedId;
+  ++pairingGeneration;
+  ++statusGeneration;
+  roomStatusReceived = false;
+  if (!marked) {
+    Serial.println("SC-RETIRE-ERROR retirement marker could not be verified; restart and investigate");
+    return;
+  }
+  lcd.clear();
+  printLcdRow(0, "USB retirement");
+  printLcdRow(1, "Clearing sensor");
+  EnrollmentSerialTransport transport;
+  EnrollmentClock clock;
+  EnrollmentSensor::CheckedSensor<EnrollmentSerialTransport, EnrollmentClock> checked(transport, clock);
+  bool cleared = checked.clearAndVerifyEmpty() == EnrollmentSensor::Ok;
+  if (!cleared) {
+    Serial.println("SC-RETIRE-ERROR sensor clear or empty verification uncertain; marker retained");
+    return;
+  }
+  if (!devicePrefs.begin("smartclass", false)) {
+    Serial.println("SC-RETIRE-ERROR sensor empty but storage unavailable; marker retained");
+    return;
+  }
+  bool keyRemoved = !devicePrefs.isKey("enrollKey") || devicePrefs.remove("enrollKey");
+  keyRemoved = keyRemoved && !devicePrefs.isKey("enrollKey");
+  bool idRemoved = keyRemoved && (!devicePrefs.isKey("deviceId") || devicePrefs.remove("deviceId"));
+  idRemoved = idRemoved && !devicePrefs.isKey("deviceId");
+  bool done = idRemoved && devicePrefs.remove("retireId") && !devicePrefs.isKey("retireId");
+  devicePrefs.end();
+  if (!done) {
+    Serial.println("SC-RETIRE-ERROR sensor empty; identity removal incomplete; resume retirement");
+    return;
+  }
+  memset(deviceId, 0, sizeof(deviceId));
+  // Keep this boot locked; only a reboot may start pairing with fresh state.
+  Serial.printf("SC-RETIRE-OK 1 %s reboot-required\n", expectedId.c_str());
+  printLcdRow(0, "Retired / empty");
+  printLcdRow(1, "Reboot to pair");
+}
+
 void processSerialCommands() {
   if (provisioningKey && millis() - provisioningStarted >= 10000UL) {
     provisioningKey = false;
@@ -3290,6 +3363,15 @@ void processSerialCommands() {
 }
 
 void handleSerialCommand(const String& line) {
+  if (line.equals("SC-RETIRE-INFO")) {
+    String id = retirementBlocked ? retirementDeviceId : String(deviceId);
+    Serial.printf("SC-RETIRE-INFO 1 %s %s\n", id.length() > 0 ? id.c_str() : "unpaired", baseUrl);
+    return;
+  }
+  if (line.startsWith("SC-RETIRE-ERASE ")) {
+    retireOrphanDevice(line.substring(16));
+    return;
+  }
   if (line.equals("SC-KEY-INFO")) {
     Serial.printf("SC-KEY-INFO 1 %s\n", isDevicePaired() ? deviceId : "unpaired");
     return;
@@ -3316,6 +3398,7 @@ void handleSerialCommand(const String& line) {
     Serial.println("  DELETEALL  wipe all templates on this sensor (+ clear room session)");
     Serial.println("  (Admin can also queue wipe via Devices → clearFingerprints on /status)");
     Serial.println("  GSM        rerun SIM900L modem/SIM/network/signal checks");
+    Serial.println("  Orphan retirement: use scripts/retire-orphan-scanner.ps1 over trusted USB; explicitly erases all templates.");
     Serial.println("Serial Monitor: set line ending to NL or CR+NL (not \"No line ending\").");
     return;
   }

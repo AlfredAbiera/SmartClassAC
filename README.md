@@ -352,6 +352,62 @@ The menu requires server-validated admin access. To reconnect after local
 unpairing, generate a fresh portal pairing code and pair again. This is not
 server-side revocation or a way to bypass protected provisioning.
 
+### Retiring a deleted scanner identity over USB
+
+If the original portal device was deleted and the scanner still has its key,
+ordinary pairing and local unpairing remain blocked. Source **1.6.64** adds
+`scripts\retire-orphan-scanner.ps1` for this specific case. It is **destructive**:
+after explicit confirmation it erases every fingerprint on that sensor, verifies
+a checked acknowledgment, zero template count and empty index pages, then
+removes the old enrollment key and saved ID. It does not delete portal data,
+change AC power, or migrate fingerprints. Physically turn the AC off and stop
+using the scanner before retirement.
+
+1. Update the portal application DLL and upload scanner firmware 1.6.64 yourself.
+   Close Serial Monitor so the tool can open the selected USB COM port.
+2. Verify that the old ID is actually deleted in the intended portal/database,
+   not merely inactive or unpaired. Do not restore/recreate device records while
+   the tool runs. The local DLL must read that portal's protected database
+   configuration; set `ASPNETCORE_ENVIRONMENT=Development` only if using that
+   installation's Development User Secrets.
+3. Run from the repository on the portal computer, replacing the example COM
+   port, DLL path, database name and URL with the verified values:
+
+   ```powershell
+   .\scripts\retire-orphan-scanner.ps1 `
+       -OldDeviceId "1000000005" `
+       -Port "COM9" `
+       -ApplicationDll ".\bin\Debug\net8.0\SmartClassAC.dll" `
+       -DatabaseName "smartclassac" `
+       -ExpectedPortalUrl "http://192.168.68.113:5062"
+   ```
+
+   The tool requires typing `RETIRE 1000000005 ERASE`, checks that the configured
+   database name matches, checks that the old ID and orphaned credentials/guards
+   are absent, and compares the USB-reported ID and portal URL before sending
+   the erase command. An existing device record or inconsistent restore blocks
+   retirement; no database records are changed by the check.
+4. Only after `SC-RETIRE-OK ... reboot-required`, reboot and pair with a fresh code
+   for the new portal device. Then run the existing USB key provisioning tool
+   for the **new** ID and enroll fingerprints anew through guarded enrollment.
+
+The host and selected USB scanner must be trusted. Database checks are enforced
+by the local tool, not a signed authorization independently verified by firmware;
+this is not a remote portal endpoint or protection against malicious physical
+USB access. The scanner independently requires a matching old ID, the scanning
+screen, and a clear write journal. It stores a retirement marker **before**
+sensor erase and keeps scanning, enrollment and pairing blocked after failure.
+On an interrupted retirement, reconnect/reboot and rerun the same tool for the
+same old ID; the marker retains its identity even after partial key/ID removal.
+Never clear the marker or write journal manually. Corrupt/unreadable storage or
+a pending enrollment journal requires investigation instead of forced removal.
+If the reply was lost and the scanner now reports `unpaired`, stop and inspect
+the empty sensor/key state before treating the operation as complete.
+
+Validation uses isolated MariaDB tests and a host simulation of checked sensor
+responses, not a live erase. No sketch build, upload or hardware retirement is
+performed automatically.
+
 **Admin → Devices:** search by device name, ID, room, or status, and filter by activity, assignment, pairing, scan, or enrollment state. Register devices and manage their room assignment (including disassociation), room target temperature, status polling interval (5–3600 seconds), active state, attendance scanning, and fingerprint enrollment. Names are generated from each device's stable database ID and cannot be edited. A room can have one scanner; unassigned devices are allowed. Moving/disassociating/deactivating a scanner or disabling attendance scans is blocked while an affected room has an open class session. The scan/enrollment controls are enforced by the server as well as downloaded to firmware. Target temperature is sent as the room setpoint; firmware displays it, while actual AC control remains relay on/off.
 
 The enrollment scanner selector records the administrator's selected scanner. The portal can reserve a slot and record short-lived consent; firmware 1.6.21 adds an admin keypad entry to the experimental enrollment flow, which remains compile-time disabled by default. An opt-in 1.6.20 build completed one physical enrollment and attendance scan; the keypad entry in 1.6.21 still requires hardware validation. Template synchronization is not available. The legacy enrollment API remains disabled.

@@ -21,6 +21,12 @@ if (args.Length > 0 && args[0] == "--enrollment-local-key")
     return;
 }
 
+if (args.Length > 0 && args[0] == "--enrollment-retire-check")
+{
+    Environment.ExitCode = await EnrollmentRetirementCheck.RunAsync(args, builder.Configuration);
+    return;
+}
+
 builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
 builder.Services.AddHttpContextAccessor();

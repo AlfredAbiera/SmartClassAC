@@ -178,6 +178,11 @@ flowchart TD
     Admin --> Settings[Manage GSM, buzzer, device PIN and system settings]
     Settings -->|Explicit confirmation| Test[Test SMS or buzzer]
     Settings -->|Explicit confirmation| Reset[Destructive reset or sensor clear, subject to guards]
+    Deleted[Old device record deleted; scanner retains key] --> USB[Trusted USB retirement tool; confirm database and erase]
+    USB --> Guard[Match old ID; require clear journal; persist retirement marker]
+    Guard --> Erase[Checked sensor erase; verify zero count and empty index]
+    Erase -->|Verified| Retire[Remove old key and ID; reboot and pair anew]
+    Erase -->|Uncertain| Block[Retain marker; block scanning and pairing; investigate or resume]
 ```
 
 Reminder and test claims do not prove sound played. Device clear and reset are

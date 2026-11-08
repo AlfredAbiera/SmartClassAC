@@ -1,7 +1,7 @@
 # Firmware process flow
 
-This describes the companion `SmartClassAC-ESP32\smartclass` source at version
-`1.6.63` as inspected on 2026-11-08. It does not assert that this version is
+This describes the in-repository `esp32\smartclass` source at version
+`1.6.64` as inspected on 2026-11-08. It does not assert that this version is
 compiled, flashed, or validated on a particular scanner. The portal workflows
 are described in [Portal process flow](./PORTAL_PROCESS_FLOW.md), and storage
 relationships in [Data model and relationships](./DATA_MODEL.md).
@@ -91,6 +91,15 @@ device ID, not the portal pairing, room assignment, sensor fingerprints or AC
 power state. An installed enrollment key, nonempty/unreadable journal, or storage
 failure blocks it. After local unpairing, generate a fresh pairing code in the
 portal and pair again; local unpairing does not revoke server credentials.
+
+Source 1.6.64 adds a trusted-USB orphan-retirement tool for a **deleted** old
+portal device record. It explicitly erases all sensor templates, checks the
+acknowledgment, zero template count and all empty index pages, then removes the
+old key and ID. A persistent retirement marker is written before erase;
+uncertainty blocks scanning, enrollment and pairing until resolved. A nonempty
+or unreadable write journal still blocks retirement. See the
+[README retirement procedure](../README.md#retiring-a-deleted-scanner-identity-over-usb)
+for database prechecks, physical USB trust, failure recovery and new pairing.
 
 ## Attendance scanning
 

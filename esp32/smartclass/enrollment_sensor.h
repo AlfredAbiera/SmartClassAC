@@ -83,6 +83,42 @@ class CheckedSensor {
     return command(cmd, sizeof(cmd), reply, sizeof(reply));
   }
 
+  uint8_t emptyDatabase() {
+    const uint8_t cmd[] = {0x0d};
+    uint8_t reply[1];
+    return command(cmd, sizeof(cmd), reply, sizeof(reply));
+  }
+
+  uint8_t getTemplateCount(uint16_t& count) {
+    count = 0;
+    const uint8_t cmd[] = {0x1d};
+    uint8_t reply[3];
+    uint8_t result = command(cmd, sizeof(cmd), reply, sizeof(reply));
+    if (result == Ok) count = (static_cast<uint16_t>(reply[1]) << 8) | reply[2];
+    return result;
+  }
+
+  uint8_t clearAndVerifyEmpty() {
+    uint16_t capacity = 0, count = 0;
+    uint8_t result = verifyPassword();
+    if (result != Ok) return result;
+    result = getParameters(capacity);
+    if (result != Ok) return result;
+    if (capacity > 2048) return ProtocolError;
+    result = emptyDatabase();
+    if (result != Ok) return result;
+    result = getTemplateCount(count);
+    if (result != Ok) return result;
+    if (count != 0) return ProtocolError;
+    uint8_t bitmap[32];
+    for (uint16_t page = 0; page < (capacity + 255u) / 256u; ++page) {
+      result = readIndex(static_cast<uint8_t>(page), bitmap);
+      if (result != Ok) return result;
+      for (uint8_t value : bitmap) if (value != 0) return ProtocolError;
+    }
+    return Ok;
+  }
+
  private:
   Transport& transport_;
   Clock& clock_;
