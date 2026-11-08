@@ -60,6 +60,45 @@ public sealed class AuthenticationTests
         Assert.Equal(expected, PasswordPolicy.MeetsRequirements(password));
     }
 
+    [Theory]
+    [InlineData("123456", true)]
+    [InlineData("000001", true)]
+    [InlineData("12345", false)]
+    [InlineData("1234567", false)]
+    [InlineData("12345a", false)]
+    [InlineData("１２３４５６", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void MobileVerificationCode_RequiresExactlySixAsciiDigits(string? code, bool expected)
+    {
+        Assert.Equal(expected, MobileVerificationCodes.IsValid(code));
+    }
+
+    [Fact]
+    public void TeacherRegistration_ValidatesLoginPasswordSeparatelyFromOtp()
+    {
+        var request = new CreateTeacherRequest("Teacher", "teacher", "EMP1", null,
+            "09123456789", "ValidPassword1", null, "001234");
+
+        Assert.True(TeacherAccountValidation.ValidateCreate(request).Succeeded);
+        Assert.True(MobileVerificationCodes.IsValid(request.RegistrationOtp));
+        Assert.Equal(PasswordPolicy.RequirementMessage,
+            TeacherAccountValidation.ValidateCreate(request with { Password = "001234" }).Error);
+        Assert.True(TeacherAccountValidation.ValidateCreate(request with { RegistrationOtp = "bad" }).Succeeded);
+        Assert.False(MobileVerificationCodes.IsValid("bad"));
+    }
+
+    [Fact]
+    public void TeacherUpdate_ValidatesOptionalPasswordBeforeVerification()
+    {
+        var request = new UpdateAdminTeacherRequest(1, "Teacher", "teacher", "EMP1", null,
+            "09123456789", null, null, "123456");
+        Assert.True(TeacherAccountValidation.ValidateUpdate(request).Succeeded);
+        Assert.Equal(PasswordPolicy.RequirementMessage,
+            TeacherAccountValidation.ValidateUpdate(request with { NewPassword = "123456" }).Error);
+        Assert.True(TeacherAccountValidation.ValidateUpdate(request with { NewPassword = "ValidPassword1" }).Succeeded);
+    }
+
     [Fact]
     public void LoginAttemptLimiter_BlocksAfterFiveFailuresAndClearsOnSuccess()
     {

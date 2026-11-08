@@ -12,7 +12,8 @@ Fingerprint terminals (ESP32 + Adafruit sensor) identify teachers through a **de
 
 Detailed guides: [Portal process flow](docs/PORTAL_PROCESS_FLOW.md) ·
 [Firmware process flow](docs/FIRMWARE_PROCESS_FLOW.md) ·
-[Data model and relationships](docs/DATA_MODEL.md).
+[Data model and relationships](docs/DATA_MODEL.md) ·
+[Comprehensive system flowchart](docs/SYSTEM_FLOWCHART.md).
 
 1. [Tech stack](#tech-stack)
 2. [Prerequisites](#prerequisites)
@@ -598,6 +599,23 @@ check the handset before retrying an uncertain submission. Existing teacher
 numbers are not retroactively verified. Seeded demo accounts bypass the portal
 registration workflow and must not be used as evidence of verified ownership.
 The GSM workflow has been tested with a simulated modem, not live SMS.
+For a new teacher, the login password is separate from the six-digit SMS code.
+The portal validates the account details before sending the code; the login
+password must contain at least 10 characters, an uppercase letter, a lowercase
+letter, and a number, with no whitespace.
+
+If the portal reports `FacultyOtp:Secret must be a Base64-encoded 32-byte key`,
+the **running portal** does not have a valid value. Restore the installation's
+existing `FacultyOtp:Secret` from protected configuration or backup; do not
+replace a working secret merely to troubleshoot. User Secrets are loaded only
+in Development and belong to the Windows user running the app. A service or a
+different machine/user needs its own protected configuration, such as the
+environment variable `FacultyOtp__Secret`, available to the service process.
+Restart the portal after changing configuration. For a new installation only,
+generate 32 cryptographically random bytes, Base64-encode them, and store the
+result in protected configuration; share the same persistent value across
+instances. Never post or commit the value. Rotating it invalidates outstanding
+codes and temporarily resets the effectiveness of phone-keyed rate limits.
 
 Faculty OTP failure logs report the modem result and whether the reservation was updated, without phone numbers or codes. `DeliveryUnknown` means the message may have been submitted, but its OTP is not activated; check the handset before another request. `Unavailable` indicates a port or communication failure, `Rejected` a modem rejection before submission, and `Accepted` with an unchanged reservation can mean the request was superseded or expired, or the device became ineligible before activation. The device's generic request response does not confirm SMS delivery.
 

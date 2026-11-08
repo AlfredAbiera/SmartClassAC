@@ -220,30 +220,8 @@ public sealed class AuthService : IAuthService
             return authorization;
         }
 
-        if (string.IsNullOrWhiteSpace(request.DisplayName) || string.IsNullOrWhiteSpace(request.Username))
-        {
-            return OperationResult.Failure("Enter the teacher's name and username.");
-        }
-
-        if (string.IsNullOrWhiteSpace(request.EmployeeNumber))
-        {
-            return OperationResult.Failure("Enter the teacher's employee number.");
-        }
-
-        if (!string.IsNullOrWhiteSpace(request.Email) && !new EmailAddressAttribute().IsValid(request.Email.Trim()))
-        {
-            return OperationResult.Failure("Enter a valid school email address, or leave it blank.");
-        }
-
-        if (!MobilePhones.IsValid(request.Phone))
-        {
-            return OperationResult.Failure(MobilePhones.RequirementMessage);
-        }
-
-        if (!PasswordPolicy.MeetsRequirements(request.Password))
-        {
-            return OperationResult.Failure(PasswordPolicy.RequirementMessage);
-        }
+        var validation = TeacherAccountValidation.ValidateCreate(request);
+        if (!validation.Succeeded) return validation;
 
         var cleanRequest = request with
         {
@@ -256,11 +234,6 @@ public sealed class AuthService : IAuthService
             VerificationActorId = _currentUser!.Id
         };
 
-        if (cleanRequest.DevicePin is not null && !DevicePinCodes.IsValid(cleanRequest.DevicePin))
-        {
-            return OperationResult.Failure(DevicePinCodes.RequirementMessage);
-        }
-
         return await _accounts.CreateTeacherAsync(cleanRequest, _passwordHasher.Hash(request.Password));
     }
 
@@ -272,39 +245,12 @@ public sealed class AuthService : IAuthService
             return authorization;
         }
 
-        if (request.AccountId <= 0)
-        {
-            return OperationResult.Failure("Select a teacher account to update.");
-        }
-
-        if (string.IsNullOrWhiteSpace(request.DisplayName) || string.IsNullOrWhiteSpace(request.Username))
-        {
-            return OperationResult.Failure("Enter the teacher's name and username.");
-        }
-
-        if (string.IsNullOrWhiteSpace(request.EmployeeNumber))
-        {
-            return OperationResult.Failure("Enter the teacher's employee number.");
-        }
-
-        if (!string.IsNullOrWhiteSpace(request.Email) && !new EmailAddressAttribute().IsValid(request.Email.Trim()))
-        {
-            return OperationResult.Failure("Enter a valid school email address, or leave it blank.");
-        }
-
-        if (!MobilePhones.IsValid(request.Phone))
-        {
-            return OperationResult.Failure(MobilePhones.RequirementMessage);
-        }
+        var validation = TeacherAccountValidation.ValidateUpdate(request);
+        if (!validation.Succeeded) return validation;
 
         string? passwordHash = null;
         if (!string.IsNullOrWhiteSpace(request.NewPassword))
         {
-            if (!PasswordPolicy.MeetsRequirements(request.NewPassword))
-            {
-                return OperationResult.Failure(PasswordPolicy.RequirementMessage);
-            }
-
             passwordHash = _passwordHasher.Hash(request.NewPassword);
         }
 
@@ -318,11 +264,6 @@ public sealed class AuthService : IAuthService
             DevicePin = string.IsNullOrWhiteSpace(request.DevicePin) ? null : DevicePinCodes.Normalize(request.DevicePin),
             VerificationActorId = _currentUser!.Id
         };
-
-        if (cleanRequest.DevicePin is not null && !DevicePinCodes.IsValid(cleanRequest.DevicePin))
-        {
-            return OperationResult.Failure(DevicePinCodes.RequirementMessage);
-        }
 
         return await _accounts.UpdateAdminTeacherAsync(cleanRequest, passwordHash);
     }

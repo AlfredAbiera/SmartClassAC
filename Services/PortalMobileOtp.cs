@@ -140,7 +140,7 @@ internal sealed class PortalMobileOtp(IConfiguration configuration, GsmSmsTransp
         CancellationToken cancellationToken)
     {
         if (actorId <= 0 || !ValidPurpose(purpose, targetId) || !GsmSmsTransport.IsAsciiMobile(phone) ||
-            code is not { Length: 6 } || !code.All(char.IsAsciiDigit)) return false;
+            !MobileVerificationCodes.IsValid(code)) return false;
         var secret = FacultyOtpProtocol.ReadKey(configuration["FacultyOtp:Secret"], "FacultyOtp:Secret");
         try
         {

@@ -892,6 +892,46 @@ public sealed class FacultyOtpStoreTests
     }
 
     [MariaDbFact]
+    public async Task RegistrationUsesSmsCodeSeparatelyFromLoginPassword()
+    {
+        await WithDatabase(async (_, connection, secret) =>
+        {
+            await Execute(connection, """
+                INSERT INTO user_accounts (id, username, display_name, password_hash, role, is_active)
+                VALUES (2, 'admin', 'Admin', 'hash', 'Admin', 1);
+                INSERT INTO gsm_modem_settings (singleton_id, port_name, baud_rate) VALUES (1, 'COM42', 9600);
+                """);
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString,
+                ["FacultyOtp:Secret"] = Convert.ToBase64String(secret)
+            }).Build();
+            var serial = new FakeSerial();
+            var otp = new PortalMobileOtp(config, new GsmSmsTransport(_ => serial), NullLogger<PortalMobileOtp>.Instance);
+            var repository = new MariaDbUserAccountRepository(config, Options.Create(new SchoolTimeOptions()));
+            var hasher = new PasswordHasher();
+            var auth = new AuthService(repository, hasher, Options.Create(new DefaultAdminOptions()),
+                Options.Create(new PasswordResetOptions()), null!, new LoginAttemptLimiter(),
+                Options.Create(new SchoolTimeOptions()));
+            Assert.NotNull(await auth.RestoreUserAsync(2));
+            const string phone = "09999999999";
+            Assert.True((await otp.IssueAsync(2, "create", 0, phone)).Succeeded);
+            var request = new CreateTeacherRequest("New", "new", "EMP2", null, phone,
+                "ValidPassword1", "4321", serial.Code);
+
+            var invalidPassword = await auth.CreateTeacherAsync(request with { Password = "123456" });
+            Assert.Equal(PasswordPolicy.RequirementMessage, invalidPassword.Error);
+            var invalidCode = await auth.CreateTeacherAsync(request with { RegistrationOtp = serial.Code == "000000" ? "000001" : "000000" });
+            Assert.Equal("Invalid, expired, or unavailable verification code. Request a new code if needed.", invalidCode.Error);
+            Assert.True((await auth.CreateTeacherAsync(request)).Succeeded);
+            var account = await repository.FindByIdentifierAsync("new");
+            Assert.NotNull(account);
+            Assert.True(hasher.Verify("ValidPassword1", account.PasswordHash));
+            Assert.False(hasher.Verify(serial.Code!, account.PasswordHash));
+        });
+    }
+
+    [MariaDbFact]
     public async Task PortalMobileOtpProtectsRegistrationAndNumberChanges()
     {
         await WithDatabase(async (_, connection, secret) =>

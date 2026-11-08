@@ -91,8 +91,9 @@ System (GSM settings, Buzzer settings, System settings).
 
 ### Fingerprint preparation and guarded enrollment
 
-**Normal sensor writes are disabled in the default firmware build.** The
-legacy `/api/device/fingerprint/enroll` endpoint is disabled. Preparing a slot,
+Normal sensor writes are enabled by default in scanner source 1.6.61 but remain
+subject to the guarded workflow and independent portal gates. The legacy
+`/api/device/fingerprint/enroll` endpoint is disabled. Preparing a slot,
 selecting a scanner, or granting consent does not itself write a fingerprint.
 
 The experimental flow, when explicitly enabled and correctly provisioned, is:

@@ -574,7 +574,7 @@
 
 @if (teacherModalOpen)
 {
-    <div class="modal-backdrop" @onclick="ClearTeacherForm">
+    <div class="modal-backdrop" @onclick="DismissTeacherForm">
         <section class="dialog-card form-dialog" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
             @if (teacherOtpStep)
             {
@@ -582,10 +582,10 @@
                 <h2>Verify mobile number</h2>
                 <p class="form-help">A verification code was submitted to <strong>@newTeacherPhone</strong>. It expires after five minutes.</p>
                 <div class="form-grid">
-                    <label>One-time password<input @bind="teacherRegistrationOtp" maxlength="6" inputmode="numeric" pattern="[0-9]*" placeholder="6-digit code" autocomplete="one-time-code" /></label>
+                    <label>SMS verification code<input @bind="teacherRegistrationOtp" maxlength="6" inputmode="numeric" pattern="[0-9]{6}" placeholder="6-digit code" autocomplete="one-time-code" /></label>
                 </div>
                 <div class="dialog-actions">
-                    <button class="secondary-button" @onclick="BackFromTeacherOtp">Back</button>
+                    <button class="secondary-button" disabled="@teacherOtpBusy" @onclick="BackFromTeacherOtp">Back</button>
                     <button class="primary-button" disabled="@teacherOtpBusy" @onclick="SaveTeacher">Verify &amp; save teacher</button>
                 </div>
             }
@@ -600,12 +600,16 @@
                     <label>Mobile number<input @bind="newTeacherPhone" maxlength="11" inputmode="numeric" pattern="09[0-9]{9}" placeholder="09xxxxxxxxx" autocomplete="tel" /><small class="form-help">Required. Format: 09xxxxxxxxx</small></label>
                     <label>School email<input @bind="newTeacherEmail" type="email" autocomplete="email" /><small class="form-help">Optional</small></label>
                     <label>Device PIN<input @bind="newTeacherDevicePin" maxlength="6" placeholder="4–6 digits" inputmode="numeric" pattern="[0-9]*" /><small class="form-help">@(editingTeacherId == 0 ? "Optional; auto-assigned if blank." : "Leave blank to keep the current PIN.")</small></label>
-                    <label>@(editingTeacherId == 0 ? "Login password" : "New password")<input @bind="newTeacherPassword" type="password" placeholder="@(editingTeacherId == 0 ? string.Empty : "Leave blank to keep current password")" autocomplete="new-password" />@if (editingTeacherId != 0) { <small class="form-help">Leave blank to keep the current password.</small> }</label>
+                    <label>@(editingTeacherId == 0 ? "Login password" : "New password")<input @bind="newTeacherPassword" type="password" placeholder="@(editingTeacherId == 0 ? string.Empty : "Leave blank to keep current password")" autocomplete="new-password" /><small class="form-help">@(editingTeacherId == 0 ? "Use at least 10 characters with an uppercase letter, lowercase letter, and number; no spaces." : "Leave blank to keep the current password. If changing it, use at least 10 characters with an uppercase letter, lowercase letter, and number; no spaces.")</small></label>
                 </div>
                 <div class="dialog-actions">
-                    <button class="secondary-button" @onclick="ClearTeacherForm">Cancel</button>
+                    <button class="secondary-button" disabled="@teacherOtpBusy" @onclick="ClearTeacherForm">Cancel</button>
                     <button class="primary-button" disabled="@teacherOtpBusy" @onclick="SaveTeacher">@(editingTeacherId == 0 ? "Continue" : "Update teacher")</button>
                 </div>
+            }
+            @if (!string.IsNullOrEmpty(teacherFormError))
+            {
+                <p class="alert alert-danger" role="alert">@teacherFormError</p>
             }
         </section>
     </div>
@@ -979,6 +983,7 @@
     private void DismissGsmTestStatus(long version) { if (version == gsmTestStatusVersion) gsmTestStatus = string.Empty; }
     private bool hasAdminDevicePin, sidebarOpen, isLoading, resetOpen, clearFingerprintsOpen, teacherModalOpen, teacherOtpStep, classroomModalOpen, deviceModalOpen, scheduleModalOpen, moveScheduleModalOpen, semesterModalOpen;
     private bool teacherOtpBusy;
+    private string teacherFormError = string.Empty;
     private string originalTeacherPhone = string.Empty;
     private bool deviceIsActive = true, deviceFingerprintEnrollmentEnabled = true, deviceAttendanceScanEnabled = true;
     private long editingTeacherId, editingClassroomId, editingDeviceId, scheduleTeacherId, scheduleClassroomId, scheduleSemesterId, enrollSemesterId, enrollTeacherId, deleteTargetId;
@@ -1679,28 +1684,27 @@
         teacherModalOpen = true;
     }
 
+    private void DismissTeacherForm()
+    {
+        if (!teacherOtpBusy) ClearTeacherForm();
+    }
+
     private async Task SaveTeacher()
     {
+        if (teacherOtpBusy) return;
         var wasCreate = editingTeacherId == 0;
+        var create = new CreateTeacherRequest(newTeacherName, newTeacherUsername, newTeacherEmployeeNumber, string.IsNullOrWhiteSpace(newTeacherEmail) ? null : newTeacherEmail, newTeacherPhone, newTeacherPassword, string.IsNullOrWhiteSpace(newTeacherDevicePin) ? null : newTeacherDevicePin, teacherRegistrationOtp);
+        var update = new UpdateAdminTeacherRequest(editingTeacherId, newTeacherName, newTeacherUsername, newTeacherEmployeeNumber, string.IsNullOrWhiteSpace(newTeacherEmail) ? null : newTeacherEmail, newTeacherPhone, string.IsNullOrWhiteSpace(newTeacherDevicePin) ? null : newTeacherDevicePin, string.IsNullOrWhiteSpace(newTeacherPassword) ? null : newTeacherPassword, teacherRegistrationOtp);
+        teacherFormError = string.Empty;
+        var validation = wasCreate ? TeacherAccountValidation.ValidateCreate(create) : TeacherAccountValidation.ValidateUpdate(update);
+        if (!validation.Succeeded) { teacherFormError = validation.Error ?? "Check the teacher details."; return; }
         if (!teacherOtpStep && (wasCreate || !string.Equals(newTeacherPhone.Trim(), originalTeacherPhone, StringComparison.Ordinal)))
         {
-            if (!MobilePhones.IsValid(newTeacherPhone))
-            {
-                Toast(MobilePhones.RequirementMessage);
-                return;
-            }
-
-            if (!string.IsNullOrWhiteSpace(newTeacherEmail) && !new System.ComponentModel.DataAnnotations.EmailAddressAttribute().IsValid(newTeacherEmail.Trim()))
-            {
-                Toast("Enter a valid school email address, or leave it blank.");
-                return;
-            }
-
             teacherOtpBusy = true;
             try
             {
                 var sent = await AuthService.RequestMobileOtpAsync(wasCreate ? null : editingTeacherId, newTeacherPhone);
-                if (!sent.Succeeded) { Toast(sent.Error ?? "Could not send verification code."); return; }
+                if (!sent.Succeeded) { teacherFormError = sent.Error ?? "Could not send verification code."; return; }
                 teacherOtpStep = true;
                 teacherRegistrationOtp = string.Empty;
                 Toast("Verification code submitted. Check the phone.");
@@ -1708,25 +1712,37 @@
             catch (Exception exception)
             {
                 Logger.LogError(exception, "Could not request teacher mobile verification.");
-                Toast("Could not request verification. Check the modem and configuration.");
+                teacherFormError = "Could not request verification. Check the modem and configuration.";
             }
             finally { teacherOtpBusy = false; }
             return;
         }
 
-        var result = wasCreate
-            ? await AuthService.CreateTeacherAsync(new CreateTeacherRequest(newTeacherName, newTeacherUsername, newTeacherEmployeeNumber, string.IsNullOrWhiteSpace(newTeacherEmail) ? null : newTeacherEmail, newTeacherPhone, newTeacherPassword, string.IsNullOrWhiteSpace(newTeacherDevicePin) ? null : newTeacherDevicePin, teacherRegistrationOtp))
-            : await AuthService.UpdateAdminTeacherAsync(new UpdateAdminTeacherRequest(editingTeacherId, newTeacherName, newTeacherUsername, newTeacherEmployeeNumber, string.IsNullOrWhiteSpace(newTeacherEmail) ? null : newTeacherEmail, newTeacherPhone, string.IsNullOrWhiteSpace(newTeacherDevicePin) ? null : newTeacherDevicePin, string.IsNullOrWhiteSpace(newTeacherPassword) ? null : newTeacherPassword, teacherRegistrationOtp));
-        if (!result.Succeeded) { Toast(result.Error ?? "Teacher could not be saved."); return; }
-        ClearTeacherForm();
-        await ReloadAsync();
-        Toast(wasCreate ? "Teacher account was stored. Fingerprint enrollment is not yet available." : "Teacher account was updated.");
+        if (teacherOtpStep && !MobileVerificationCodes.IsValid(teacherRegistrationOtp))
+        {
+            teacherFormError = MobileVerificationCodes.RequirementMessage;
+            return;
+        }
+
+        teacherOtpBusy = true;
+        try
+        {
+            var result = wasCreate
+                ? await AuthService.CreateTeacherAsync(create)
+                : await AuthService.UpdateAdminTeacherAsync(update);
+            if (!result.Succeeded) { teacherFormError = result.Error ?? "Teacher could not be saved."; return; }
+            ClearTeacherForm();
+            await ReloadAsync();
+            Toast(wasCreate ? "Teacher account was stored. Fingerprint enrollment is not yet available." : "Teacher account was updated.");
+        }
+        finally { teacherOtpBusy = false; }
     }
 
     private void BackFromTeacherOtp()
     {
         teacherOtpStep = false;
         teacherRegistrationOtp = string.Empty;
+        teacherFormError = string.Empty;
     }
 
     private async Task EditTeacher(long accountId)
@@ -1744,6 +1760,7 @@
         newTeacherPassword = string.Empty;
         teacherOtpStep = false;
         teacherRegistrationOtp = string.Empty;
+        teacherFormError = string.Empty;
         active = "teachers";
         teacherModalOpen = true;
     }
@@ -1754,6 +1771,7 @@
         newTeacherName = newTeacherEmployeeNumber = newTeacherUsername = newTeacherEmail = newTeacherPhone = newTeacherPassword = newTeacherDevicePin = teacherRegistrationOtp = string.Empty;
         teacherOtpStep = false;
         teacherModalOpen = false;
+        teacherFormError = string.Empty;
         originalTeacherPhone = string.Empty;
     }
 
