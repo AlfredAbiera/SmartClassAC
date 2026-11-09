@@ -1117,7 +1117,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 find.CommandText = @"
                     SELECT id, email
                     FROM user_accounts
-                    WHERE LOWER(email) = LOWER(@email) AND is_active = TRUE
+                    WHERE LOWER(email) = LOWER(@email) AND role = 'Admin' AND is_active = TRUE
                     LIMIT 1
                     FOR UPDATE;";
                 find.Parameters.Add("@email", MySqlDbType.VarChar).Value = email;

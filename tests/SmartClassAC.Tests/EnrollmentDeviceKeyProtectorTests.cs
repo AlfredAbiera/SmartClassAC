@@ -6,6 +6,27 @@ namespace SmartClassAC.Tests;
 
 public sealed class EnrollmentDeviceKeyProtectorTests
 {
+    [Theory]
+    [InlineData("The scanner is unknown, inactive, or unpaired.")]
+    [InlineData("The scanner has an unresolved fingerprint write.")]
+    [InlineData("EnrollmentSecurity:MasterKey must decode to 32 bytes.")]
+    public void ProvisioningDiagnostic_ReportsKnownFailures(string message)
+    {
+        Assert.Contains(message, EnrollmentLocalProvisioning.DescribeFailure(new InvalidOperationException(message)));
+    }
+
+    [Fact]
+    public void ProvisioningDiagnostic_DoesNotExposeRawExceptionDetails()
+    {
+        const string sensitiveDetail = "private configuration value";
+        Assert.DoesNotContain(sensitiveDetail,
+            EnrollmentLocalProvisioning.DescribeFailure(new CryptographicException(sensitiveDetail)));
+        Assert.DoesNotContain(sensitiveDetail,
+            EnrollmentLocalProvisioning.DescribeFailure(new InvalidOperationException(sensitiveDetail)));
+        Assert.Contains("original master key",
+            EnrollmentLocalProvisioning.DescribeFailure(new CryptographicException()));
+    }
+
     [Fact]
     public void Protector_EncryptsWithUniqueNoncesAndBindsDevice()
     {

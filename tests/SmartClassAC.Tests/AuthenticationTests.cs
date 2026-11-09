@@ -50,6 +50,14 @@ public sealed class AuthenticationTests
     }
 
     [Theory]
+    [InlineData(UserRole.Admin, true)]
+    [InlineData(UserRole.Teacher, false)]
+    public void PortalLoginPolicy_OnlyAllowsAdministrators(UserRole role, bool expected)
+    {
+        Assert.Equal(expected, PortalLoginPolicy.CanSignIn(role));
+    }
+
+    [Theory]
     [InlineData("Short1", false)]
     [InlineData("lowercaseonly1", false)]
     [InlineData("UPPERCASEONLY1", false)]

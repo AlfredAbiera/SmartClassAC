@@ -168,11 +168,12 @@ time-in date. Reconciliation happens before report generation.
 
 ## Teacher workflow
 
-The Teacher portal provides overview, profile, schedule, attendance history,
-classroom temperature and active-class views. Teachers see their own data and
-can start/end an eligible active class through the portal or use an enrolled
-finger on the scanner. Temperature target changes require an eligible active
-class and respect the room minimum. A displayed target is not a measurement.
+There is no teacher web portal; only administrators can sign in to the web
+application. Teachers use an enrolled finger on a scanner to record attendance.
+The scanner's separate Faculty menu can provide schedule and AC functions when
+its feature flags are enabled. Temperature target changes require an eligible
+active class and respect the room minimum. A displayed target is not a
+measurement.
 
 The scanner's separate Faculty menu authenticates using a mobile number and SMS
 OTP, not the web password. OTP issuance, menu access and scanner target changes

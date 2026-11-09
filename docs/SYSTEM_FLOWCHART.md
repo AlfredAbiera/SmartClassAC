@@ -35,10 +35,8 @@ flowchart TD
     First -->|Yes| Setup[Administrator configures recovery email]
     First -->|No| Login[Sign in]
     Setup --> Login
-    Login -->|Valid credentials| Role{Role}
+    Login -->|Valid administrator credentials| Admin[Administrator dashboard]
     Login -->|Invalid| Denied[Reject; apply login rate limits]
-    Role -->|Admin| Admin[Administrator dashboard]
-    Role -->|Teacher| Teacher[Teacher dashboard]
     Login -->|Forgot password| Reset[Email one-use expiring reset token]
     Reset --> Login
 ```
@@ -47,7 +45,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Action[Admin adds teacher or admin/teacher changes mobile] --> Changed{New registration or changed number?}
+    Action[Admin adds teacher or changes teacher mobile] --> Changed{New registration or changed number?}
     Changed -->|No| SaveOther[Save permitted non-phone edits]
     Changed -->|Yes| Validate[Validate role and proposed mobile]
     Validate --> Limit{Within OTP request limits?}
@@ -128,8 +126,8 @@ flowchart TD
     Auto[Periodic reconciliation] -->|Missing time-out| Close[Close session and apply overlap rule]
     Close --> Other
     Auto -->|No punch after schedule| Absent[Record absence]
-    Teacher[Teacher portal] -->|Start eligible class| Begin
-    Teacher -->|End active class| End
+    Teacher[Teacher at fingerprint terminal] -->|Scan eligible fingerprint| Begin
+    Teacher -->|Scan active class| End
 ```
 
 The ending class's own remaining window does not keep its AC on after early

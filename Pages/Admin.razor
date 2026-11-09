@@ -25,12 +25,11 @@
             <button class='@NavClass("teachers")' @onclick='() => Navigate("teachers")'><i class="fas fa-users"></i>Teachers</button>
             <button class='@NavClass("semesters")' @onclick='() => Navigate("semesters")'><i class="fas fa-layer-group"></i>Semesters</button>
             <button class='@NavClass("classrooms")' @onclick='() => Navigate("classrooms")'><i class="fas fa-door-open"></i>Classrooms</button>
-            <button class='@NavClass("devices")' @onclick='() => Navigate("devices")'><i class="fas fa-fingerprint"></i>Devices</button>
             <button class='@NavClass("schedules")' @onclick='() => Navigate("schedules")'><i class="fas fa-calendar-days"></i>Schedules</button>
-            <p class="nav-group-label">OPERATIONS</p>
-            <button class='@NavClass("temperature")' @onclick='() => Navigate("temperature")'><i class="fas fa-temperature-half"></i>AC control</button>
             <button class='@NavClass("attendance")' @onclick='() => Navigate("attendance")'><i class="fas fa-clipboard-check"></i>Attendance</button>
             <p class="nav-group-label">SYSTEM</p>
+            <button class='@NavClass("devices")' @onclick='() => Navigate("devices")'><i class="fas fa-fingerprint"></i>Devices</button>
+            <button class='@NavClass("temperature")' @onclick='() => Navigate("temperature")'><i class="fas fa-temperature-half"></i>AC control</button>
             <button class='@NavClass("gsm")' @onclick='() => Navigate("gsm")'><i class="fas fa-sim-card"></i>GSM settings</button>
             <button class='@NavClass("buzzer")' @onclick='() => Navigate("buzzer")'><i class="fas fa-bell"></i>Buzzer settings</button>
             <button class='@NavClass("settings")' @onclick='() => Navigate("settings")'><i class="fas fa-gear"></i>System settings</button>
@@ -75,16 +74,15 @@
                 </div>
                 <article class="panel list-view">
                     <div class="data-table-wrap"><table class="data-table">
-                        <thead><tr><th>Teacher</th><th>Employee #</th><th>Mobile</th><th>Email</th><th>Fingerprints</th><th>Status</th><th>Schedule today</th><th>Actions</th></tr></thead>
+                        <thead><tr><th>Teacher</th><th>Employee #</th><th>Mobile</th><th>Fingerprints</th><th>Status</th><th>Schedule today</th><th>Actions</th></tr></thead>
                         <tbody>
-                            @if (FilteredTeachers.Count == 0) { <tr><td colspan="8">@(teachers.Count == 0 ? "No teacher accounts have been created yet." : "No teachers match this search or filter.")</td></tr> }
+                            @if (FilteredTeachers.Count == 0) { <tr><td colspan="7">@(teachers.Count == 0 ? "No teacher accounts have been created yet." : "No teachers match this search or filter.")</td></tr> }
                             @foreach (var teacher in PagedTeachers)
                             {
                                 <tr>
-                                    <td><div class="table-person"><span class="table-avatar">@Initials(teacher.DisplayName)</span><div><strong>@teacher.DisplayName</strong><small>@teacher.Username</small></div></div></td>
+                                    <td><div class="table-person"><span class="table-avatar">@Initials(teacher.DisplayName)</span><div><strong>@teacher.DisplayName</strong></div></div></td>
                                     <td>@(teacher.EmployeeNumber ?? "—")</td>
                                     <td>@(teacher.Phone ?? "—")</td>
-                                    <td>@(string.IsNullOrWhiteSpace(teacher.Email) ? "—" : teacher.Email)</td>
                                     <td><span class='status-badge @(teacher.FingerprintTemplateCount > 0 ? "active" : "neutral")'>@teacher.FingerprintTemplateCount / 2</span></td>
                                     <td><span class='status-badge @(teacher.IsActive ? "active" : "neutral")'>@(teacher.IsActive ? "Active" : "Inactive")</span></td>
                                     <td>@ScheduleTodayFor(teacher.Id)</td>
@@ -596,11 +594,7 @@
                 <div class="form-grid">
                     <label>Teacher name<input @bind="newTeacherName" autocomplete="name" /></label>
                     <label>Employee number<input @bind="newTeacherEmployeeNumber" placeholder="e.g. EMP-1042" /></label>
-                    <label>Username<input @bind="newTeacherUsername" autocomplete="username" /></label>
                     <label>Mobile number<input @bind="newTeacherPhone" maxlength="11" inputmode="numeric" pattern="09[0-9]{9}" placeholder="09xxxxxxxxx" autocomplete="tel" /><small class="form-help">Required. Format: 09xxxxxxxxx</small></label>
-                    <label>School email<input @bind="newTeacherEmail" type="email" autocomplete="email" /><small class="form-help">Optional</small></label>
-                    <label>Device PIN<input @bind="newTeacherDevicePin" maxlength="6" placeholder="4–6 digits" inputmode="numeric" pattern="[0-9]*" /><small class="form-help">@(editingTeacherId == 0 ? "Optional; auto-assigned if blank." : "Leave blank to keep the current PIN.")</small></label>
-                    <label>@(editingTeacherId == 0 ? "Login password" : "New password")<input @bind="newTeacherPassword" type="password" placeholder="@(editingTeacherId == 0 ? string.Empty : "Leave blank to keep current password")" autocomplete="new-password" /><small class="form-help">@(editingTeacherId == 0 ? "Use at least 10 characters with an uppercase letter, lowercase letter, and number; no spaces." : "Leave blank to keep the current password. If changing it, use at least 10 characters with an uppercase letter, lowercase letter, and number; no spaces.")</small></label>
                 </div>
                 <div class="dialog-actions">
                     <button class="secondary-button" disabled="@teacherOtpBusy" @onclick="ClearTeacherForm">Cancel</button>
@@ -970,7 +964,7 @@
         finally { irReconciliationSaving = false; }
     }
 
-    private string active = "overview", newTeacherName = string.Empty, newTeacherEmployeeNumber = string.Empty, newTeacherUsername = string.Empty, newTeacherEmail = string.Empty, newTeacherPhone = string.Empty, newTeacherPassword = string.Empty, newTeacherDevicePin = string.Empty, teacherRegistrationOtp = string.Empty, classroomName = string.Empty, scheduleSubject = string.Empty, scheduleKind = ScheduleKinds.Regular, scheduleRecurrence = ScheduleRecurrence.None, semesterName = string.Empty, adminEmail = string.Empty, adminCurrentPassword = string.Empty, adminNewPassword = string.Empty, resetConfirmation = string.Empty, clearFingerprintsConfirmation = string.Empty, adminDevicePin = string.Empty, deleteConfirmation = string.Empty, teacherFilter = "active", semesterFilter = "all", classroomFilter = "all", scheduleFilter = "all", teacherSearch = string.Empty, semesterSearch = string.Empty, classroomSearch = string.Empty, scheduleSearch = string.Empty;
+    private string active = "overview", newTeacherName = string.Empty, newTeacherEmployeeNumber = string.Empty, newTeacherUsername = string.Empty, newTeacherEmail = string.Empty, newTeacherPhone = string.Empty, teacherRegistrationOtp = string.Empty, classroomName = string.Empty, scheduleSubject = string.Empty, scheduleKind = ScheduleKinds.Regular, scheduleRecurrence = ScheduleRecurrence.None, semesterName = string.Empty, adminEmail = string.Empty, adminCurrentPassword = string.Empty, adminNewPassword = string.Empty, resetConfirmation = string.Empty, clearFingerprintsConfirmation = string.Empty, adminDevicePin = string.Empty, deleteConfirmation = string.Empty, teacherFilter = "active", semesterFilter = "all", classroomFilter = "all", scheduleFilter = "all", teacherSearch = string.Empty, semesterSearch = string.Empty, classroomSearch = string.Empty, scheduleSearch = string.Empty;
     private string messageValue = string.Empty, scheduleErrorValue = string.Empty, buzzerTestStatusValue = string.Empty, gsmTestStatusValue = string.Empty;
     private long messageVersion, scheduleErrorVersion, buzzerTestStatusVersion, gsmTestStatusVersion;
     private string message { get => messageValue; set { messageValue = value; messageVersion++; } }
@@ -1129,8 +1123,6 @@
             {
                 query = query.Where(teacher =>
                     ContainsIgnoreCase(teacher.DisplayName, term) ||
-                    ContainsIgnoreCase(teacher.Username, term) ||
-                    ContainsIgnoreCase(teacher.Email, term) ||
                     ContainsIgnoreCase(teacher.Phone, term) ||
                     ContainsIgnoreCase(teacher.EmployeeNumber, term) ||
                     ContainsIgnoreCase(teacher.IsActive ? "Active" : "Inactive", term) ||
@@ -1693,8 +1685,11 @@
     {
         if (teacherOtpBusy) return;
         var wasCreate = editingTeacherId == 0;
-        var create = new CreateTeacherRequest(newTeacherName, newTeacherUsername, newTeacherEmployeeNumber, string.IsNullOrWhiteSpace(newTeacherEmail) ? null : newTeacherEmail, newTeacherPhone, newTeacherPassword, string.IsNullOrWhiteSpace(newTeacherDevicePin) ? null : newTeacherDevicePin, teacherRegistrationOtp);
-        var update = new UpdateAdminTeacherRequest(editingTeacherId, newTeacherName, newTeacherUsername, newTeacherEmployeeNumber, string.IsNullOrWhiteSpace(newTeacherEmail) ? null : newTeacherEmail, newTeacherPhone, string.IsNullOrWhiteSpace(newTeacherDevicePin) ? null : newTeacherDevicePin, string.IsNullOrWhiteSpace(newTeacherPassword) ? null : newTeacherPassword, teacherRegistrationOtp);
+        var username = wasCreate ? $"teacher-{Guid.NewGuid():N}" : newTeacherUsername;
+        var email = wasCreate || string.IsNullOrWhiteSpace(newTeacherEmail) ? null : newTeacherEmail;
+        var password = wasCreate ? $"A{Guid.NewGuid():N}a1" : string.Empty;
+        var create = new CreateTeacherRequest(newTeacherName, username, newTeacherEmployeeNumber, null, newTeacherPhone, password, null, teacherRegistrationOtp);
+        var update = new UpdateAdminTeacherRequest(editingTeacherId, newTeacherName, username, newTeacherEmployeeNumber, email, newTeacherPhone, null, null, teacherRegistrationOtp);
         teacherFormError = string.Empty;
         var validation = wasCreate ? TeacherAccountValidation.ValidateCreate(create) : TeacherAccountValidation.ValidateUpdate(update);
         if (!validation.Succeeded) { teacherFormError = validation.Error ?? "Check the teacher details."; return; }
@@ -1756,8 +1751,6 @@
         newTeacherEmail = profile.Email ?? string.Empty;
         newTeacherPhone = profile.Phone ?? string.Empty;
         originalTeacherPhone = newTeacherPhone;
-        newTeacherDevicePin = profile.DevicePin ?? string.Empty;
-        newTeacherPassword = string.Empty;
         teacherOtpStep = false;
         teacherRegistrationOtp = string.Empty;
         teacherFormError = string.Empty;
@@ -1768,7 +1761,7 @@
     private void ClearTeacherForm()
     {
         editingTeacherId = 0;
-        newTeacherName = newTeacherEmployeeNumber = newTeacherUsername = newTeacherEmail = newTeacherPhone = newTeacherPassword = newTeacherDevicePin = teacherRegistrationOtp = string.Empty;
+        newTeacherName = newTeacherEmployeeNumber = newTeacherUsername = newTeacherEmail = newTeacherPhone = teacherRegistrationOtp = string.Empty;
         teacherOtpStep = false;
         teacherModalOpen = false;
         teacherFormError = string.Empty;

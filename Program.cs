@@ -115,7 +115,7 @@ app.MapPost("/auth/login", async (HttpContext context, IUserAccountRepository ac
     }
 
     var account = await accounts.FindByIdentifierAsync(username, cancellationToken);
-    if (account is null || !passwordHasher.Verify(password, account.PasswordHash))
+    if (account is null || !PortalLoginPolicy.CanSignIn(account.Role) || !passwordHasher.Verify(password, account.PasswordHash))
     {
         loginAttemptLimiter.RecordFailure(username);
         return Results.Redirect("/login?error=signin");
@@ -129,7 +129,7 @@ app.MapPost("/auth/login", async (HttpContext context, IUserAccountRepository ac
         new Claim(ClaimTypes.Role, account.Role.ToString())
     };
     await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme)));
-    return Results.Redirect(account.Role == UserRole.Admin ? "/admin" : "/teacher");
+    return Results.Redirect("/admin");
 });
 app.MapGet("/auth/logout", async (HttpContext context) =>
 {

@@ -1,6 +1,6 @@
 # SmartClass AC
 
-SmartClass AC is a **Blazor Server** web application for managing smart classroom air-conditioning. Administrators and teachers manage classrooms, schedules, attendance, and temperature commands. All persistent data is stored in **MariaDB** (local XAMPP by default).
+SmartClass AC is a **Blazor Server** web application for managing smart classroom air-conditioning. Administrators manage classrooms, schedules, attendance, and temperature commands; teachers use fingerprint terminals for attendance. Only administrators can sign in to the web portal. All persistent data is stored in **MariaDB** (local XAMPP by default).
 
 Fingerprint terminals (ESP32 + Adafruit sensor) identify teachers through a **device HTTP API** using numeric sensor template IDs. Legacy device enrollment is disabled while a safer replacement workflow is developed.
 
@@ -508,6 +508,14 @@ The internal enrollment credential store encrypts each 32-byte device key using 
 
 An experimental USB-only provisioning path consists of `scripts\provision-enrollment-key.ps1`, the server's `--enrollment-local-key` mode, and the scanner's `SC-KEY-*` serial protocol. It verifies the reported paired device ID, uses a random per-device key stored encrypted on the server, sends that key over the selected USB serial port, and verifies a challenge response. It refuses to overwrite a different existing scanner key; retrying after an interrupted transfer uses the existing server key. This path was used on COM9 for device `1000000005` and its challenge response verified. The USB connection and selected scanner must be trusted: a malicious USB device can impersonate the requested ID and receive the key. As explicitly chosen for this installation, the key is stored in ordinary ESP32 flash; physical access may expose it. USB provisioning does not protect HTTP traffic, and successful key provisioning does not validate fingerprint capture or sensor writes.
 
+Provisioning diagnostics distinguish unknown/inactive/unpaired devices,
+unresolved fingerprint writes, key-protection verification failures, and
+database failures by numeric error code without printing keys or connection
+strings. If an older DLL reports only the generic provisioning failure, build
+the updated portal and point `-ApplicationDll` at that output, then retry.
+The provisioning process must use the running portal's database and original
+master key. Do not regenerate that key or manually clear write guards.
+
 The local development setup now has a Base64 random 32-byte master key in User Secrets and a provisioned key for device `1000000005`; no key values are stored in the repository. There is no key rotation/recovery procedure. Back up the master key separately: losing it prevents recovery of stored scanner keys, and changing it is rejected. After reset or scanner replacement, do not erase or re-pair the device until a safe key recovery process exists. This storage does not encrypt network traffic or protect keys from a compromised server.
 
 For the interim workflow, use one physical scanner for both teacher enrollment and attendance in its assigned classroom. Development route flags must be enabled in local User Secrets, and the application must be started in Development for HTTP enrollment routes to work. Verify the firmware actually installed on the scanner: source changes do not update a device until built and uploaded. Device `1000000005` has a verified protocol key and completed one manual enrollment and attendance scan; automatic slot allocation and the keypad enrollment entry have not yet been validated end-to-end on hardware. Do not treat fingerprints enrolled locally by diagnostic sketches as teacher enrollments: they have no corresponding server mapping and an existing legacy mapping for the same slot could identify a different teacher. The device previously reported sensor slots 2 and 3 occupied; do not replace or clear them. Before enrollment, confirm the intended teacher, finger, scanner, and automatically reserved slot.
@@ -621,7 +629,7 @@ sequenceDiagram
 | Bruno + README docs | Done |
 | ESP32 JSON + API key | Done |
 | Serial `ENROLL` | Disabled by default in firmware `1.6.20`; no hardware write performed |
-| Teacher portal PIN view/edit | Done |
+| Teacher portal PIN view/edit | Removed with the teacher portal; device PINs are assigned automatically |
 | Keypad on device | Future |
 
 ---
@@ -701,7 +709,7 @@ The API uses the fleet API key plus each paired scanner's provisioned enrollment
 
 The request and verify routes are `POST /api/device/faculty/otp/request` and `POST /api/device/faculty/otp/verify`, each with a corresponding `/challenge` route. An operation's signed body is the ASCII phone number or six-digit code followed by a newline; its purpose is respectively `faculty_otp_request` or `faculty_otp_verify`. The signed response body contains the lowercase SHA-256 digest of that request body, a newline, the status, and a final newline. The request status is always `processed` for authenticated valid-format requests, regardless of account or delivery outcome; it does not promise that an SMS was sent. Verification returns `accepted` or `denied`. Clients must validate the response MAC, challenge, request digest, and exact status before granting access. Response timing can still differ by delivery outcome, so the generic response is not a timing-side-channel guarantee. Never log the request or response body, phone number, code, or modem commands.
 
-Administrators can set a classroom's inclusive teacher minimum (16–30°C; migration `037` defaults existing rooms to 16°C). Teacher portal and scanner target changes require an active class in that room and cannot set a target below the minimum; administrators retain their existing control. A saved target is not proof of an AC change.
+Administrators can set a classroom's inclusive teacher minimum (16–30°C; migration `037` defaults existing rooms to 16°C). Scanner Faculty menu target changes require an active class in that room and cannot set a target below the minimum; administrators retain their existing control. A saved target is not proof of an AC change.
 
 New rooms no longer initialize `current_temperature` from the target, and target commands no longer overwrite it. Earlier stored values may have been copied from targets and are not reliable measurements; the dashboard overview displays the explicitly labeled target instead.
 
@@ -717,7 +725,7 @@ Firmware source `1.6.58` checks for pending IR steps every five seconds while on
 
 **Experimental attendance power toggle:** migration `042` adds an attendance-derived desired power state, an assumed power state and guarded in-flight toggle. Apply migrations before deploying this portal. Scanner source `1.6.60` enables `AC_IR_POWER_ENABLED=1` by default; all scanners must use power-capable firmware compiled with that flag enabled, and the portal must have both `AcIr:EnableDeviceApi=true` and `AcIr:EnablePowerToggle=true`. The portal flags remain off by default. A v2 scanner cannot synchronize IR with a portal that has power toggle disabled; the portal power flag globally disables legacy IR routes, so old scanners cannot synchronize IR until upgraded or the flag is turned off. Switching protocol versions requires a fresh scanner restart. Firmware source `1.6.60` has not been uploaded or physically tested as part of this change.
 
-After each restart, an admin must set the AC to the target temperature with its remote, physically verify whether it is ON or OFF, and select that state in **AC control → Reconcile**. Reconciliation can immediately result in a toggle if the confirmed state differs from attendance demand. The NEC `0x08E700FF` command is one toggle, not separate ON/OFF codes; a missed signal or manual remote use can invalidate the assumption. After any uncertain claim or completion, restart and physically reconcile; never retry the toggle blindly. Temperature steps wait while assumed power is off. Admin/teacher Remote or Override controls retain their existing room/relay behavior and are not IR power-toggle requests. Neither server acknowledgment nor the diagnostic receiver proves that the AC received or applied a signal.
+After each restart, an admin must set the AC to the target temperature with its remote, physically verify whether it is ON or OFF, and select that state in **AC control → Reconcile**. Reconciliation can immediately result in a toggle if the confirmed state differs from attendance demand. The NEC `0x08E700FF` command is one toggle, not separate ON/OFF codes; a missed signal or manual remote use can invalidate the assumption. After any uncertain claim or completion, restart and physically reconcile; never retry the toggle blindly. Temperature steps wait while assumed power is off. Admin dashboard and scanner Faculty menu Remote or Override controls retain their existing room/relay behavior and are not IR power-toggle requests. Neither server acknowledgment nor the diagnostic receiver proves that the AC received or applied a signal.
 
 Migration `038` adds a five-minute scanner-bound teacher session. Session creation consumes a delivered OTP atomically and stores only a hash of a random token; session lookup rechecks the paired scanner, pairing timestamp, active teacher and phone. An authenticated query returns only that teacher's schedules for the current school date, across classrooms. These menu routes are separately gated by `FacultyOtp:EnableMenuApi` (default false) in addition to `FacultyOtp:EnableDeviceApi`. Scanner target changes additionally require `FacultyOtp:EnableAcTargetApi` (default false). Firmware source `1.6.53` has been compiled but not uploaded or hardware-tested; validate the complete deployment before enabling menu flags.
 
@@ -885,16 +893,15 @@ Companion hardware: `SmartClassAC-ESP32/smartclass/`.
 | Route | Description |
 |-------|-------------|
 | `/` | Landing |
-| `/login` | Sign in |
+| `/login` | Administrator sign in |
 | `/first-access` | Admin recovery email (once) |
-| `/forgot-password` / `/reset-password` | Password reset |
+| `/forgot-password` / `/reset-password` | Administrator password reset |
 | `/admin` | Administrator dashboard |
-| `/teacher` | Teacher dashboard (editable **device PIN**) |
 | `/health` | MariaDB health |
 | `POST /api/device/fingerprint/enroll` | Disabled pending safe enrollment |
 | `POST /api/device/fingerprint/scan` | Identify → start/end class |
 
-On the login page, **Remember username on this device** saves the entered
+On the login page, **Remember administrator username on this device** saves the entered
 username in the browser's local storage when the form is submitted, including
 unsuccessful sign-in attempts. Uncheck it to remove the saved username. Use it
 only on a trusted device. Passwords are not stored by this option; saving and
@@ -905,13 +912,13 @@ option does not keep the user signed in.
 
 ## Admin and teacher workflow
 
-**Admin:** create/edit teachers (name, employee number, username, **required mobile** `09xxxxxxxxx`, optional email, optional device PIN and password; **active/inactive** status — only active teachers appear when creating schedules or enrolling in a semester; new registrations and mobile-number changes require SMS OTP verification), **semesters** (enroll teachers), classrooms, schedules with **Regular/Makeup** kind and optional **repeat through semester end** (None / Weekly / Mon–Wed / Tue–Thu / MWF / TTH / Custom weekdays — expands to one `class_schedules` row per date; conflicts are skipped and reported); **move** a single schedule to another date/time; system reset (`RESET`) / delete.
+**Admin:** create/edit teachers (name, employee number, and **required mobile** `09xxxxxxxxx`; usernames are generated internally, school email is not collected, and device PINs are assigned automatically; **active/inactive** status — only active teachers appear when creating schedules or enrolling in a semester; new registrations and mobile-number changes require SMS OTP verification), **semesters** (enroll teachers), classrooms, schedules with **Regular/Makeup** kind and optional **repeat through semester end** (None / Weekly / Mon–Wed / Tue–Thu / MWF / TTH / Custom weekdays — expands to one `class_schedules` row per date; conflicts are skipped and reported); **move** a single schedule to another date/time; system reset (`RESET`) / delete.
 
 From **Admin → Classrooms**, select **View schedules** in the room's Schedules column to view its schedules, then move or delete individual entries. Current and future schedules must be moved or deleted before a classroom can be retired; device assignments are managed separately in Devices.
 
 **Devices:** Admin → Management → **Devices** registers scanners and manages their room assignment, display name, room target temperature, status polling interval, active state, and attendance scan/fingerprint enrollment permissions. Devices fetch these settings after connecting and during status polls; Wi-Fi/server/API credentials stay provisioned locally.
 
-**Teacher:** schedule (shows semester + kind), profile (PIN), attendance, assigned rooms, and active class start/end. Enrollment is currently unavailable; existing mapped fingerprints can start/end attendance by scan when a schedule window is active in an **active semester**.
+**Teacher:** no web dashboard or username/password sign-in. Existing mapped fingerprints can start/end attendance by scan when a schedule window is active in an **active semester**; the scanner Faculty menu may provide schedule and AC functions when enabled.
 
 ### Required domain flow (status)
 
@@ -1024,7 +1031,7 @@ The device scan API can be exercised with Bruno; legacy enrollment remains disab
 - Keep DB, device API key, and SMTP out of source control (User Secrets / env).
 - Connection string stays on the server only.
 - Require `X-Device-Api-Key` on device routes.
-- Device PINs are short shared secrets — rotatable from the teacher portal; do not reuse admin passwords.
+- Device PINs are short shared secrets assigned automatically to teachers; do not reuse admin passwords.
 - Password-reset tokens are SHA-256 hashed and expire after 15 minutes.
 
 ---

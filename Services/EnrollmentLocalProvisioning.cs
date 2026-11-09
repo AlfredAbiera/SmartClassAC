@@ -76,9 +76,31 @@ internal sealed class EnrollmentLocalProvisioning
         }
         catch (Exception exception) when (exception is InvalidOperationException or CryptographicException or MySqlConnector.MySqlException)
         {
-            Console.Error.WriteLine("Enrollment key provisioning failed; check the device, migrations, master key, and database.");
+            Console.Error.WriteLine(DescribeFailure(exception));
             return 1;
         }
         finally { CryptographicOperations.ZeroMemory(master); }
     }
+
+    internal static string DescribeFailure(Exception exception) => exception switch
+    {
+        MySqlConnector.MySqlException database => $"Enrollment provisioning database failure (error {database.Number}). " +
+            (database.Number switch
+            {
+                1045 => "Database authentication failed. Check the provisioning process's database credentials.",
+                1049 => "Configured database does not exist. Use the same database as the running portal.",
+                1146 or 1054 => "Required table or column is missing. Apply the portal migrations to the intended database.",
+                _ => "Check database availability, permissions and schema. Do not change the master key."
+            }),
+        CryptographicException => "Enrollment key protection verification failed. The master key may not match this database, " +
+            "or a stored scanner key may be damaged. Restore the original master key; do not regenerate it.",
+        InvalidOperationException operation when operation.Message is
+            "EnrollmentSecurity:MasterKey must decode to 32 bytes." or
+            "Set ConnectionStrings:SmartClassMariaDb before provisioning enrollment keys." or
+            "The scanner is unknown, inactive, or unpaired." or
+            "The scanner has an unresolved fingerprint write." or
+            "The scanner already has a key or this key is already in use; replacement is not yet supported." =>
+            $"Enrollment key provisioning failed: {operation.Message}",
+        _ => "Enrollment key provisioning failed unexpectedly. Check the device, migrations, master key and database."
+    };
 }

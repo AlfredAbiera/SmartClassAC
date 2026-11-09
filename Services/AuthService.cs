@@ -50,7 +50,7 @@ public sealed class AuthService : IAuthService
         }
 
         var account = await _accounts.FindByIdentifierAsync(identifier);
-        if (account is null || !_passwordHasher.Verify(password, account.PasswordHash))
+        if (account is null || !PortalLoginPolicy.CanSignIn(account.Role) || !_passwordHasher.Verify(password, account.PasswordHash))
         {
             _loginAttemptLimiter.RecordFailure(identifier);
             return LoginResult.Failure("Invalid username or password.");
@@ -1006,6 +1006,11 @@ public sealed class AuthService : IAuthService
         var account = await _accounts.FindByIdAsync(accountId);
         return account is not null && _passwordHasher.Verify(password, account.PasswordHash);
     }
+}
+
+internal static class PortalLoginPolicy
+{
+    internal static bool CanSignIn(UserRole role) => role == UserRole.Admin;
 }
 
 public sealed class CustomAuthStateProvider : AuthenticationStateProvider
