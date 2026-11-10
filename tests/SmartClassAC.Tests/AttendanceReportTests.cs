@@ -96,6 +96,7 @@ public sealed class AttendanceReportTests
         app.UseAuthentication();
         app.UseAuthorization();
         app.MapAttendanceReportRoutes();
+        app.MapScheduleReportRoutes();
         await app.StartAsync();
         var address = Assert.Single(app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses);
         using var client = new HttpClient { BaseAddress = new Uri(address) };
@@ -112,6 +113,18 @@ public sealed class AttendanceReportTests
             using var admin = new HttpRequestMessage(HttpMethod.Get, $"/reports/attendance/{format}?from=invalid&to=2025-01-02");
             admin.Headers.Add("X-Test-Role", "Admin");
             Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(admin)).StatusCode);
+
+            var schedulePath = $"/reports/schedules/{format}?from=2025-01-01&to=2025-01-02";
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(schedulePath)).StatusCode);
+            using var scheduleTeacher = new HttpRequestMessage(HttpMethod.Get, schedulePath);
+            scheduleTeacher.Headers.Add("X-Test-Role", "Teacher");
+            Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(scheduleTeacher)).StatusCode);
+            using var staleScheduleAdmin = new HttpRequestMessage(HttpMethod.Get, schedulePath);
+            staleScheduleAdmin.Headers.Add("X-Test-Role", "StaleAdmin");
+            Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(staleScheduleAdmin)).StatusCode);
+            using var invalidSchedule = new HttpRequestMessage(HttpMethod.Get, $"/reports/schedules/{format}?from=invalid&to=2025-01-02");
+            invalidSchedule.Headers.Add("X-Test-Role", "Admin");
+            Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(invalidSchedule)).StatusCode);
         }
     }
 

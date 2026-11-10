@@ -296,6 +296,7 @@ app.MapFacultyDeviceMenuRoutes(IsAuthorizedDevice);
 app.MapAcIrRoutes(IsAuthorizedDevice);
 app.MapBuzzerRoutes(IsAuthorizedDevice);
 app.MapAttendanceReportRoutes();
+app.MapScheduleReportRoutes();
 
 app.MapPost("/api/device/fingerprint/scan", async (
     DeviceScanRequest request,

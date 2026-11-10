@@ -166,7 +166,7 @@ public sealed class AuthService : IAuthService
             : OperationResult.Failure("Initial administrator setup has already been completed.");
     }
 
-    public async Task<OperationResult> UpdateAdministratorCredentialsAsync(string email, string currentPassword, string? newPassword)
+    public async Task<OperationResult> UpdateAdministratorPasswordAsync(string currentPassword, string newPassword)
     {
         if (_currentUser is not { Role: UserRole.Admin, IsDefaultAdmin: true } currentUser)
         {
@@ -178,27 +178,12 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("The current administrator password is incorrect.");
         }
 
-        if (!new EmailAddressAttribute().IsValid(email))
-        {
-            return OperationResult.Failure("Enter a valid administrator email address.");
-        }
-
-        if (!string.IsNullOrEmpty(newPassword) && !PasswordPolicy.MeetsRequirements(newPassword))
+        if (!PasswordPolicy.MeetsRequirements(newPassword))
         {
             return OperationResult.Failure(PasswordPolicy.RequirementMessage);
         }
 
-        var result = await _accounts.UpdateDefaultAdminCredentialsAsync(
-            currentUser.Id,
-            email.Trim(),
-            string.IsNullOrEmpty(newPassword) ? null : _passwordHasher.Hash(newPassword));
-
-        if (result.Succeeded)
-        {
-            _currentUser = currentUser with { Email = email.Trim() };
-        }
-
-        return result;
+        return await _accounts.UpdateDefaultAdminPasswordAsync(currentUser.Id, _passwordHasher.Hash(newPassword));
     }
 
     public async Task<OperationResult> RequestMobileOtpAsync(long? teacherId, string phone)
@@ -310,11 +295,6 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("Enter a classroom name of 100 characters or fewer.");
         }
 
-        if (request.Capacity is < 1 or > 1000)
-        {
-            return OperationResult.Failure("Classroom capacity must be between 1 and 1,000.");
-        }
-
         if (request.TargetTemperature is < 16 or > 30 || request.MinimumTemperature is < 16 or > 30)
         {
             return OperationResult.Failure("Target and minimum temperatures must be between 16°C and 30°C.");
@@ -336,9 +316,9 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("Enter a valid classroom name.");
         }
 
-        if (request.Capacity is < 1 or > 1000 || request.TargetTemperature is < 16 or > 30 || request.MinimumTemperature is < 16 or > 30)
+        if (request.TargetTemperature is < 16 or > 30 || request.MinimumTemperature is < 16 or > 30)
         {
-            return OperationResult.Failure("Enter a capacity from 1 to 1,000 and temperatures from 16°C to 30°C.");
+            return OperationResult.Failure("Enter target and minimum temperatures from 16°C to 30°C.");
         }
 
         return await _accounts.UpdateClassroomAsync(request with { Name = request.Name.Trim() });
@@ -443,6 +423,14 @@ public sealed class AuthService : IAuthService
         return authorization is not null
             ? authorization
             : await _accounts.CreateSemesterAsync(request);
+    }
+
+    public async Task<OperationResult> UpdateSemesterAsync(UpdateSemesterRequest request)
+    {
+        var authorization = RequireAdmin();
+        return authorization is not null
+            ? authorization
+            : await _accounts.UpdateSemesterAsync(request);
     }
 
     public async Task<OperationResult> SetSemesterActiveAsync(long semesterId, bool isActive)

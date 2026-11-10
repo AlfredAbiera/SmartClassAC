@@ -510,7 +510,7 @@ public sealed class FacultyOtpStoreTests
             Assert.False((await repository.UpdateBiometricDeviceAsync(new UpdateBiometricDeviceRequest(1, 2, 23, 30, true, true, true))).Succeeded);
             Assert.False((await repository.UpdateBiometricDeviceAsync(new UpdateBiometricDeviceRequest(1, 1, 27, 30, false, true, true))).Succeeded);
             Assert.False((await repository.DeleteBiometricDeviceAsync(1)).Succeeded);
-            Assert.False((await repository.UpdateClassroomAsync(new UpdateClassroomRequest(1, "Room A", 30, 27, false, 16))).Succeeded);
+            Assert.False((await repository.UpdateClassroomAsync(new UpdateClassroomRequest(1, "Room A", 27, false, 16))).Succeeded);
             Assert.False((await repository.DeleteClassroomAsync(1)).Succeeded);
             await Execute(connection, "UPDATE biometric_devices SET pairing_code = '123456' WHERE id = 1;");
             Assert.Null(await repository.PairDeviceByCodeAsync("123456"));
@@ -554,7 +554,7 @@ public sealed class FacultyOtpStoreTests
             Assert.True(await ir.RegisterBootAsync(device, fifthBoot));
             Assert.True(await ir.ReconcileAsync(2, device, fifthBoot, 1, 27));
             Assert.True((await repository.DeleteClassroomAsync(1)).Succeeded);
-            Assert.True((await repository.UpdateClassroomAsync(new UpdateClassroomRequest(1, "Room A", 30, 27, true, 16))).Succeeded);
+            Assert.True((await repository.UpdateClassroomAsync(new UpdateClassroomRequest(1, "Room A", 27, true, 16))).Succeeded);
             Assert.Null(await ir.GetAsync(device, fifthBoot));
             Assert.False(await ir.RegisterBootAsync(device, fifthBoot));
         });

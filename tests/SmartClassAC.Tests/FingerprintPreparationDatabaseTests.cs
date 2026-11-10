@@ -672,12 +672,12 @@ public sealed class FingerprintPreparationDatabaseTests
             if (deactivateRace.Result.Succeeded)
                 Assert.True((await repository.SetTeacherActiveAsync(1, true)).Succeeded);
             await ExecuteAsync(connection, "DELETE FROM fingerprint_enrollment_write_guards");
-            var roomRace = repository.UpdateClassroomAsync(new UpdateClassroomRequest(1, "Room", 30, 24, false));
+            var roomRace = repository.UpdateClassroomAsync(new UpdateClassroomRequest(1, "Room", 24, false));
             var roomGuardRace = guard.MarkUncertainAsync(guardedPreparation.Id, "1000000001", operation);
             await Task.WhenAll(roomRace, roomGuardRace);
             Assert.NotEqual(roomRace.Result.Succeeded, roomGuardRace.Result.Succeeded);
             if (roomRace.Result.Succeeded)
-                Assert.True((await repository.UpdateClassroomAsync(new UpdateClassroomRequest(1, "Room", 30, 24, true))).Succeeded);
+                Assert.True((await repository.UpdateClassroomAsync(new UpdateClassroomRequest(1, "Room", 24, true))).Succeeded);
             await ExecuteAsync(connection, "DELETE FROM fingerprint_enrollment_write_guards");
             var deviceRace = repository.UpdateBiometricDeviceAsync(new UpdateBiometricDeviceRequest(1, null, null, 30, true, true, true));
             var deviceGuardRace = guard.MarkUncertainAsync(guardedPreparation.Id, "1000000001", operation);
@@ -740,13 +740,13 @@ public sealed class FingerprintPreparationDatabaseTests
             Assert.False((await repository.DeleteTeacherAsync(1)).Succeeded);
             Assert.False((await repository.DeleteBiometricDeviceAsync(1)).Succeeded);
             Assert.False((await repository.SetTeacherActiveAsync(1, false)).Succeeded);
-            Assert.False((await repository.UpdateClassroomAsync(new UpdateClassroomRequest(1, "Room", 30, 24, false))).Succeeded);
+            Assert.False((await repository.UpdateClassroomAsync(new UpdateClassroomRequest(1, "Room", 24, false))).Succeeded);
             Assert.False((await repository.DeleteClassroomAsync(1)).Succeeded);
             Assert.False((await repository.UpdateBiometricDeviceAsync(new UpdateBiometricDeviceRequest(1, null, null, 30, true, true, true))).Succeeded);
             Assert.False((await repository.UpdateBiometricDeviceAsync(new UpdateBiometricDeviceRequest(1, 1, 24, 30, false, true, true))).Succeeded);
             Assert.False((await repository.UpdateBiometricDeviceAsync(new UpdateBiometricDeviceRequest(1, 1, 24, 30, true, false, true))).Succeeded);
             Assert.True((await repository.UpdateBiometricDeviceAsync(new UpdateBiometricDeviceRequest(1, 1, 24, 30, true, true, true))).Succeeded);
-            Assert.True((await repository.UpdateClassroomAsync(new UpdateClassroomRequest(1, "Room", 30, 24, true))).Succeeded);
+            Assert.True((await repository.UpdateClassroomAsync(new UpdateClassroomRequest(1, "Room", 24, true))).Succeeded);
             Assert.True((await repository.SetEnrollmentScannerAsync(1)).Succeeded);
             Assert.False((await repository.SetEnrollmentScannerAsync(2)).Succeeded);
             Assert.False((await repository.SetEnrollmentScannerAsync(null)).Succeeded);

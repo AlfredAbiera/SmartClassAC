@@ -10,6 +10,7 @@ namespace SmartClassAC.Services;
 public sealed class MariaDbUserAccountRepository : IUserAccountRepository
 {
     private const string ConnectionStringName = "SmartClassMariaDb";
+    private const int LegacyClassroomCapacity = 40;
     private readonly string _connectionString;
     private readonly SchoolTimeOptions _schoolTime;
     private readonly IConfiguration _configuration;
@@ -184,26 +185,16 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         }
     }
 
-    public async Task<OperationResult> UpdateDefaultAdminCredentialsAsync(long accountId, string email, string? passwordHash, CancellationToken cancellationToken = default)
+    public async Task<OperationResult> UpdateDefaultAdminPasswordAsync(long accountId, string passwordHash, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = passwordHash is null
-            ? "UPDATE user_accounts SET email = @email WHERE id = @id AND is_default_admin = TRUE;"
-            : "UPDATE user_accounts SET email = @email, password_hash = @passwordHash WHERE id = @id AND is_default_admin = TRUE;";
+        command.CommandText = "UPDATE user_accounts SET password_hash = @passwordHash WHERE id = @id AND is_default_admin = TRUE;";
         command.Parameters.Add("@id", MySqlDbType.Int64).Value = accountId;
-        command.Parameters.Add("@email", MySqlDbType.VarChar).Value = email;
-        if (passwordHash is not null) command.Parameters.Add("@passwordHash", MySqlDbType.VarChar).Value = passwordHash;
-        try
-        {
-            return await command.ExecuteNonQueryAsync(cancellationToken) == 1
-                ? OperationResult.Success()
-                : OperationResult.Failure("The default administrator account was not found.");
-        }
-        catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
-        {
-            return OperationResult.Failure("That email is already registered to another account.");
-        }
+        command.Parameters.Add("@passwordHash", MySqlDbType.VarChar).Value = passwordHash;
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1
+            ? OperationResult.Success()
+            : OperationResult.Failure("The default administrator account was not found.");
     }
 
     public async Task<OperationResult> CreateTeacherAsync(CreateTeacherRequest request, string passwordHash, CancellationToken cancellationToken = default)
@@ -510,12 +501,12 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            SELECT id, name, capacity, target_temperature, current_temperature, ac_status, is_active, minimum_temperature
+            SELECT id, name, target_temperature, current_temperature, ac_status, is_active, minimum_temperature
             FROM classrooms WHERE is_active = TRUE ORDER BY name;";
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            items.Add(new ClassroomEntry(reader.GetInt64(0), reader.GetString(1), reader.GetInt32(2), reader.GetInt32(3), reader.IsDBNull(4) ? null : reader.GetDecimal(4), reader.GetString(5), reader.GetBoolean(6), reader.GetInt32(7)));
+            items.Add(new ClassroomEntry(reader.GetInt64(0), reader.GetString(1), reader.GetInt32(2), reader.IsDBNull(3) ? null : reader.GetDecimal(3), reader.GetString(4), reader.GetBoolean(5), reader.GetInt32(6)));
         }
         return items;
     }
@@ -531,7 +522,8 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             command.CommandText = @"
                 INSERT INTO classrooms (name, capacity, target_temperature, current_temperature, ac_status, minimum_temperature)
                 VALUES (@name, @capacity, @targetTemperature, NULL, 'Idle', @minimumTemperature);";
-            AddClassroomParameters(command, request.Name, request.Capacity, request.TargetTemperature);
+            AddClassroomParameters(command, request.Name, request.TargetTemperature);
+            command.Parameters.Add("@capacity", MySqlDbType.Int32).Value = LegacyClassroomCapacity;
             command.Parameters.Add("@minimumTemperature", MySqlDbType.Int32).Value = request.MinimumTemperature;
             await command.ExecuteNonQueryAsync(cancellationToken);
 
@@ -567,10 +559,10 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         command.Transaction = transaction;
         command.CommandText = @"
             UPDATE classrooms
-            SET name = @name, capacity = @capacity, target_temperature = @targetTemperature, is_active = @isActive, minimum_temperature = @minimumTemperature
+            SET name = @name, target_temperature = @targetTemperature, is_active = @isActive, minimum_temperature = @minimumTemperature
             WHERE id = @id;";
         command.Parameters.Add("@id", MySqlDbType.Int64).Value = request.Id;
-        AddClassroomParameters(command, request.Name, request.Capacity, request.TargetTemperature);
+        AddClassroomParameters(command, request.Name, request.TargetTemperature);
         command.Parameters.Add("@minimumTemperature", MySqlDbType.Int32).Value = request.MinimumTemperature;
         command.Parameters.Add("@isActive", MySqlDbType.Bool).Value = request.IsActive;
         try
@@ -869,6 +861,78 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         return await command.ExecuteNonQueryAsync(cancellationToken) == 1
             ? OperationResult.Success()
             : OperationResult.Failure("The semester was not found.");
+    }
+
+    public async Task<OperationResult> UpdateSemesterAsync(UpdateSemesterRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request.Id <= 0 || string.IsNullOrWhiteSpace(request.Name) || request.Name.Trim().Length > 120)
+        {
+            return OperationResult.Failure("Enter a semester name of 120 characters or fewer.");
+        }
+
+        if (request.EndDate < request.StartDate)
+        {
+            return OperationResult.Failure("Semester end date must be on or after the start date.");
+        }
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            await using (var semester = connection.CreateCommand())
+            {
+                semester.Transaction = transaction;
+                semester.CommandText = "SELECT id FROM semesters WHERE id = @id FOR UPDATE;";
+                semester.Parameters.Add("@id", MySqlDbType.Int64).Value = request.Id;
+                if (await semester.ExecuteScalarAsync(cancellationToken) is null)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return OperationResult.Failure("The semester was not found.");
+                }
+            }
+
+            await using (var invalidSchedules = connection.CreateCommand())
+            {
+                invalidSchedules.Transaction = transaction;
+                invalidSchedules.CommandText = @"
+                    SELECT EXISTS(
+                        SELECT 1 FROM class_schedules
+                        WHERE semester_id = @id AND schedule_date NOT BETWEEN @startDate AND @endDate
+                    );";
+                invalidSchedules.Parameters.Add("@id", MySqlDbType.Int64).Value = request.Id;
+                invalidSchedules.Parameters.Add("@startDate", MySqlDbType.Date).Value = request.StartDate;
+                invalidSchedules.Parameters.Add("@endDate", MySqlDbType.Date).Value = request.EndDate;
+                if (Convert.ToInt64(await invalidSchedules.ExecuteScalarAsync(cancellationToken) ?? 0L) != 0)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return OperationResult.Failure("Move or delete schedules outside the updated semester date range before saving.");
+                }
+            }
+
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = @"
+                UPDATE semesters
+                SET name = @name, start_date = @startDate, end_date = @endDate
+                WHERE id = @id;";
+            command.Parameters.Add("@name", MySqlDbType.VarChar).Value = request.Name.Trim();
+            command.Parameters.Add("@startDate", MySqlDbType.Date).Value = request.StartDate;
+            command.Parameters.Add("@endDate", MySqlDbType.Date).Value = request.EndDate;
+            command.Parameters.Add("@id", MySqlDbType.Int64).Value = request.Id;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return OperationResult.Success();
+        }
+        catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return OperationResult.Failure("A semester with that name already exists.");
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
     }
 
     public async Task<IReadOnlyList<TeacherSemesterEntry>> GetTeacherSemestersAsync(long? semesterId = null, CancellationToken cancellationToken = default)
@@ -2442,7 +2506,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         command.CommandText = @"
             SELECT schedule.id, schedule.teacher_account_id, teacher.display_name,
                    COALESCE(schedule.original_teacher_account_id, schedule.teacher_account_id), original_teacher.display_name,
-                   classroom.id, classroom.name, classroom.capacity,
+                   classroom.id, classroom.name,
                    schedule.semester_id, semester.name, schedule.schedule_kind,
                    schedule.subject_name, schedule.schedule_date, schedule.start_time, schedule.end_time
             FROM class_schedules schedule
@@ -2464,22 +2528,20 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 reader.GetString(4),
                 reader.GetInt64(5),
                 reader.GetString(6),
-                reader.GetInt32(7),
-                reader.IsDBNull(8) ? null : reader.GetInt64(8),
-                reader.IsDBNull(9) ? null : reader.GetString(9),
-                reader.IsDBNull(10) ? ScheduleKinds.Regular : reader.GetString(10),
-                reader.GetString(11),
-                reader.GetFieldValue<DateOnly>(12),
-                reader.GetFieldValue<TimeOnly>(13),
-                reader.GetFieldValue<TimeOnly>(14)));
+                reader.IsDBNull(7) ? null : reader.GetInt64(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                reader.IsDBNull(9) ? ScheduleKinds.Regular : reader.GetString(9),
+                reader.GetString(10),
+                reader.GetFieldValue<DateOnly>(11),
+                reader.GetFieldValue<TimeOnly>(12),
+                reader.GetFieldValue<TimeOnly>(13)));
         }
         return items;
     }
 
-    private static void AddClassroomParameters(MySqlCommand command, string name, int capacity, int targetTemperature)
+    private static void AddClassroomParameters(MySqlCommand command, string name, int targetTemperature)
     {
         command.Parameters.Add("@name", MySqlDbType.VarChar).Value = name;
-        command.Parameters.Add("@capacity", MySqlDbType.Int32).Value = capacity;
         command.Parameters.Add("@targetTemperature", MySqlDbType.Int32).Value = targetTemperature;
     }
 

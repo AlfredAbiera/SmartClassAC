@@ -161,9 +161,9 @@ public class AdminAssignRepositoryProxy : DispatchProxy
             nameof(IUserAccountRepository.GetBiometricDevicesAsync) => Task.FromResult<IReadOnlyList<BiometricDeviceEntry>>(new[] { Device1, Device2 }),
             nameof(IUserAccountRepository.GetClassroomsAsync) => Task.FromResult<IReadOnlyList<ClassroomEntry>>(new[]
             {
-                new ClassroomEntry(1, "Room 1", 40, 22, null, "Idle", true),
-                new ClassroomEntry(2, "Room 2", 40, 22, null, "Idle", true),
-                new ClassroomEntry(3, "Room 3", 40, 24, null, "Idle", true)
+                new ClassroomEntry(1, "Room 1", 22, null, "Idle", true),
+                new ClassroomEntry(2, "Room 2", 22, null, "Idle", true),
+                new ClassroomEntry(3, "Room 3", 24, null, "Idle", true)
             }),
             nameof(IUserAccountRepository.UpdateBiometricDeviceAsync) => Update(args),
             nameof(IUserAccountRepository.PairDeviceByCodeAsync) => Pair(args),

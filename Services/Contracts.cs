@@ -131,9 +131,9 @@ public sealed record OperationResult(bool Succeeded, string? Error = null)
 public sealed record CreateTeacherRequest(string DisplayName, string Username, string EmployeeNumber, string? Email, string Phone, string Password, string? DevicePin = null, string? RegistrationOtp = null, long VerificationActorId = 0);
 public sealed record UpdateAdminTeacherRequest(long AccountId, string DisplayName, string Username, string EmployeeNumber, string? Email, string Phone, string? DevicePin, string? NewPassword, string? MobileOtp = null, long VerificationActorId = 0);
 public sealed record TeacherDirectoryEntry(long Id, string DisplayName, string Username, string? EmployeeNumber, string? Email, string? Phone, int FingerprintTemplateCount, bool IsActive);
-public sealed record ClassroomEntry(long Id, string Name, int Capacity, int TargetTemperature, decimal? CurrentTemperature, string AcStatus, bool IsActive, int MinimumTemperature = 16);
-public sealed record CreateClassroomRequest(string Name, int Capacity, int TargetTemperature, int MinimumTemperature = 16);
-public sealed record UpdateClassroomRequest(long Id, string Name, int Capacity, int TargetTemperature, bool IsActive, int MinimumTemperature = 16);
+public sealed record ClassroomEntry(long Id, string Name, int TargetTemperature, decimal? CurrentTemperature, string AcStatus, bool IsActive, int MinimumTemperature = 16);
+public sealed record CreateClassroomRequest(string Name, int TargetTemperature, int MinimumTemperature = 16);
+public sealed record UpdateClassroomRequest(long Id, string Name, int TargetTemperature, bool IsActive, int MinimumTemperature = 16);
 
 public sealed record CreateScheduleRequest(
     long TeacherAccountId,
@@ -168,7 +168,6 @@ public sealed record ScheduleDirectoryEntry(
     string OriginalTeacherDisplayName,
     long ClassroomId,
     string ClassroomName,
-    int ClassroomCapacity,
     long? SemesterId,
     string? SemesterName,
     string ScheduleKind,
@@ -179,6 +178,7 @@ public sealed record ScheduleDirectoryEntry(
 
 public sealed record SemesterEntry(long Id, string Name, DateOnly StartDate, DateOnly EndDate, bool IsActive);
 public sealed record CreateSemesterRequest(string Name, DateOnly StartDate, DateOnly EndDate, bool IsActive = true);
+public sealed record UpdateSemesterRequest(long Id, string Name, DateOnly StartDate, DateOnly EndDate);
 public sealed record TeacherSemesterEntry(long SemesterId, string SemesterName, DateOnly SemesterStartDate, DateOnly SemesterEndDate, long TeacherAccountId, string TeacherDisplayName, string? EmployeeNumber);
 
 public static class ScheduleKinds
@@ -561,7 +561,7 @@ public interface IUserAccountRepository
     Task<UserAccountRecord?> FindByIdAsync(long accountId, CancellationToken cancellationToken = default);
     Task<bool> IsInitialAdminSetupRequiredAsync(CancellationToken cancellationToken = default);
     Task<bool> SetInitialAdminEmailAsync(string email, CancellationToken cancellationToken = default);
-    Task<OperationResult> UpdateDefaultAdminCredentialsAsync(long accountId, string email, string? passwordHash, CancellationToken cancellationToken = default);
+    Task<OperationResult> UpdateDefaultAdminPasswordAsync(long accountId, string passwordHash, CancellationToken cancellationToken = default);
     Task<OperationResult> CreateTeacherAsync(CreateTeacherRequest request, string passwordHash, CancellationToken cancellationToken = default);
     Task<OperationResult> UpdateAdminTeacherAsync(UpdateAdminTeacherRequest request, string? passwordHash, CancellationToken cancellationToken = default);
     Task<OperationResult> SetTeacherDevicePinByEmployeeNumberAsync(string employeeNumber, string pinCode, CancellationToken cancellationToken = default);
@@ -579,6 +579,7 @@ public interface IUserAccountRepository
     Task<OperationResult> DeleteScheduleAsync(long scheduleId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SemesterEntry>> GetSemestersAsync(CancellationToken cancellationToken = default);
     Task<OperationResult> CreateSemesterAsync(CreateSemesterRequest request, CancellationToken cancellationToken = default);
+    Task<OperationResult> UpdateSemesterAsync(UpdateSemesterRequest request, CancellationToken cancellationToken = default);
     Task<OperationResult> SetSemesterActiveAsync(long semesterId, bool isActive, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TeacherSemesterEntry>> GetTeacherSemestersAsync(long? semesterId = null, CancellationToken cancellationToken = default);
     Task<OperationResult> EnrollTeacherInSemesterAsync(long teacherAccountId, long semesterId, CancellationToken cancellationToken = default);
@@ -656,7 +657,7 @@ public interface IAuthService
     Task<AuthenticatedUser?> RestoreUserAsync(long accountId, CancellationToken cancellationToken = default);
     Task<bool> IsInitialAdminSetupRequiredAsync();
     Task<OperationResult> CompleteInitialAdminSetupAsync(string email);
-    Task<OperationResult> UpdateAdministratorCredentialsAsync(string email, string currentPassword, string? newPassword);
+    Task<OperationResult> UpdateAdministratorPasswordAsync(string currentPassword, string newPassword);
     Task<OperationResult> RequestMobileOtpAsync(long? teacherId, string phone);
     Task<OperationResult> CreateTeacherAsync(CreateTeacherRequest request);
     Task<OperationResult> UpdateAdminTeacherAsync(UpdateAdminTeacherRequest request);
@@ -675,6 +676,7 @@ public interface IAuthService
     Task<OperationResult> DeleteScheduleAsync(long scheduleId);
     Task<IReadOnlyList<SemesterEntry>> GetSemestersAsync();
     Task<OperationResult> CreateSemesterAsync(CreateSemesterRequest request);
+    Task<OperationResult> UpdateSemesterAsync(UpdateSemesterRequest request);
     Task<OperationResult> SetSemesterActiveAsync(long semesterId, bool isActive);
     Task<IReadOnlyList<TeacherSemesterEntry>> GetTeacherSemestersAsync(long? semesterId = null);
     Task<OperationResult> EnrollTeacherInSemesterAsync(long teacherAccountId, long semesterId);

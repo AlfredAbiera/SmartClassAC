@@ -48,9 +48,8 @@ responses. These mechanisms do not themselves encrypt network traffic.
 
 ## Administrator workflow
 
-The Admin sidebar exposes Overview; Management (Teachers, Semesters,
-Classrooms, Devices, Schedules); Operations (AC control, Attendance); and
-System (GSM settings, Buzzer settings, System settings).
+The Admin sidebar exposes Overview; Management (Teachers, Semesters, Classrooms,
+Schedules, Attendance); and System (Devices, AC control, System settings).
 
 ### Prepare people, rooms, and schedules
 
@@ -60,9 +59,10 @@ System (GSM settings, Buzzer settings, System settings).
    another SMS code; unchanged numbers do not. This uses a separate portal OTP
    lifecycle from the Faculty device OTP and requires the configured GSM modem
    and `FacultyOtp:Secret`. Failed or uncertain delivery cannot authorize a save.
-2. Create and activate a date-ranged semester, then enroll teachers in it.
-3. Create classrooms, including capacity, target temperature and the teacher's
-   minimum permitted temperature.
+2. Create and activate a date-ranged semester, edit its name or dates when
+   needed, then enroll teachers in it.
+3. Create classrooms with a name, target temperature and the teacher's minimum
+   permitted temperature.
 4. Create Regular or Makeup schedules for an eligible teacher, semester and
    classroom. Recurrence expands into individual dated rows through the
    semester end; conflicting dates are skipped and reported. Individual
@@ -146,24 +146,27 @@ uses the browser print dialog; Excel downloads a workbook. Report exports use
 all matching records, not only the current page. For a schedule-linked row the
 report date is the schedule date; otherwise it is the recorded school-local
 time-in date. Reconciliation happens before report generation.
+The attendance table can also be searched by teacher or classroom and filtered
+by outcome category. Under **Schedules**, admins can export an inclusive date
+range for one teacher or all teachers as Excel or print/save-as-PDF.
 
 ### GSM, buzzer, and system settings
 
-- **GSM settings:** select and save the server's serial modem port and baud
-  rate. A confirmed test SMS is a real send and may incur charges. Modem
-  acceptance is not proof of handset delivery; an uncertain send should not be
-  blindly retried.
-- **Buzzer settings:** configure the global enable flag, lead and repeat
-  intervals (1–180 minutes). Defaults introduced by migration 040 are enabled,
+- **System settings → GSM settings:** select and save the server's serial modem
+  port and baud rate. A confirmed test SMS is a real send and may incur charges.
+  Modem acceptance is not proof of handset delivery; an uncertain send should
+  not be blindly retried.
+- **System settings → Buzzer settings:** configure the global enable flag, lead
+  and repeat intervals (1–180 minutes). Defaults introduced by migration 040 are enabled,
   15 minutes before end and every 5 minutes. Only an active attendance session
   in the assigned room qualifies, strictly before scheduled end. A reminder has
   a 20-second delivery window and is not replayed after an outage.
-- **Test buzzer:** queue one request for an active paired scanner, independently
-  of reminder enablement. It expires after 30 seconds, can be claimed at most
+- **Test buzzer:** from System settings, queue one request for an active paired
+  scanner, independently of reminder enablement. It expires after 30 seconds, can be claimed at most
   once, and is invalidated by re-pairing. Queueing or claiming does not prove a
   sound played. Firmware 1.6.56+ plays the five-second melody; older compatible
   firmware uses short tones.
-- **System settings:** includes the device admin PIN and administrative reset
+- **Other System settings:** includes the device admin PIN and administrative reset
   controls. Reset is destructive and protected operations may prevent it.
 
 ## Teacher workflow

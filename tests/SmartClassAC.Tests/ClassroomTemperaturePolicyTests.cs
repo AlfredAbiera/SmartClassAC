@@ -41,11 +41,11 @@ public sealed class ClassroomTemperaturePolicyTests
                 """);
             var repository = new MariaDbUserAccountRepository(configuration, Options.Create(new SchoolTimeOptions()));
             Assert.Equal(22, (await repository.GetClassroomsAsync()).Single(room => room.Id == 1).MinimumTemperature);
-            Assert.True((await repository.CreateClassroomAsync(new CreateClassroomRequest("New", 30, 24, 23))).Succeeded);
+            Assert.True((await repository.CreateClassroomAsync(new CreateClassroomRequest("New", 24, 23))).Succeeded);
             var created = (await repository.GetClassroomsAsync()).Single(room => room.Name == "New");
             Assert.Equal(23, created.MinimumTemperature);
             Assert.Null(created.CurrentTemperature);
-            Assert.True((await repository.UpdateClassroomAsync(new UpdateClassroomRequest(created.Id, "New", 30, 24, true, 25))).Succeeded);
+            Assert.True((await repository.UpdateClassroomAsync(new UpdateClassroomRequest(created.Id, "New", 24, true, 25))).Succeeded);
             Assert.Equal(25, (await repository.GetClassroomsAsync()).Single(room => room.Id == created.Id).MinimumTemperature);
             Assert.False((await repository.SetTemperatureAsync(1, new SetTemperatureRequest(1, 22, "TargetSet"))).Succeeded);
             await Execute(connection, "INSERT INTO attendance_logs (teacher_account_id, classroom_id) VALUES (1, 1);");

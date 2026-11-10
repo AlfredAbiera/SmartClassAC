@@ -234,7 +234,9 @@ User-visible records (attendance time-in/out and temperature logs) are **stored 
 
 ### Attendance reports
 
-Administrators can open **Operations → Attendance → Create attendance report**, choose an inclusive date range and optional teacher, classroom, and outcome, then select **Print / PDF** or **Download Excel**. Use the browser's print dialog to save a PDF. Both outputs include all matching records and outcome totals, not just the current attendance-table page. The report date is the scheduled class date when a schedule exists, otherwise the school-local time-in date; this ensures a late-created absence belongs to its class date. Absent records have no punches, and automatically closed missing time-outs are not shown as actual time-out punches. Active sessions, including active late sessions, are counted under Active; the detail still identifies active late sessions. Other covers completed records without a recognized outcome. Report generation reconciles attendance first and both output routes require an active administrator account.
+Administrators can open **Admin → Attendance → Create attendance report**, choose an inclusive date range and optional teacher, classroom, and outcome, then select **Print / PDF** or **Download Excel**. The attendance table can also be searched by teacher or classroom and filtered by outcome category. Use the browser's print dialog to save a PDF. Both report outputs include all matching records and outcome totals, not just the current attendance-table page. The report date is the scheduled class date when a schedule exists, otherwise the school-local time-in date; this ensures a late-created absence belongs to its class date. Absent records have no punches, and automatically closed missing time-outs are not shown as actual time-out punches. Active sessions, including active late sessions, are counted under Active; the detail still identifies active late sessions. Other covers completed records without a recognized outcome. Report generation reconciles attendance first and both output routes require an active administrator account.
+
+Administrators can export schedules from **Admin → Schedules** for an inclusive date range and one selected teacher or all teachers. Exports are available as Excel workbooks or browser print/save-as-PDF.
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
@@ -290,7 +292,7 @@ Fresh installs also define `employee_number` / `device_pin` / unique `phone` in 
 
 ### Schedule-ending buzzer
 
-**System → Buzzer settings** lets administrators enable reminders and set the first reminder and repeat interval (1–180 minutes each). Migration `040` initializes the requested enabled, 15-minute lead and 5-minute repeat. Starting at the lead time, a connected scanner plays a five-second melody for an active attendance session in its assigned room, repeating at the configured interval strictly before the scheduled end. Firmware before `1.6.56` plays three short tones instead. A class that ends early stops producing reminders. The scanner checks the portal approximately every five seconds using school-local schedule time; network delays, disconnected scanners, blocking device operations, and a 20-second reminder window can cause reminders to be missed. Missed reminders are not replayed; a scanner reboot during a reminder window may repeat that reminder.
+**System settings → Buzzer settings** lets administrators enable reminders and set the first reminder and repeat interval (1–180 minutes each). Migration `040` initializes the requested enabled, 15-minute lead and 5-minute repeat. Starting at the lead time, a connected scanner plays a five-second melody for an active attendance session in its assigned room, repeating at the configured interval strictly before the scheduled end. Firmware before `1.6.56` plays three short tones instead. A class that ends early stops producing reminders. The scanner checks the portal approximately every five seconds using school-local schedule time; network delays, disconnected scanners, blocking device operations, and a 20-second reminder window can cause reminders to be missed. Missed reminders are not replayed; a scanner reboot during a reminder window may repeat that reminder.
 
 Administrators can select an active, paired device and use **Test buzzer** to queue the same melody, even when reminders are disabled or no class is active. The test expires after 30 seconds, is claimed at most once, and is invalidated by re-pairing. A queued or claimed request does not confirm the sound played; listen at the device. An offline scanner, an older firmware version, network errors, or a busy scanner can cause the test to be missed.
 
@@ -520,7 +522,7 @@ The local development setup now has a Base64 random 32-byte master key in User S
 
 For the interim workflow, use one physical scanner for both teacher enrollment and attendance in its assigned classroom. Development route flags must be enabled in local User Secrets, and the application must be started in Development for HTTP enrollment routes to work. Verify the firmware actually installed on the scanner: source changes do not update a device until built and uploaded. Device `1000000005` has a verified protocol key and completed one manual enrollment and attendance scan; automatic slot allocation and the keypad enrollment entry have not yet been validated end-to-end on hardware. Do not treat fingerprints enrolled locally by diagnostic sketches as teacher enrollments: they have no corresponding server mapping and an existing legacy mapping for the same slot could identify a different teacher. The device previously reported sensor slots 2 and 3 occupied; do not replace or clear them. Before enrollment, confirm the intended teacher, finger, scanner, and automatically reserved slot.
 
-After migration `016` has been applied and the updated app is running, an admin can block a slot under **System settings → Block a sensor slot**. A block prevents attendance matching for that slot on every scanner, without changing its server mapping or sensor contents. Blocks persist through fingerprint clears and resets; the portal does not yet support unblocking. Do not unblock by editing the database unless the physical slot and its mapping have been verified and a safe replacement procedure is available. If migration `016` is missing, fingerprint matching fails rather than bypassing the block.
+Fingerprint slot blocks remain enforced by the guarded enrollment and replacement workflows, but the System settings page no longer exposes manual slot blocking or inspection. A block prevents attendance matching for that slot on every scanner without changing its server mapping or sensor contents. Blocks persist through fingerprint clears and resets; do not remove one directly from the database unless the physical slot and its mapping have been verified and a safe replacement procedure is available. If migration `016` is missing, fingerprint matching fails rather than bypassing the block.
 
 Legacy repository enrollment also rejects blocked slots. Older scanner firmware writes a sensor slot before contacting the now-disabled API and may attempt to delete it when that call fails. Do not use legacy enrollment on older firmware; disabling the API alone does not protect its sensor contents.
 
@@ -663,15 +665,15 @@ The current sketch does not automatically run the SIM900L startup check; the cal
 
 Power the SIM900L from a supply appropriate for the exact module/breakout; cellular transmit bursts can require high current, so do not assume the ESP32 3.3 V pin can power it. Share ground with the ESP32, cross TX/RX as shown above, and verify the board's UART logic-level compatibility before connecting GPIO19 to the modem RX.
 
-The portal's separate **GSM settings** view can list Windows COM ports and save a selected port and standard baud rate (migration `035`). Discovery does not distinguish the USB modem from other serial devices; verify the port before selecting it. A serialized SIM800L SMS transport and the Faculty OTP API have been tested with a fake serial connection, not a real modem. Modem acceptance of an SMS is not proof of handset delivery; an interrupted submission has an uncertain outcome and must not be blindly retried.
+**System settings → GSM settings** can list Windows COM ports and save a selected port and standard baud rate (migration `035`). Discovery does not distinguish the USB modem from other serial devices; verify the port before selecting it. A serialized SIM800L SMS transport and the Faculty OTP API have been tested with a fake serial connection, not a real modem. Modem acceptance of an SMS is not proof of handset delivery; an interrupted submission has an uncertain outcome and must not be blindly retried.
 
-Administrators can use **System → GSM settings → Test SMS** to send the fixed message “SmartClassAC modem test message.” Enter an `09xxxxxxxxx` recipient, save and verify the modem port and baud rate, then explicitly confirm the recipient and port before sending. Standard SMS charges may apply. This test uses the saved modem settings independently of Faculty OTP configuration and does not issue an OTP. If delivery is uncertain, check the phone before attempting another send.
+Administrators can use **System settings → Test SMS** to send the fixed message “SmartClassAC modem test message.” Enter an `09xxxxxxxxx` recipient, save and verify the modem port and baud rate, then explicitly confirm the recipient and port before sending. Standard SMS charges may apply. This test uses the saved modem settings independently of Faculty OTP configuration and does not issue an OTP. If delivery is uncertain, check the phone before attempting another send.
 
 The Faculty OTP store (migration `036`) reserves six-digit codes for five minutes, activates them only after modem acceptance, limits requests to three per phone and ten per scanner in a five-minute fixed window, and allows at most five guesses and one successful use. Codes and phone numbers are represented by keyed digests in the OTP tables; verification rechecks the teacher's current status and phone. The device API is **disabled by default** (`FacultyOtp:EnableDeviceApi`). Firmware source `1.6.53` replaces the demo Faculty ID/PIN with an 11-digit mobile number and six-digit SMS code, verifies the signed response before allowing access, and fails closed if the API is unavailable. It has been compiled but not uploaded or hardware-tested; previously installed firmware may still have the insecure demo login.
 
 Portal teacher registration and mobile changes use a separate SMS verification
 workflow (migration `043`), not the scanner OTP endpoints. Configure the GSM
-modem under **System → GSM settings** and retain a stable random 32-byte
+modem under **System settings → GSM settings** and retain a stable random 32-byte
 Base64 `FacultyOtp:Secret` in protected configuration. The admin receives a
 six-digit code at the proposed number when creating a teacher or changing that
 number; a teacher changing their own number follows the same flow. Other profile
@@ -961,7 +963,7 @@ AC ON / AC OFF
 | **TEACHER** | Done | Create/edit; employee #; device PIN; fingerprints; active/inactive (schedule eligibility) |
 | **TEACHER_SEMESTER** | Done | Semesters + enroll/unenroll; schedules require enrollment |
 | **REGULAR / MAKEUP** | Done | `schedule_kind`; Makeup preferred when overlapping; expand-on-create recurrence through semester end |
-| **CLASSROOM** | Done | Rooms, capacity, target temperature |
+| **CLASSROOM** | Done | Rooms, target and minimum temperatures |
 | **BIOMETRIC_DEVICE** | Done | Generated `deviceId` identifies the device; assignment determines its room |
 | **AC_UNIT** | Done | Room `ac_status` + Admin remote on/off; ESP polls `/status` (~30s) |
 | **BIOMETRIC_EVENT** | Done | ESP32 / API enroll + scan → start/end class |
@@ -987,7 +989,7 @@ AC ON / AC OFF
 Teacher → TeacherSemester → RegularSchedule / MakeupClass → Classroom
 ```
 
-- **Semesters** — Admin → Semesters: create date-ranged terms, activate/deactivate, enroll teachers.
+- **Semesters** — Admin → Semesters: create and edit date-ranged terms, activate/deactivate, enroll teachers.
 - **Enrollment** — required in `teacher_semesters` before creating schedules for that semester.
 - **Schedule kind** — `Regular` or `Makeup`; date must fall inside the semester; when both are in window, **Makeup is preferred** for biometric/dashboard start.
 - **Recurring schedules** — Admin → Schedules → Add schedule: choose a start date, times, and a repeat pattern. Matching weekdays from the start date through the semester `end_date` are expanded into individual schedule rows (same subject/room/teacher/kind/times). Overlaps with existing teacher or classroom bookings are **skipped**; the toast reports how many were created vs skipped. Custom lets you pick Mon–Fri checkboxes. Makeup can still repeat, but the UI warns that makeups are usually one-off.
