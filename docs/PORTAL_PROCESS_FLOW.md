@@ -196,7 +196,8 @@ range for one teacher or all teachers as Excel or print/save-as-PDF.
 ### GSM, buzzer, and system settings
 
 - **Settings → GSM settings:** select and save the server's serial modem
-  port and baud rate. A confirmed test SMS is a real send and may incur charges.
+  port and baud rate, or send a test SMS from the same card. A confirmed test
+  SMS is a real send and may incur charges.
   Modem acceptance is not proof of handset delivery; an uncertain send should
   not be blindly retried.
 - **Settings → Buzzer settings:** configure the global enable flag, lead
