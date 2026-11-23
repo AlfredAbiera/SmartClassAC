@@ -567,7 +567,7 @@
                 <h2>@(editingTeacherId == 0 ? "New teacher account" : "Update teacher account")</h2>
                 <div class="form-grid">
                     <label>Teacher name<input @bind="newTeacherName" autocomplete="name" /></label>
-                    <label>Employee number<input @bind="newTeacherEmployeeNumber" placeholder="e.g. EMP-1042" /></label>
+                    <label>Employee number<input value="@(editingTeacherId == 0 ? "Automatically assigned on registration" : newTeacherEmployeeNumber)" readonly /></label>
                     <label>Mobile number<input @bind="newTeacherPhone" maxlength="11" inputmode="numeric" pattern="09[0-9]{9}" placeholder="09xxxxxxxxx" autocomplete="tel" /><small class="form-help">Required. Format: 09xxxxxxxxx</small></label>
                 </div>
                 @if (editingTeacherId != 0 && !originalTeacherPhoneVerified)
@@ -743,7 +743,8 @@
             @if (csvImportKind == "teachers")
             {
                 <p class="form-help">Imported mobile numbers are unverified. Edit each teacher and verify the number by SMS before using SMS authentication.</p>
-                <a download="teachers-template.csv" href="data:text/csv;charset=utf-8,name%2Cemployee_number%2Cphone%0A">Download teachers template</a>
+                <a download="teachers-template.csv" href="data:text/csv;charset=utf-8,name%2Cphone%0A">Download teachers template</a>
+                <p class="form-help">Employee numbers are generated automatically. View them in Teachers before importing schedules. Acknowledgment SMS is sent after mobile verification.</p>
             }
             else if (csvImportKind == "semesters")
             {
@@ -1999,7 +2000,9 @@
             if (!result.Succeeded) { teacherFormError = result.Error ?? "Teacher could not be saved."; return; }
             ClearTeacherForm();
             await ReloadAsync();
-            Toast(wasCreate ? "Teacher account was stored. Fingerprint enrollment is not yet available." : "Teacher account was updated.");
+            Toast(result.Warning ?? (wasCreate
+                ? $"Teacher registered. Employee number: {result.EmployeeNumber}. Acknowledgment SMS submitted."
+                : "Teacher account was updated."));
         }
         finally { teacherOtpBusy = false; }
     }

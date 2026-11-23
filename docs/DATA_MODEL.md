@@ -133,6 +133,7 @@ user and slot identifiers are globally unique in `fingerprint_templates`.
 | `schema_versions` | Applied migration version keys and script names. |
 | `user_accounts` | Administrators and teachers, profile, role, activity and password hash; later migrations add admin device PIN hash. |
 | `user_accounts.phone_verified` | Existing accounts default to verified; CSV-imported teachers are explicitly unverified until SMS confirmation. |
+| `employee_number_sequence` | Singleton counter locked in the registration transaction; generates unique `EMP-` numbers for new manual and CSV faculty without changing existing numbers (migration `051`). |
 | `password_reset_tokens` | Hashed one-use expiring web-password reset tokens, FK to account. |
 | `semesters` | Named date ranges and active flag. |
 | `teacher_semesters` | Teacher-to-semester enrollment; unique pair. |

@@ -53,12 +53,18 @@ Schedules, Attendance); and System (Devices, Monitor, Settings).
 
 ### Prepare people, rooms, and schedules
 
-1. Create teachers with their identity, required mobile number and account
-   details; active status controls eligibility. Manual registration requires a
+1. Create teachers with their identity and required mobile number. Manual and
+   CSV registration assign unique sequential employee numbers (`EMP-000001`,
+   ...); existing numbers are preserved and read-only. Active status controls
+   eligibility. Manual registration requires a
    real SMS code sent to the proposed number. Admin or teacher mobile changes
    and verification of imported numbers require another SMS code. This uses a separate portal OTP
    lifecycle from the Faculty device OTP and requires the configured GSM modem
    and `FacultyOtp:Secret`. Failed or uncertain delivery cannot authorize a save.
+   After saving a verified registration, a separate acknowledgment SMS includes
+   the employee number. Imported faculty receive it after their first mobile
+   verification. Acknowledgment failures show a warning without undoing the
+   save; they are not automatically retried.
 2. Create and activate a date-ranged semester, edit its name or dates when
    needed, then enroll teachers in it.
 3. Create classrooms with a name, target temperature and the teacher's minimum
@@ -74,14 +80,15 @@ Schedules, Attendance); and System (Devices, Monitor, Settings).
    Device assignment is managed separately.
 
 Teachers, semesters and schedules also offer separate CSV imports. The
-dashboard supplies templates; import teachers and semesters first and create
+dashboard supplies templates; teacher files use `name,phone`, with employee
+numbers assigned automatically. Import teachers and semesters first and create
 classrooms before schedules. Valid rows are saved, invalid or duplicate rows
 are reported, and successful schedules automatically enroll their teachers.
-Imported teacher numbers remain unverified until the admin edits and verifies
+Imported teacher mobile numbers remain unverified until the admin edits and verifies
 each one. They cannot be used for faculty or attendance OTP, substitute
 approval or missing-time-out reminders before verification; fingerprint
 attendance remains available. See the [README CSV import guide](../README.md#csv-import)
-for headers, recurrence, limits, and migration `049`.
+for headers, recurrence, limits, and migrations through `051`.
 
 On an individual schedule, an admin can request an SMS verification code for a
 different active teacher enrolled in that semester. The admin enters the code
@@ -217,8 +224,10 @@ its feature flags are enabled. Temperature target changes require an eligible
 active class and respect the room minimum. A displayed target is not a
 measurement.
 
-The scanner's separate Faculty menu authenticates using a mobile number and SMS
-OTP, not the web password. OTP issuance, menu access and scanner target changes
+The scanner's separate Faculty menu offers employee-number digits (for example
+`000001` or `1` for `EMP-000001`) or the registered mobile number. Both require
+an SMS OTP sent to the faculty member's verified registered mobile number,
+not the web password. OTP issuance, menu access and scanner target changes
 have separate server feature flags. A valid OTP creates a short-lived,
 scanner-bound session for schedule browsing and AC information. See
 [Firmware process flow](./FIRMWARE_PROCESS_FLOW.md#faculty-menu-and-sms-otp).

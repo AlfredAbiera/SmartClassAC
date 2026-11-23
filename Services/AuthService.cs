@@ -245,21 +245,22 @@ public sealed class AuthService : IAuthService
         {
             DisplayName = request.DisplayName.Trim(),
             Username = request.Username.Trim(),
-            EmployeeNumber = request.EmployeeNumber.Trim(),
+            EmployeeNumber = string.Empty,
             Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim(),
             Phone = MobilePhones.Normalize(request.Phone),
             DevicePin = string.IsNullOrWhiteSpace(request.DevicePin) ? null : DevicePinCodes.Normalize(request.DevicePin),
             VerificationActorId = _currentUser!.Id
         };
 
-        return await _accounts.CreateTeacherAsync(cleanRequest, _passwordHasher.Hash(request.Password));
+        var result = await _accounts.CreateTeacherAsync(cleanRequest, _passwordHasher.Hash(request.Password));
+        return await SendRegistrationAcknowledgmentAsync(result, cleanRequest.Phone);
     }
 
-    public async Task<OperationResult> CreateImportedTeacherAsync(string name, string employeeNumber, string phone)
+    public async Task<OperationResult> CreateImportedTeacherAsync(string name, string phone)
     {
         var authorization = RequireAdmin();
         if (authorization is not null) return authorization;
-        var request = new CreateTeacherRequest(name.Trim(), $"teacher-{Guid.NewGuid():N}", employeeNumber.Trim(),
+        var request = new CreateTeacherRequest(name.Trim(), $"teacher-{Guid.NewGuid():N}", string.Empty,
             null, phone.Trim(), $"A{Guid.NewGuid():N}a1");
         var validation = TeacherAccountValidation.ValidateCreate(request);
         if (!validation.Succeeded) return validation;
@@ -305,7 +306,18 @@ public sealed class AuthService : IAuthService
             VerificationActorId = _currentUser!.Id
         };
 
-        return await _accounts.UpdateAdminTeacherAsync(cleanRequest, passwordHash);
+        var result = await _accounts.UpdateAdminTeacherAsync(cleanRequest, passwordHash);
+        return await SendRegistrationAcknowledgmentAsync(result, cleanRequest.Phone);
+    }
+
+    private async Task<OperationResult> SendRegistrationAcknowledgmentAsync(OperationResult result, string phone)
+    {
+        if (!result.Succeeded || !result.SendRegistrationAcknowledgment) return result;
+        if (_services is null)
+            return result with { Warning = "Faculty saved, but the registration SMS service is unavailable." };
+        var warning = await _services.GetRequiredService<PortalMobileOtp>()
+            .SendRegistrationAcknowledgmentAsync(phone, result.EmployeeNumber);
+        return result with { Warning = warning };
     }
 
     public Task<IReadOnlyList<TeacherDirectoryEntry>> GetTeachersAsync() => _accounts.GetTeachersAsync();

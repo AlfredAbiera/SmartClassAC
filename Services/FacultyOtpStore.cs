@@ -4,10 +4,11 @@ using MySqlConnector;
 
 namespace SmartClassAC.Services;
 
-internal sealed class FacultyOtpReservation(Guid requestId, string code)
+internal sealed class FacultyOtpReservation(Guid requestId, string code, string phone)
 {
     public Guid RequestId { get; } = requestId;
     public string Code { get; } = code;
+    public string Phone { get; } = phone;
 }
 
 /// <summary>Persists the OTP lifecycle. Callers must authenticate the scanner before invoking it.</summary>
@@ -28,15 +29,16 @@ internal sealed class FacultyOtpStore
     }
 
     public async Task<FacultyOtpReservation?> ReserveAsync(
-        string deviceId, string phone, byte[] secret, CancellationToken cancellationToken = default)
+        string deviceId, string value, byte[] secret, CancellationToken cancellationToken = default, bool employeeNumber = false)
     {
         ValidateSecret(secret);
-        if (!EnrollmentMessageAuthentication.IsValidDeviceId(deviceId) || !ValidPhone(phone)) return null;
+        if (!EnrollmentMessageAuthentication.IsValidDeviceId(deviceId) ||
+            !(employeeNumber ? ValidEmployeeNumber(value) : ValidPhone(value))) return null;
         for (var attempt = 0; ; attempt++)
         {
             try
             {
-                return await ReserveOnceAsync(deviceId, phone, secret, cancellationToken);
+                return await ReserveOnceAsync(deviceId, value, secret, employeeNumber, cancellationToken);
             }
             catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.LockDeadlock && attempt < 4)
             {
@@ -45,10 +47,12 @@ internal sealed class FacultyOtpStore
         }
     }
 
+    internal static bool ValidEmployeeNumber(string? value) =>
+        value is { Length: >= 1 and <= 18 } && value.All(char.IsAsciiDigit) && value.Any(c => c != '0');
+
     private async Task<FacultyOtpReservation?> ReserveOnceAsync(
-        string deviceId, string phone, byte[] secret, CancellationToken cancellationToken)
+        string deviceId, string value, byte[] secret, bool employeeNumber, CancellationToken cancellationToken)
     {
-        var phoneKey = PhoneKey(secret, phone);
         await using var connection = new MySqlConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -75,12 +79,37 @@ internal sealed class FacultyOtpStore
             await invalidate.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        var deviceAllowed = await IncrementLimitAsync(connection, transaction, true, device.Value, phoneKey, cancellationToken);
+        var identifier = employeeNumber
+            ? "EMP-" + long.Parse(value, System.Globalization.CultureInfo.InvariantCulture)
+                .ToString("D6", System.Globalization.CultureInfo.InvariantCulture)
+            : value;
+        var deviceAllowed = await IncrementLimitAsync(connection, transaction, true, device.Value,
+            PhoneKey(secret, identifier), cancellationToken);
         if (!deviceAllowed)
         {
             await transaction.CommitAsync(cancellationToken);
             return null;
         }
+        long? teacherId = null;
+        string? phone = null;
+        await using (var teacher = connection.CreateCommand())
+        {
+            teacher.Transaction = transaction;
+            teacher.CommandText = $"""
+                SELECT id, phone FROM user_accounts
+                WHERE {(employeeNumber ? "employee_number" : "phone")} = @identifier
+                    AND role = 'Teacher' AND is_active = TRUE AND phone_verified = TRUE FOR UPDATE;
+                """;
+            teacher.Parameters.Add("@identifier", MySqlDbType.VarChar).Value = identifier;
+            await using var reader = await teacher.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                teacherId = reader.GetInt64(0);
+                phone = reader.IsDBNull(1) ? null : reader.GetString(1);
+            }
+        }
+        // Both login methods share the verified phone's request budget.
+        var phoneKey = PhoneKey(secret, phone ?? identifier);
         var phoneAllowed = await IncrementLimitAsync(connection, transaction, false, device.Value, phoneKey, cancellationToken);
         if (!phoneAllowed)
         {
@@ -88,12 +117,7 @@ internal sealed class FacultyOtpStore
             return null;
         }
 
-        await using var teacher = connection.CreateCommand();
-        teacher.Transaction = transaction;
-        teacher.CommandText = "SELECT id FROM user_accounts WHERE phone = @phone AND role = 'Teacher' AND is_active = TRUE AND phone_verified = TRUE FOR UPDATE;";
-        teacher.Parameters.Add("@phone", MySqlDbType.VarChar).Value = phone;
-        var teacherId = await teacher.ExecuteScalarAsync(cancellationToken);
-        if (teacherId is null)
+        if (teacherId is null || !ValidPhone(phone))
         {
             await transaction.CommitAsync(cancellationToken);
             return null;
@@ -119,7 +143,7 @@ internal sealed class FacultyOtpStore
         insert.Parameters.Add("@lifetime", MySqlDbType.Int32).Value = LifetimeSeconds;
         await insert.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return new FacultyOtpReservation(requestId, code);
+        return new FacultyOtpReservation(requestId, code, phone!);
     }
 
     public async Task<bool> CompleteDeliveryAsync(

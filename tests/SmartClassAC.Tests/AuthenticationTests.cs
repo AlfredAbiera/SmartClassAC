@@ -89,6 +89,7 @@ public sealed class AuthenticationTests
             "09123456789", "ValidPassword1", null, "001234");
 
         Assert.True(TeacherAccountValidation.ValidateCreate(request).Succeeded);
+        Assert.True(TeacherAccountValidation.ValidateCreate(request with { EmployeeNumber = "" }).Succeeded);
         Assert.True(MobileVerificationCodes.IsValid(request.RegistrationOtp));
         Assert.Equal(PasswordPolicy.RequirementMessage,
             TeacherAccountValidation.ValidateCreate(request with { Password = "001234" }).Error);

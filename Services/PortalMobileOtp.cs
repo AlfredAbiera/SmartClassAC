@@ -9,6 +9,26 @@ internal sealed class PortalMobileOtp(IConfiguration configuration, GsmSmsTransp
     private string ConnectionString => configuration.GetConnectionString("SmartClassMariaDb")
         ?? throw new InvalidOperationException("Set ConnectionStrings:SmartClassMariaDb for mobile verification.");
 
+    internal async Task<string?> SendRegistrationAcknowledgmentAsync(string phone, string? employeeNumber)
+    {
+        GsmSmsResult result;
+        try
+        {
+            var settings = await new GsmModemSettingsStore(configuration).GetAsync();
+            result = await transport.SendRegistrationAcknowledgmentAsync(settings, phone, employeeNumber);
+        }
+        catch (Exception exception) when (exception is MySqlException or InvalidOperationException)
+        {
+            logger.LogError(exception, "Faculty saved, but registration SMS could not be submitted.");
+            return "Faculty saved, but the acknowledgment SMS could not be sent. Check the modem and configuration; do not register the faculty again.";
+        }
+        if (result == GsmSmsResult.Accepted) return null;
+        logger.LogWarning("Faculty saved, but registration SMS submission returned {Result}.", result);
+        return result == GsmSmsResult.DeliveryUnknown
+            ? "Faculty saved, but acknowledgment SMS delivery is uncertain. Check the phone; do not register the faculty again."
+            : "Faculty saved, but the acknowledgment SMS could not be sent. Check the modem; do not register the faculty again.";
+    }
+
     internal async Task<OperationResult> IssueAsync(long actorId, string purpose, long targetId, string phone,
         string? binding = null, DateOnly? substitutionDate = null, TimeOnly? substitutionStart = null)
     {

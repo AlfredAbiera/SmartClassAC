@@ -129,9 +129,15 @@ restrict a mapping to its scanner, but do not replicate a model.
 
 ## Faculty menu and SMS OTP
 
-1. Select Faculty and enter the 11-digit mobile number; the scanner requests an
-   OTP through the server. The server's GSM transport, not the scanner buzzer
-   or TFT receiver, sends the SMS.
+1. Select Faculty, then **Employee no.** or **Mobile number** (`*`/`#` to
+   choose, `0` to select; hold `0` to return). Enter only the numeric suffix
+   of the generated employee number (`000001` or `1` for `EMP-000001`), or
+   the registered 11-digit `09xxxxxxxxx` mobile number, then press `#`.
+   Both options request an OTP sent to the active faculty member's verified
+   registered mobile number; neither identifier alone grants access. Employee
+   entry supports up to 18 digits; existing nonstandard employee numbers can
+   still use mobile login. The server's GSM transport, not the scanner buzzer
+   or TFT receiver, sends the SMS. Both methods share the phone's request limit.
 2. Enter the six-digit OTP. The scanner verifies the authenticated server
    response before granting menu access. The server limits requests and guesses;
    OTPs expire after five minutes and are single-use.

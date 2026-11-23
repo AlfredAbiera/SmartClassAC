@@ -203,14 +203,16 @@ public sealed class FacultyOtpStoreTests
             var (auth, serial, services) = await CsvAuthFixture(connection, secret);
             await using (services)
             {
-                var result = await auth.ImportCsvAsync("teachers", "\uFEFFname,employee_number,phone\n\"Doe, Jane\",EMP42,09912345678\nBad,EMP43,invalid\nDuplicate,EMP42,09999999999\nShort,EMP44\n");
+                var result = await auth.ImportCsvAsync("teachers", "\uFEFFname,phone\n\"Doe, Jane\",09912345678\nBad,invalid\nDuplicate,09912345678\nShort\n");
                 Assert.Null(result.Error);
                 Assert.Equal(1, result.ImportedRows);
                 Assert.Equal(3, result.SkippedRows);
                 Assert.Contains(result.Errors, error => error.StartsWith("Row 5:", StringComparison.Ordinal));
-                var teacher = Assert.Single(await auth.GetTeachersAsync(), t => t.EmployeeNumber == "EMP42");
+                var teacher = Assert.Single(await auth.GetTeachersAsync(), t => t.Phone == "09912345678");
+                Assert.Matches("^EMP-[0-9]{6,}$", teacher.EmployeeNumber!);
                 Assert.Equal("Doe, Jane", teacher.DisplayName);
                 Assert.False(teacher.PhoneVerified);
+                Assert.Empty(serial.Messages);
                 Assert.Null(await store.ReserveAsync("1000000001", teacher.Phone!, secret));
 
                 var profile = (await auth.GetTeacherProfileForAdminAsync(teacher.Id))!;
@@ -221,11 +223,88 @@ public sealed class FacultyOtpStoreTests
                 var wrong = serial.Code == "000000" ? "000001" : "000000";
                 Assert.False((await auth.UpdateAdminTeacherAsync(update with { MobileOtp = wrong })).Succeeded);
                 Assert.False((await auth.GetTeachersAsync()).Single(t => t.Id == teacher.Id).PhoneVerified);
-                Assert.True((await auth.UpdateAdminTeacherAsync(update with { MobileOtp = serial.Code })).Succeeded);
+                var verified = await auth.UpdateAdminTeacherAsync(update with { MobileOtp = serial.Code });
+                Assert.True(verified.Succeeded);
+                Assert.Null(verified.Warning);
+                Assert.Contains(serial.Messages, message => message.Contains($"employee number is {teacher.EmployeeNumber}.", StringComparison.Ordinal));
                 Assert.True((await auth.GetTeachersAsync()).Single(t => t.Id == teacher.Id).PhoneVerified);
+                var messages = serial.Messages.Count;
+                Assert.True((await auth.UpdateAdminTeacherAsync(update)).Succeeded);
+                Assert.Equal(messages, serial.Messages.Count);
                 Assert.NotNull(await store.ReserveAsync("1000000001", teacher.Phone!, secret));
             }
         });
+    }
+
+    [MariaDbFact]
+    public async Task EmployeeNumberAllocationIsUniqueUnderConcurrentImportsAndPreservesLegacyNumbers()
+    {
+        await WithDatabase(async (_, connection, secret) =>
+        {
+            await Execute(connection, """
+                INSERT INTO user_accounts (username, display_name, employee_number, password_hash, role)
+                VALUES ('legacy', 'Legacy', 'EMP-000001', 'hash', 'Teacher');
+                """);
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString
+            }).Build();
+            var repository = new MariaDbUserAccountRepository(config, Options.Create(new SchoolTimeOptions()));
+            var results = await Task.WhenAll(Enumerable.Range(0, 6).Select(i =>
+                repository.CreateImportedTeacherAsync(new CreateTeacherRequest($"Faculty {i}", $"faculty{i}", "",
+                    null, $"0991234567{i}", "ValidPassword1", $"91{i:D4}"), "hash")));
+            Assert.All(results, result => Assert.True(result.Succeeded, result.Error));
+            Assert.Equal(6, results.Select(result => result.EmployeeNumber).Distinct().Count());
+            Assert.Equal(Enumerable.Range(2, 6).Select(i => $"EMP-{i:D6}"),
+                results.Select(result => result.EmployeeNumber).OrderBy(number => number));
+            var legacy = Assert.Single(await repository.GetTeachersAsync(), teacher => teacher.Username == "legacy");
+            Assert.Equal("EMP-000001", legacy.EmployeeNumber);
+            Assert.False((await repository.UpdateAdminTeacherAsync(new UpdateAdminTeacherRequest(
+                legacy.Id, legacy.DisplayName, legacy.Username, "EMP-999999", null, "09912345679", null, null), null)).Succeeded);
+            Assert.Equal("EMP-000001", (await repository.GetTeacherProfileAsync(legacy.Id))!.EmployeeNumber);
+        });
+    }
+
+    [MariaDbFact]
+    public async Task RegistrationAcknowledgmentUsesCommittedGeneratedNumberAndDoesNotUndoSaveOnSmsFailure()
+    {
+        foreach (var failSms in new[] { false, true })
+        {
+            await WithDatabase(async (_, connection, secret) =>
+            {
+                await Execute(connection, """
+                    INSERT INTO user_accounts (id, username, display_name, password_hash, role, is_active)
+                    VALUES (2, 'admin', 'Admin', 'hash', 'Admin', 1);
+                    INSERT INTO gsm_modem_settings (singleton_id, port_name, baud_rate) VALUES (1, 'COM42', 9600);
+                    """);
+                var (auth, serial, services) = await CsvAuthFixture(connection, secret);
+                await using (services)
+                {
+                    const string phone = "09912345678";
+                    Assert.True((await auth.RequestMobileOtpAsync(null, phone)).Succeeded);
+                    var code = serial.Code!;
+                    var request = new CreateTeacherRequest("Faculty", "new-faculty", "MANUAL-IGNORED", null,
+                        phone, "ValidPassword1", null, code);
+                    var beforeSave = serial.Messages.Count;
+                    Assert.False((await auth.CreateTeacherAsync(request with { RegistrationOtp = code == "000000" ? "000001" : "000000" })).Succeeded);
+                    Assert.Equal(beforeSave, serial.Messages.Count);
+                    serial.FailAfterSubmission = failSms;
+                    var result = await auth.CreateTeacherAsync(request);
+                    Assert.True(result.Succeeded, result.Error);
+                    Assert.Matches("^EMP-[0-9]{6,}$", result.EmployeeNumber!);
+                    var teacher = Assert.Single(await auth.GetTeachersAsync(), t => t.Phone == phone);
+                    Assert.Equal(result.EmployeeNumber, teacher.EmployeeNumber);
+                    Assert.True(teacher.PhoneVerified);
+                    Assert.Equal($"You are successfully registered in SmartClassAC. Your employee number is {teacher.EmployeeNumber}.\u001a",
+                        serial.Messages[^1]);
+                    if (failSms) Assert.Contains("uncertain", result.Warning);
+                    else Assert.Null(result.Warning);
+                    var sent = serial.Messages.Count;
+                    Assert.False((await auth.CreateTeacherAsync(request)).Succeeded);
+                    Assert.Equal(sent, serial.Messages.Count);
+                }
+            });
+        }
     }
 
     [MariaDbFact]
@@ -247,11 +326,11 @@ public sealed class FacultyOtpStoreTests
                 Assert.Equal(1, semesters.ImportedRows);
                 Assert.Equal(1, semesters.SkippedRows);
                 var teachers = await auth.ImportCsvAsync("teachers",
-                    "name,employee_number,phone\nTeacher A,EMP-A,09912345678\nTeacher B,EMP-B,09912345679\n");
+                    "name,phone\nTeacher A,09912345678\nTeacher B,09912345679\n");
                 Assert.Equal(2, teachers.ImportedRows);
                 var semester = (await auth.GetSemestersAsync()).Single(s => s.Name == "Term");
-                var teacherA = (await auth.GetTeachersAsync()).Single(t => t.EmployeeNumber == "EMP-A");
-                var teacherB = (await auth.GetTeachersAsync()).Single(t => t.EmployeeNumber == "EMP-B");
+                var teacherA = (await auth.GetTeachersAsync()).Single(t => t.DisplayName == "Teacher A");
+                var teacherB = (await auth.GetTeachersAsync()).Single(t => t.DisplayName == "Teacher B");
                 await Execute(connection, $"""
                     INSERT INTO teacher_semesters (teacher_account_id, semester_id) VALUES (1, {semester.Id});
                     INSERT INTO class_schedules (teacher_account_id, original_teacher_account_id, classroom_id,
@@ -259,9 +338,9 @@ public sealed class FacultyOtpStoreTests
                     VALUES (1, 1, 1, 'Room A', {semester.Id}, 'Regular', 'Existing', '{date.AddDays(7):yyyy-MM-dd}', '09:00:00', '10:00:00');
                     """);
                 var csv = "employee_number,semester,classroom,subject,date,start_time,end_time,recurrence,weekdays,kind,replaces_schedule_id\n" +
-                    $"EMP-A,Term,Room A,Math,{date:yyyy-MM-dd},09:00,10:00,Weekly,,Regular,\n" +
-                    $"EMP-B,Term,Room A,Conflict,{date.AddDays(7):yyyy-MM-dd},09:00,10:00,None,,Regular,\n" +
-                    $"EMP-B,Term,Missing,Class,{date:yyyy-MM-dd},11:00,12:00,None,,Regular,\n";
+                    $"{teacherA.EmployeeNumber},Term,Room A,Math,{date:yyyy-MM-dd},09:00,10:00,Weekly,,Regular,\n" +
+                    $"{teacherB.EmployeeNumber},Term,Room A,Conflict,{date.AddDays(7):yyyy-MM-dd},09:00,10:00,None,,Regular,\n" +
+                    $"{teacherB.EmployeeNumber},Term,Missing,Class,{date:yyyy-MM-dd},11:00,12:00,None,,Regular,\n";
                 var schedules = await auth.ImportCsvAsync("schedules", csv);
                 Assert.Null(schedules.Error);
                 Assert.Equal(1, schedules.ImportedRows);
@@ -273,27 +352,27 @@ public sealed class FacultyOtpStoreTests
                 Assert.DoesNotContain(enrolled, e => e.TeacherAccountId == teacherB.Id);
                 var header = "employee_number,semester,classroom,subject,date,start_time,end_time,recurrence,weekdays,kind,replaces_schedule_id\n";
                 var single = await auth.ImportCsvAsync("schedules", header +
-                    $"EMP-B,Term,Room A,Original,{date:yyyy-MM-dd},11:00,12:00,None,,Regular,\n");
+                    $"{teacherB.EmployeeNumber},Term,Room A,Original,{date:yyyy-MM-dd},11:00,12:00,None,,Regular,\n");
                 Assert.Equal(1, single.CreatedRecords);
                 var original = Assert.Single(await auth.GetSchedulesAsync(), s => s.SubjectName == "Original");
                 var makeup = await auth.ImportCsvAsync("schedules", header +
-                    $"EMP-A,Term,Room A,Makeup,{date:yyyy-MM-dd},13:00,14:00,None,,Makeup,{original.Id}\n");
+                    $"{teacherA.EmployeeNumber},Term,Room A,Makeup,{date:yyyy-MM-dd},13:00,14:00,None,,Makeup,{original.Id}\n");
                 Assert.Equal(1, makeup.CreatedRecords);
                 Assert.Contains(await auth.GetSchedulesAsync(), s => s.SubjectName == "Makeup" && s.ReplacesScheduleId == original.Id);
                 var lateMakeup = await auth.ImportCsvAsync("schedules", header +
-                    $"EMP-A,Term,Room A,Late,{date.AddDays(7):yyyy-MM-dd},13:00,14:00,None,,Makeup,{original.Id}\n");
+                    $"{teacherA.EmployeeNumber},Term,Room A,Late,{date.AddDays(7):yyyy-MM-dd},13:00,14:00,None,,Makeup,{original.Id}\n");
                 Assert.Equal(1, lateMakeup.SkippedRows);
                 Assert.Contains(lateMakeup.Errors, error => error.Contains("next 7 days", StringComparison.Ordinal));
                 var monday = date.AddDays(((int)DayOfWeek.Monday - (int)date.DayOfWeek + 7) % 7);
                 var custom = await auth.ImportCsvAsync("schedules", header +
-                    $"EMP-A,Term,Room A,Custom,{monday:yyyy-MM-dd},16:00,17:00,Custom,Mon,Regular,\n");
+                    $"{teacherA.EmployeeNumber},Term,Room A,Custom,{monday:yyyy-MM-dd},16:00,17:00,Custom,Mon,Regular,\n");
                 Assert.Equal(monday == date ? 3 : 2, custom.CreatedRecords);
                 Assert.Equal(0, custom.SkippedRows);
                 var badHeader = await auth.ImportCsvAsync("teachers", "name,name,phone\nBad,EMP-C,09912345670");
                 Assert.NotNull(badHeader.Error);
-                var malformed = await auth.ImportCsvAsync("teachers", "name,employee_number,phone\nGood,EMP-C,09912345670\n\"unterminated,EMP-D,09912345671");
+                var malformed = await auth.ImportCsvAsync("teachers", "name,phone\nGood,09912345670\n\"unterminated,09912345671");
                 Assert.NotNull(malformed.Error);
-                Assert.DoesNotContain(await auth.GetTeachersAsync(), t => t.EmployeeNumber == "EMP-C");
+                Assert.DoesNotContain(await auth.GetTeachersAsync(), t => t.Phone == "09912345670");
                 await auth.RestoreUserAsync(teacherA.Id);
                 Assert.NotNull((await auth.ImportCsvAsync("semesters", $"name,start_date,end_date\nNo,{date:yyyy-MM-dd},{date:yyyy-MM-dd}")).Error);
             }
@@ -1964,10 +2043,11 @@ public sealed class FacultyOtpStoreTests
             Assert.True((await repository.CreateTeacherAsync(create, "hash")).Succeeded);
             Assert.False((await repository.CreateTeacherAsync(create with { Username = "new2", EmployeeNumber = "EMP3" }, "hash")).Succeeded);
             Assert.True((await otp.IssueAsync(2, "admin", 1, "09999999997")).Succeeded);
-            var update = new UpdateAdminTeacherRequest(1, "Teacher", "teacher", "EMP1", null,
+            var update = new UpdateAdminTeacherRequest(1, "Teacher", "teacher", "", null,
                 "09999999997", null, null, serial.Code, 2);
             Assert.False((await repository.UpdateAdminTeacherAsync(update with { MobileOtp = "000000" == serial.Code ? "000001" : "000000" }, null)).Succeeded);
             Assert.True((await repository.UpdateAdminTeacherAsync(update, null)).Succeeded);
+            Assert.Null((await repository.GetTeacherProfileAsync(1))!.EmployeeNumber);
             Assert.True((await otp.IssueAsync(1, "self", 1, "09999999996")).Succeeded);
             var profile = new UpdateTeacherProfileRequest("Teacher", null, "09999999996", "1234", null, serial.Code);
             Assert.True((await repository.UpdateTeacherProfileAsync(1, profile, null)).Succeeded);
@@ -1979,6 +2059,70 @@ public sealed class FacultyOtpStoreTests
             await using var count = new MySqlCommand("SELECT COUNT(*) FROM portal_mobile_otp_requests WHERE actor_id=2 AND purpose='create';", connection);
             Assert.Equal(0L, Convert.ToInt64(await count.ExecuteScalarAsync()));
         });
+    }
+
+    [MariaDbFact]
+    public async Task EmployeeNumberOtpUsesVerifiedPhoneAndSharesMobileRequestLimit()
+    {
+        await WithDatabase(async (store, connection, secret) =>
+        {
+            await Execute(connection, """
+                UPDATE user_accounts SET employee_number='EMP-000001' WHERE id=1;
+                INSERT INTO gsm_modem_settings (singleton_id, port_name, baud_rate) VALUES (1, 'COM42', 9600);
+                """);
+            var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString
+            }).Build();
+            var serial = new FakeSerial();
+            var issuer = new FacultyOtpIssuer(store, new GsmModemSettingsStore(configuration), new GsmSmsTransport(_ => serial));
+            Assert.Null(await store.VerifyAndCreateSessionAsync("1000000001", "000001", secret));
+            Assert.Equal(FacultyOtpIssueResult.Issued,
+                (await issuer.IssueAsync("1000000001", "000001", secret, employeeNumber: true)).Result);
+            Assert.Equal("AT+CMGS=\"+639123456789\"\r", serial.LastRecipientCommand);
+            var firstCode = serial.Code!;
+            var token = await store.VerifyAndCreateSessionAsync("1000000001", firstCode, secret);
+            Assert.NotNull(token);
+            Assert.Null(await store.VerifyAndCreateSessionAsync("1000000001", firstCode, secret));
+            Assert.Equal(FacultyOtpIssueResult.Issued,
+                (await issuer.IssueAsync("1000000001", "09123456789", secret)).Result);
+            Assert.Equal(FacultyOtpIssueResult.Issued,
+                (await issuer.IssueAsync("1000000001", "1", secret, employeeNumber: true)).Result);
+            Assert.Equal(FacultyOtpIssueResult.Denied,
+                (await issuer.IssueAsync("1000000001", "000001", secret, employeeNumber: true)).Result);
+            Assert.Equal(3, serial.Messages.Count);
+        });
+    }
+
+    [MariaDbFact]
+    public async Task EmployeeNumberCannotIssueOtpForIneligibleFaculty()
+    {
+        await WithDatabase(async (store, connection, secret) =>
+        {
+            foreach (var change in new[] { "phone_verified=0", "is_active=0", "role='Admin'", "phone=NULL", "employee_number='EMP-000002'" })
+            {
+                await Execute(connection, $"""
+                    UPDATE user_accounts SET employee_number='EMP-000001', phone='09123456789',
+                        phone_verified=1, is_active=1, role='Teacher' WHERE id=1;
+                    UPDATE user_accounts SET {change} WHERE id=1;
+                    DELETE FROM faculty_otp_device_limits;
+                    DELETE FROM faculty_otp_phone_limits;
+                    """);
+                Assert.Null(await store.ReserveAsync("1000000001", "000001", secret, employeeNumber: true));
+            }
+        });
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("000000")]
+    [InlineData("EMP-000001")]
+    [InlineData("1.0")]
+    [InlineData(" 1")]
+    [InlineData("1234567890123456789")]
+    public void EmployeeNumberLoginRejectsInvalidNumericInput(string value)
+    {
+        Assert.False(FacultyOtpStore.ValidEmployeeNumber(value));
     }
 
     [MariaDbFact]
@@ -2150,6 +2294,30 @@ public sealed class FacultyOtpStoreTests
                     Convert.FromHexString(verify.Challenge!), Encoding.ASCII.GetBytes(signed.Body), Convert.FromHexString(signed.Tag)));
                 using var replay = await client.PostAsJsonAsync("api/device/faculty/otp/verify", verify);
                 Assert.Equal(HttpStatusCode.Forbidden, replay.StatusCode);
+
+                await Execute(connection, "UPDATE user_accounts SET employee_number='EMP-000001' WHERE id=1;");
+                var employee = await MakeRequest("employee/request", "faculty_otp_employee_request", "000001");
+                using var wrongPurpose = await client.PostAsJsonAsync("api/device/faculty/otp/verify", employee);
+                Assert.Equal(HttpStatusCode.Forbidden, wrongPurpose.StatusCode);
+                using var alteredEmployee = await client.PostAsJsonAsync("api/device/faculty/otp/employee/request",
+                    employee with { Value = "000002" });
+                Assert.Equal(HttpStatusCode.Forbidden, alteredEmployee.StatusCode);
+                using var employeeSent = await client.PostAsJsonAsync("api/device/faculty/otp/employee/request", employee);
+                Assert.Equal(HttpStatusCode.OK, employeeSent.StatusCode);
+                var employeeResponse = Assert.IsType<FacultyOtpResponse>(await employeeSent.Content.ReadFromJsonAsync<FacultyOtpResponse>());
+                Assert.Equal(Convert.ToHexString(SHA256.HashData(Encoding.ASCII.GetBytes("000001\n"))).ToLowerInvariant()
+                    + "\nprocessed\n", employeeResponse.Body);
+                Assert.True(EnrollmentMessageAuthentication.VerifyTag(key, true, "1000000001", "faculty_otp_employee_request",
+                    Convert.FromHexString(employee.Challenge!), Encoding.ASCII.GetBytes(employeeResponse.Body), Convert.FromHexString(employeeResponse.Tag)));
+                Assert.NotNull(await new FacultyOtpStore(app.Configuration).VerifyAndCreateSessionAsync("1000000001", serial.Code!, secret));
+                using var employeeReplay = await client.PostAsJsonAsync("api/device/faculty/otp/employee/request", employee);
+                Assert.Equal(HttpStatusCode.Forbidden, employeeReplay.StatusCode);
+                var messageCount = serial.Messages.Count;
+                var unknown = await MakeRequest("employee/request", "faculty_otp_employee_request", "000099");
+                using var unknownResult = await client.PostAsJsonAsync("api/device/faculty/otp/employee/request", unknown);
+                Assert.Equal(HttpStatusCode.OK, unknownResult.StatusCode);
+                Assert.EndsWith("\nprocessed\n", (await unknownResult.Content.ReadFromJsonAsync<FacultyOtpResponse>())!.Body);
+                Assert.Equal(messageCount, serial.Messages.Count);
             }
             finally
             {
@@ -2164,16 +2332,23 @@ public sealed class FacultyOtpStoreTests
     private sealed class FakeSerial : IGsmSerialConnection
     {
         private readonly Queue<char> _input = new();
-        public bool FailAfterSubmission { get; init; }
+        public bool FailAfterSubmission { get; set; }
         public string? Code { get; private set; }
+        public string? LastRecipientCommand { get; private set; }
+        public List<string> Messages { get; } = new();
         public void Open() { }
         public void DiscardInput() => _input.Clear();
         public void Write(string value)
         {
             string response;
-            if (value.StartsWith("AT+CMGS=", StringComparison.Ordinal)) response = "\r\n> ";
+            if (value.StartsWith("AT+CMGS=", StringComparison.Ordinal))
+            {
+                LastRecipientCommand = value;
+                response = "\r\n> ";
+            }
             else if (value.EndsWith('\u001a'))
             {
+                Messages.Add(value);
                 var match = System.Text.RegularExpressions.Regex.Match(value, @"\b[0-9]{6}\b");
                 Code = match.Success ? match.Value : null;
                 response = FailAfterSubmission ? "" : "\r\n+CMGS: 1\r\nOK\r\n";

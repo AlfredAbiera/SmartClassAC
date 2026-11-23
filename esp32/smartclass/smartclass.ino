@@ -68,6 +68,7 @@ struct EnrollmentSensorAdapter;
 // Also print/show via Serial boot banner, LCD splash, and STATUS command.
 // Changelog:
 //
+//   1.6.67 2026-11-23  Offer employee digits or mobile number for Faculty SMS OTP.
 //   1.6.66 2026-11-23  Add opt-in guarded individual fingerprint deletion.
 //   1.6.65 2026-11-08  Add admin-approved attendance SMS code entry.
 //   1.6.64 2026-11-08  Add USB-only orphan retirement with verified sensor clear.
@@ -89,7 +90,7 @@ struct EnrollmentSensorAdapter;
 //   1.6.48 2026-11-08  Authenticate Faculty login with server SMS OTP.
 //   1.6.47 2026-11-08  Remove boot SMS sending.
 // ---------------------------------------------------------------------------
-const char* FIRMWARE_VERSION = "1.6.66";
+const char* FIRMWARE_VERSION = "1.6.67";
 
 // USB Serial Monitor MUST match this baud (115200). Boxes/diamonds = wrong baud
 // or fingerprint TX wired to GPIO1/3 (USB UART) instead of FINGERPRINT_RX/TX.
@@ -191,6 +192,7 @@ enum DisplayState {
   STATE_ENROLL,
   STATE_MENU_ROLE,
   STATE_MENU_ADMIN_PIN,
+  STATE_MENU_FACULTY_LOGIN_METHOD,
   STATE_MENU_FACULTY_ID,
   STATE_MENU_FACULTY_PIN,
   STATE_MENU_ATTENDANCE_OTP,
@@ -381,7 +383,7 @@ long roomOptionIds[MAX_ROOM_OPTIONS];
 char roomOptionLabels[MAX_ROOM_OPTIONS + 1][15];
 uint8_t roomOptionCount = 0;
 bool roomOptionHasCurrent = false;
-const uint8_t MENU_ENTRY_MAX = 11;
+const uint8_t MENU_ENTRY_MAX = 18;
 const uint8_t MENU_SHORT_ENTRY_MAX = 6;
 const unsigned long MENU_IDLE_MS = 30000;
 const unsigned long FACULTY_OTP_IDLE_MS = 180000;
@@ -391,6 +393,7 @@ const unsigned int MENU_BACK_HOLD_MS = 1000;
 char entryBuf[MENU_ENTRY_MAX + 1];
 uint8_t entryLen = 0;
 char facultyIdBuf[MENU_ENTRY_MAX + 1];
+bool facultyLoginByEmployeeNumber = false;
 char facultySession[65] = "";
 FacultyMenu::Schedule facultySchedule{};
 FacultyMenu::AcInfo facultyAcInfo{};
@@ -2051,11 +2054,12 @@ void enterScanningMode() {
 // ---------------------------------------------------------------------------
 // Keypad menu. # from the ready screen asks Admin vs Faculty teacher.
 // Lists use * previous, # next, 0 select, and hold 0 to go back.
-// Admin: PIN. Faculty: mobile number then SMS OTP.
+// Admin: PIN. Faculty: employee number or mobile number, then SMS OTP.
 // ---------------------------------------------------------------------------
 bool isKeypadMenuState(DisplayState state) {
   return state == STATE_MENU_ROLE ||
          state == STATE_MENU_ADMIN_PIN ||
+         state == STATE_MENU_FACULTY_LOGIN_METHOD ||
          state == STATE_MENU_FACULTY_ID ||
          state == STATE_MENU_FACULTY_PIN ||
          state == STATE_MENU_ATTENDANCE_OTP ||
@@ -2089,7 +2093,7 @@ void formatKeypadEntryLine(char* out, size_t outLen, bool mask) {
   }
   vis[n] = '\0';
   if (currentDisplayState == STATE_MENU_FACULTY_ID)
-    snprintf(out, outLen, "%-11s *#", vis);
+    snprintf(out, outLen, "%-11s *#", vis + (n > 11 ? n - 11 : 0));
   else
     snprintf(out, outLen, "%-6s *del #ok", vis);
 }
@@ -2103,6 +2107,7 @@ void renderEntryLine() {
 
 bool isPickerMenu(DisplayState state) {
   return state == STATE_MENU_ROLE ||
+         state == STATE_MENU_FACULTY_LOGIN_METHOD ||
          state == STATE_MENU_ADMIN ||
          state == STATE_MENU_FACULTY ||
          state == STATE_MENU_FACULTY_SCHEDULE ||
@@ -2113,6 +2118,9 @@ bool isPickerMenu(DisplayState state) {
 uint8_t menuItemCount(DisplayState state) {
   if (state == STATE_MENU_ROLE) {
     return 3;
+  }
+  if (state == STATE_MENU_FACULTY_LOGIN_METHOD) {
+    return 2;
   }
   if (state == STATE_MENU_ADMIN) {
     return 6 + (ENROLLMENT_WRITES_ENABLED && REPLACEMENT_WRITES_ENABLED ? 1 : 0) +
@@ -2130,6 +2138,9 @@ uint8_t menuItemCount(DisplayState state) {
 const char* menuItemLabel(DisplayState state, uint8_t index) {
   if (state == STATE_MENU_ROLE) {
     return index == 0 ? "Admin" : index == 1 ? "Faculty" : "Attendance OTP";
+  }
+  if (state == STATE_MENU_FACULTY_LOGIN_METHOD) {
+    return index == 0 ? "Employee no." : "Mobile number";
   }
   if (state == STATE_MENU_ADMIN) {
     if (index == 0) return "Assign room";
@@ -2173,6 +2184,7 @@ void renderMenu() {
   lcd.clear();
   switch (currentDisplayState) {
     case STATE_MENU_ROLE:
+    case STATE_MENU_FACULTY_LOGIN_METHOD:
     case STATE_MENU_ADMIN:
     case STATE_MENU_FACULTY:
     case STATE_MENU_ROOMS:
@@ -2192,7 +2204,7 @@ void renderMenu() {
       printLcdRow(1, "*Cancel #Confirm");
       break;
     case STATE_MENU_FACULTY_ID:
-      printLcdRow(0, "Mobile 09...:");
+      printLcdRow(0, facultyLoginByEmployeeNumber ? "Employee digits:" : "Mobile 09...:");
       renderEntryLine();
       break;
     case STATE_MENU_FACULTY_PIN:
@@ -2329,6 +2341,12 @@ void menuMove(int delta) {
 }
 
 void exitPickerMenu() {
+  if (currentDisplayState == STATE_MENU_FACULTY_LOGIN_METHOD) {
+    currentDisplayState = STATE_MENU_ROLE;
+    menuIndex = 1;
+    renderMenu();
+    return;
+  }
   if (currentDisplayState == STATE_MENU_FACULTY_SCHEDULE || currentDisplayState == STATE_MENU_FACULTY_AC) {
     currentDisplayState = STATE_MENU_FACULTY;
     menuIndex = 0;
@@ -2469,10 +2487,19 @@ void selectHighlightedItem() {
       currentDisplayState = STATE_MENU_ADMIN_PIN;
     } else if (menuIndex == 1) {
       memset(facultyIdBuf, 0, sizeof(facultyIdBuf));
-      currentDisplayState = STATE_MENU_FACULTY_ID;
+      currentDisplayState = STATE_MENU_FACULTY_LOGIN_METHOD;
+      menuIndex = 0;
     } else {
       currentDisplayState = STATE_MENU_ATTENDANCE_OTP;
     }
+    renderMenu();
+    return;
+  }
+
+  if (currentDisplayState == STATE_MENU_FACULTY_LOGIN_METHOD) {
+    facultyLoginByEmployeeNumber = menuIndex == 0;
+    clearKeypadEntry();
+    currentDisplayState = STATE_MENU_FACULTY_ID;
     renderMenu();
     return;
   }
@@ -2522,7 +2549,8 @@ void selectHighlightedItem() {
 }
 
 void menuAppendDigit(char key) {
-  uint8_t limit = currentDisplayState == STATE_MENU_FACULTY_ID ? MENU_ENTRY_MAX : MENU_SHORT_ENTRY_MAX;
+  uint8_t limit = currentDisplayState == STATE_MENU_FACULTY_ID
+      ? (facultyLoginByEmployeeNumber ? MENU_ENTRY_MAX : 11) : MENU_SHORT_ENTRY_MAX;
   if (entryLen >= limit) {
     return;
   }
@@ -2550,6 +2578,13 @@ void menuBackspace() {
 
   if (currentDisplayState == STATE_MENU_PAIR_CODE) {
     currentDisplayState = isDevicePaired() ? STATE_MENU_ADMIN : STATE_MENU_ROLE;
+    renderMenu();
+    return;
+  }
+
+  if (currentDisplayState == STATE_MENU_FACULTY_ID) {
+    currentDisplayState = STATE_MENU_FACULTY_LOGIN_METHOD;
+    menuIndex = facultyLoginByEmployeeNumber ? 0 : 1;
     renderMenu();
     return;
   }
@@ -2737,8 +2772,9 @@ void submitPairCode() {
 }
 
 void submitFacultyId() {
-  if (!FacultyOtp::validValue(entryBuf, true)) {
-    showMenuNotice("Use 09 + 9 digits", "Then press #", STATE_MENU_FACULTY_ID, false, false);
+  if (!(facultyLoginByEmployeeNumber ? FacultyOtp::validEmployeeNumber(entryBuf) : FacultyOtp::validValue(entryBuf, true))) {
+    showMenuNotice(facultyLoginByEmployeeNumber ? "Use EMP- digits" : "Use 09 + 9 digits",
+                   "Then press #", STATE_MENU_FACULTY_ID, false, false);
     return;
   }
   lcd.clear();
@@ -2787,11 +2823,12 @@ bool postFacultyOtpJson(const char* path, const String& body, String& response, 
 }
 
 bool requestFacultyOtp(bool issuing, const char* value, FacultyOtp::Result& result, bool attendance) {
-  if (!isDevicePaired() || !FacultyOtp::validValue(value, issuing)) return false;
+  bool employeeNumber = issuing && !attendance && facultyLoginByEmployeeNumber;
+  if (!isDevicePaired() || !(employeeNumber ? FacultyOtp::validEmployeeNumber(value) : FacultyOtp::validValue(value, issuing))) return false;
   if (attendance && issuing) return false;
-  const char* operation = attendance ? "attendance_otp_verify" : issuing ? "faculty_otp_request" : "faculty_otp_verify";
-  const char* challengePath = attendance ? "/api/device/attendance/otp/challenge" : issuing ? "/api/device/faculty/otp/request/challenge" : "/api/device/faculty/otp/verify/challenge";
-  const char* requestPath = attendance ? "/api/device/attendance/otp/verify" : issuing ? "/api/device/faculty/otp/request" : "/api/device/faculty/otp/verify";
+  const char* operation = attendance ? "attendance_otp_verify" : employeeNumber ? "faculty_otp_employee_request" : issuing ? "faculty_otp_request" : "faculty_otp_verify";
+  const char* challengePath = attendance ? "/api/device/attendance/otp/challenge" : employeeNumber ? "/api/device/faculty/otp/employee/request/challenge" : issuing ? "/api/device/faculty/otp/request/challenge" : "/api/device/faculty/otp/verify/challenge";
+  const char* requestPath = attendance ? "/api/device/attendance/otp/verify" : employeeNumber ? "/api/device/faculty/otp/employee/request" : issuing ? "/api/device/faculty/otp/request" : "/api/device/faculty/otp/verify";
   String response;
   int code = -1;
   String challengePayload = String("{\"deviceId\":\"") + deviceId + "\"}";
@@ -2802,7 +2839,7 @@ bool requestFacultyOtp(bool issuing, const char* value, FacultyOtp::Result& resu
   uint8_t key[EnrollmentAuth::KeySize] = {};
   uint8_t requestTag[EnrollmentAuth::TagSize] = {};
   uint8_t digest[32] = {};
-  char requestBody[13] = {};
+  char requestBody[MENU_ENTRY_MAX + 2] = {};
   int requestLength = snprintf(requestBody, sizeof(requestBody), "%s\n", value);
   const mbedtls_md_info_t* sha = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
   bool ok = requestLength > 0 && static_cast<size_t>(requestLength) < sizeof(requestBody) && sha &&
@@ -3211,6 +3248,7 @@ void handleMenuKey(char key) {
       }
       break;
     case STATE_MENU_ROLE:
+    case STATE_MENU_FACULTY_LOGIN_METHOD:
     case STATE_MENU_ADMIN:
     case STATE_MENU_FACULTY:
     case STATE_MENU_ROOMS:

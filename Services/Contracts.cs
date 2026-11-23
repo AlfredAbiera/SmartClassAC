@@ -129,6 +129,9 @@ public sealed record LoginResult(bool Succeeded, AuthenticatedUser? User, string
 
 public sealed record OperationResult(bool Succeeded, string? Error = null)
 {
+    public string? EmployeeNumber { get; init; }
+    public string? Warning { get; init; }
+    internal bool SendRegistrationAcknowledgment { get; init; }
     public static OperationResult Success() => new(true);
     public static OperationResult Failure(string error) => new(false, error);
 }
@@ -680,7 +683,7 @@ public interface IAuthService
     Task<OperationResult> ConfirmSubstitutionAsync(long scheduleId, long substituteId, string code);
     Task<OperationResult> RemoveSubstitutionAsync(long scheduleId);
     Task<OperationResult> CreateTeacherAsync(CreateTeacherRequest request);
-    Task<OperationResult> CreateImportedTeacherAsync(string name, string employeeNumber, string phone);
+    Task<OperationResult> CreateImportedTeacherAsync(string name, string phone);
     Task<OperationResult> UpdateAdminTeacherAsync(UpdateAdminTeacherRequest request);
     Task<IReadOnlyList<TeacherDirectoryEntry>> GetTeachersAsync();
     Task<TeacherProfileEntry?> GetTeacherProfileForAdminAsync(long accountId);

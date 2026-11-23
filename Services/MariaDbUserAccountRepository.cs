@@ -306,12 +306,15 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             }
             await using var account = connection.CreateCommand();
             account.Transaction = transaction;
+            var employeeNumber = string.IsNullOrWhiteSpace(request.EmployeeNumber)
+                ? await AllocateEmployeeNumberAsync(connection, transaction, cancellationToken)
+                : request.EmployeeNumber;
             account.CommandText = @"
                 INSERT INTO user_accounts (username, display_name, employee_number, device_pin, email, phone, password_hash, role, phone_verified)
                 VALUES (@username, @displayName, @employeeNumber, @devicePin, @email, @phone, @passwordHash, 'Teacher', @verified);";
             account.Parameters.Add("@username", MySqlDbType.VarChar).Value = request.Username;
             account.Parameters.Add("@displayName", MySqlDbType.VarChar).Value = request.DisplayName;
-            account.Parameters.Add("@employeeNumber", MySqlDbType.VarChar).Value = request.EmployeeNumber;
+            account.Parameters.Add("@employeeNumber", MySqlDbType.VarChar).Value = employeeNumber;
             account.Parameters.Add("@devicePin", MySqlDbType.VarChar).Value = await ResolveNewTeacherPinAsync(connection, transaction, request.DevicePin, cancellationToken);
             account.Parameters.AddWithValue("@email", (object?)request.Email ?? DBNull.Value);
             account.Parameters.Add("@phone", MySqlDbType.VarChar).Value = request.Phone;
@@ -325,7 +328,11 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             }
 
             await transaction.CommitAsync(cancellationToken);
-            return OperationResult.Success();
+            return OperationResult.Success() with
+            {
+                EmployeeNumber = employeeNumber,
+                SendRegistrationAcknowledgment = phoneVerified
+            };
         }
         catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
         {
@@ -344,6 +351,32 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         }
     }
 
+    private static async Task<string> AllocateEmployeeNumberAsync(
+        MySqlConnection connection, MySqlTransaction transaction, CancellationToken cancellationToken)
+    {
+        await using var sequence = connection.CreateCommand();
+        sequence.Transaction = transaction;
+        sequence.CommandText = "SELECT last_value FROM employee_number_sequence WHERE singleton_id=1 FOR UPDATE;";
+        var stored = await sequence.ExecuteScalarAsync(cancellationToken)
+            ?? throw new InvalidOperationException("Apply migration 051 before adding faculty.");
+        var number = Convert.ToInt64(stored);
+        string employeeNumber;
+        await using var exists = connection.CreateCommand();
+        exists.Transaction = transaction;
+        exists.CommandText = "SELECT EXISTS(SELECT 1 FROM user_accounts WHERE employee_number=@number);";
+        exists.Parameters.Add("@number", MySqlDbType.VarChar);
+        do
+        {
+            number = checked(number + 1);
+            employeeNumber = "EMP-" + number.ToString("D6", System.Globalization.CultureInfo.InvariantCulture);
+            exists.Parameters["@number"].Value = employeeNumber;
+        } while (Convert.ToInt32(await exists.ExecuteScalarAsync(cancellationToken)) != 0);
+        sequence.CommandText = "UPDATE employee_number_sequence SET last_value=@number WHERE singleton_id=1;";
+        sequence.Parameters.Add("@number", MySqlDbType.Int64).Value = number;
+        await sequence.ExecuteNonQueryAsync(cancellationToken);
+        return employeeNumber;
+    }
+
     public async Task<OperationResult> UpdateAdminTeacherAsync(UpdateAdminTeacherRequest request, string? passwordHash, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -352,16 +385,20 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         {
             await using var existingPhone = connection.CreateCommand();
             existingPhone.Transaction = transaction;
-            existingPhone.CommandText = "SELECT COALESCE(phone, ''), phone_verified FROM user_accounts WHERE id=@id AND role='Teacher' AND is_active=TRUE FOR UPDATE;";
+            existingPhone.CommandText = "SELECT COALESCE(phone, ''), phone_verified, employee_number FROM user_accounts WHERE id=@id AND role='Teacher' AND is_active=TRUE FOR UPDATE;";
             existingPhone.Parameters.Add("@id", MySqlDbType.Int64).Value = request.AccountId;
             string oldPhone;
             bool phoneVerified;
+            string? employeeNumber;
             await using (var reader = await existingPhone.ExecuteReaderAsync(cancellationToken))
             {
                 if (!await reader.ReadAsync(cancellationToken)) return OperationResult.Failure("The teacher account was not found.");
                 oldPhone = reader.GetString(0);
                 phoneVerified = reader.GetBoolean(1);
+                employeeNumber = reader.IsDBNull(2) ? null : reader.GetString(2);
             }
+            if (!string.Equals(employeeNumber ?? "", request.EmployeeNumber, StringComparison.Ordinal))
+                return OperationResult.Failure("Employee numbers are assigned automatically and cannot be changed.");
             if ((!phoneVerified || !string.Equals(oldPhone, request.Phone, StringComparison.Ordinal)) &&
                 !await PortalMobileOtp.ConsumeAsync(connection, transaction, _configuration, request.VerificationActorId,
                     "admin", request.AccountId, request.Phone, request.MobileOtp, cancellationToken))
@@ -392,14 +429,14 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             {
                 command.CommandText = @"
                     UPDATE user_accounts
-                    SET display_name = @displayName, username = @username, employee_number = @employeeNumber, email = @email, phone = @phone, phone_verified = TRUE
+                    SET display_name = @displayName, username = @username, email = @email, phone = @phone, phone_verified = TRUE
                     WHERE id = @id AND role = 'Teacher' AND is_active = TRUE;";
             }
             else if (passwordHash is not null && devicePin is null)
             {
                 command.CommandText = @"
                     UPDATE user_accounts
-                    SET display_name = @displayName, username = @username, employee_number = @employeeNumber, email = @email, phone = @phone, phone_verified = TRUE, password_hash = @passwordHash
+                    SET display_name = @displayName, username = @username, email = @email, phone = @phone, phone_verified = TRUE, password_hash = @passwordHash
                     WHERE id = @id AND role = 'Teacher' AND is_active = TRUE;";
                 command.Parameters.Add("@passwordHash", MySqlDbType.VarChar).Value = passwordHash;
             }
@@ -407,7 +444,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             {
                 command.CommandText = @"
                     UPDATE user_accounts
-                    SET display_name = @displayName, username = @username, employee_number = @employeeNumber, email = @email, phone = @phone, phone_verified = TRUE, device_pin = @devicePin
+                    SET display_name = @displayName, username = @username, email = @email, phone = @phone, phone_verified = TRUE, device_pin = @devicePin
                     WHERE id = @id AND role = 'Teacher' AND is_active = TRUE;";
                 command.Parameters.Add("@devicePin", MySqlDbType.VarChar).Value = devicePin;
             }
@@ -415,7 +452,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             {
                 command.CommandText = @"
                     UPDATE user_accounts
-                    SET display_name = @displayName, username = @username, employee_number = @employeeNumber, email = @email, phone = @phone, phone_verified = TRUE, device_pin = @devicePin, password_hash = @passwordHash
+                    SET display_name = @displayName, username = @username, email = @email, phone = @phone, phone_verified = TRUE, device_pin = @devicePin, password_hash = @passwordHash
                     WHERE id = @id AND role = 'Teacher' AND is_active = TRUE;";
                 command.Parameters.Add("@devicePin", MySqlDbType.VarChar).Value = devicePin!;
                 command.Parameters.Add("@passwordHash", MySqlDbType.VarChar).Value = passwordHash!;
@@ -424,7 +461,6 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             command.Parameters.Add("@id", MySqlDbType.Int64).Value = request.AccountId;
             command.Parameters.Add("@displayName", MySqlDbType.VarChar).Value = request.DisplayName;
             command.Parameters.Add("@username", MySqlDbType.VarChar).Value = request.Username;
-            command.Parameters.Add("@employeeNumber", MySqlDbType.VarChar).Value = request.EmployeeNumber;
             command.Parameters.AddWithValue("@email", (object?)request.Email ?? DBNull.Value);
             command.Parameters.Add("@phone", MySqlDbType.VarChar).Value = request.Phone;
 
@@ -435,7 +471,11 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             }
 
             await transaction.CommitAsync(cancellationToken);
-            return OperationResult.Success();
+            return OperationResult.Success() with
+            {
+                EmployeeNumber = employeeNumber,
+                SendRegistrationAcknowledgment = !phoneVerified
+            };
         }
         catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
         {

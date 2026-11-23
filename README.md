@@ -305,6 +305,7 @@ SQL in [`Migrations/`](Migrations/) is applied in order by `DatabaseMigrationRun
 | `046_makeup_schedule_replacements.sql` | Links a one-off makeup schedule to the original occurrence it replaces |
 | `047_schedule_substitutions.sql` | Records substitution verification and invalidates codes after schedule changes |
 | `050_fingerprint_deletion.sql` | Guards individual sensor deletion requests and stores completion receipts |
+| `051_employee_number_sequence.sql` | Allocates unique sequential faculty employee numbers |
 
 Fresh installs also define `employee_number` / `device_pin` / unique `phone` in `001`; later migrations stay safe for older databases.
 
@@ -730,7 +731,7 @@ Power the SIM900L from a supply appropriate for the exact module/breakout; cellu
 
 Administrators can use **Settings → GSM settings → Test SMS** to send the fixed message “SmartClassAC modem test message.” Enter an `09xxxxxxxxx` recipient, save and verify the modem port and baud rate, then explicitly confirm the recipient and port before sending. Standard SMS charges may apply. This test uses the saved modem settings independently of Faculty OTP configuration and does not issue an OTP. If delivery is uncertain, check the phone before attempting another send.
 
-The Faculty OTP store (migration `036`) reserves six-digit codes for five minutes, activates them only after modem acceptance, limits requests to three per phone and ten per scanner in a five-minute fixed window, and allows at most five guesses and one successful use. Codes and phone numbers are represented by keyed digests in the OTP tables; verification rechecks the teacher's current status and phone. The device API is **disabled by default** (`FacultyOtp:EnableDeviceApi`). Firmware source `1.6.53` replaces the demo Faculty ID/PIN with an 11-digit mobile number and six-digit SMS code, verifies the signed response before allowing access, and fails closed if the API is unavailable. It has been compiled but not uploaded or hardware-tested; previously installed firmware may still have the insecure demo login.
+The Faculty OTP store (migration `036`) reserves six-digit codes for five minutes, activates them only after modem acceptance, limits requests to three per phone and ten per scanner in a five-minute fixed window, and allows at most five guesses and one successful use. Codes and phone numbers are represented by keyed digests in the OTP tables; verification rechecks the teacher's current status and phone. The device API is **disabled by default** (`FacultyOtp:EnableDeviceApi`). Firmware source `1.6.67` offers **Faculty → Employee no. / Mobile number**. Enter the numeric suffix only (`000001` or `1` for `EMP-000001`, up to 18 digits), or the registered 11-digit mobile number. Both require a six-digit SMS OTP sent to the active teacher's verified registered number and share the same phone request limit. Existing nonstandard employee numbers can still use mobile login. The scanner verifies the signed response before allowing access and fails closed if the API is unavailable. This update has not been sketch-built, uploaded or hardware-tested; previously installed firmware may still use the old login flow.
 
 Portal teacher registration and mobile changes use a separate SMS verification
 workflow (migration `043`), not the scanner OTP endpoints. Configure the GSM
@@ -771,6 +772,14 @@ Faculty OTP failure logs report the modem result and whether the reservation was
 The API uses the fleet API key plus each paired scanner's provisioned enrollment key and a purpose-specific, single-use challenge. Outside Development it requires HTTPS; Development HTTP exposes phone numbers and OTPs to anyone who can observe the trusted LAN. When the complete flow is ready, configure `FacultyOtp:Secret` as a separate, stable, randomly generated Base64-encoded 32-byte secret in protected configuration, shared across portal instances and retained across restarts. Rotating it invalidates outstanding OTPs and resets the effectiveness of phone-keyed limits until existing windows expire. Never put this secret in source control.
 
 The request and verify routes are `POST /api/device/faculty/otp/request` and `POST /api/device/faculty/otp/verify`, each with a corresponding `/challenge` route. An operation's signed body is the ASCII phone number or six-digit code followed by a newline; its purpose is respectively `faculty_otp_request` or `faculty_otp_verify`. The signed response body contains the lowercase SHA-256 digest of that request body, a newline, the status, and a final newline. The request status is always `processed` for authenticated valid-format requests, regardless of account or delivery outcome; it does not promise that an SMS was sent. Verification returns `accepted` or `denied`. Clients must validate the response MAC, challenge, request digest, and exact status before granting access. Response timing can still differ by delivery outcome, so the generic response is not a timing-side-channel guarantee. Never log the request or response body, phone number, code, or modem commands.
+
+Employee-number issuance uses `POST /api/device/faculty/otp/employee/request`
+and its `/challenge` route, with purpose `faculty_otp_employee_request`.
+Its signed body is the entered ASCII digits followed by a newline; leading zeros
+are normalized only for account lookup, after signature validation. The generic
+`processed` response and the existing OTP verification/menu login flow are
+unchanged. Deploy the portal update before uploading the updated scanner sketch;
+no additional database migration is needed for this login choice.
 
 Administrators can set a classroom's inclusive teacher minimum (16–30°C; migration `037` defaults existing rooms to 16°C). Scanner Faculty menu target changes require an active class in that room and cannot set a target below the minimum; administrators retain their existing control. A saved target is not proof of an AC change.
 
@@ -1043,11 +1052,23 @@ option does not keep the user signed in.
 
 ## Admin and teacher workflow
 
-**Admin:** create/edit teachers (name, employee number, and **required mobile** `09xxxxxxxxx`; usernames are generated internally, school email is not collected, and device PINs are assigned automatically; **active/inactive** status — only active teachers appear when creating schedules or enrolling in a semester; manual registrations and mobile-number changes require SMS OTP verification), **semesters** (enroll teachers), classrooms, regular schedules with optional recurrence through semester end (None / Weekly / Mon–Wed / Tue–Thu / MWF / TTH / Custom weekdays — expands to one `class_schedules` row per date; conflicts are skipped and reported), and one-off **Makeup** schedules that replace a selected original occurrence within the next 7 days; the original weekly schedule resumes on its next occurrence. Makeup schedules may use a different teacher, room, subject, and time. **Move** a single schedule to another date/time; system reset (`RESET`) / delete.
+**Admin:** create/edit teachers (name and **required mobile** `09xxxxxxxxx`; employee numbers are automatically assigned and read-only; usernames are generated internally, school email is not collected, and device PINs are assigned automatically; **active/inactive** status — only active teachers appear when creating schedules or enrolling in a semester; manual registrations and mobile-number changes require SMS OTP verification), **semesters** (enroll teachers), classrooms, regular schedules with optional recurrence through semester end (None / Weekly / Mon–Wed / Tue–Thu / MWF / TTH / Custom weekdays — expands to one `class_schedules` row per date; conflicts are skipped and reported), and one-off **Makeup** schedules that replace a selected original occurrence within the next 7 days; the original weekly schedule resumes on its next occurrence. Makeup schedules may use a different teacher, room, subject, and time. **Move** a single schedule to another date/time; system reset (`RESET`) / delete.
+
+Migration `051` adds transactional employee-number allocation for manual and CSV
+registrations (`EMP-000001`, `EMP-000002`, ...; the numeric part grows beyond six
+digits when needed). Existing numbers are preserved; the sequence starts above
+existing numeric `EMP-` values and skips occupied numbers. Numbers cannot be
+edited through the portal or teacher-update service. After a successful manual
+registration, an acknowledgment SMS includes the assigned employee number.
+Imported faculty receive this acknowledgment only after their first mobile
+verification. SMS submission occurs after saving; a failed or uncertain send
+shows an admin warning and does not undo registration. Modem acceptance is not
+proof of delivery. Acknowledgments are not automatically retried; do not
+register the faculty again if an SMS is missing.
 
 ### CSV import
 
-Restart the portal to apply migrations through `049`; check the startup log if
+Restart the portal to apply migrations through `051`; check the startup log if
 database initialization fails. In **Teachers**, **Semesters**, or
 **Schedules**, select **Import CSV** and download that page's template. Use
 separate UTF-8 comma-separated files with a header row. Import
@@ -1060,7 +1081,7 @@ unexpected error interrupts the import, review the lists before retrying.
 
 | File | Required columns | Optional columns |
 |---|---|---|
-| Teachers | `name,employee_number,phone` | None |
+| Teachers | `name,phone` | None |
 | Semesters | `name,start_date,end_date` | `active` (`true` or `false`, defaults to `true`) |
 | Schedules | `employee_number,semester,classroom,subject,date,start_time,end_time` | `recurrence,weekdays,kind,replaces_schedule_id` |
 
@@ -1068,8 +1089,8 @@ For example, the following are three separate files; replace the sample
 details and phone number with actual data:
 
 ```csv
-name,employee_number,phone
-Example Teacher,EMP001,09123456789
+name,phone
+Example Teacher,09123456789
 ```
 
 ```csv
@@ -1079,8 +1100,12 @@ Term 1,2030-01-07,2030-05-31,true
 
 ```csv
 employee_number,semester,classroom,subject,date,start_time,end_time,recurrence,weekdays,kind,replaces_schedule_id
-EMP001,Term 1,Room A,Math,2030-01-07,09:00,10:00,Weekly,,Regular,
+EMP-000001,Term 1,Room A,Math,2030-01-07,09:00,10:00,Weekly,,Regular,
 ```
+
+Teacher imports no longer accept an `employee_number` column. After importing,
+copy the generated numbers from **Teachers** into the schedule CSV; the number
+in the example is only illustrative.
 
 Use dates `YYYY-MM-DD` and 24-hour times `HH:mm`. Schedule references are the
 teacher's employee number and the exact names of an active semester and active

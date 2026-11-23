@@ -70,6 +70,17 @@ internal sealed class GsmSmsTransport
         GsmModemSettings? settings, string phone, CancellationToken cancellationToken = default) =>
         SendMessageAsync(settings, phone, "SmartClassAC modem test message.", cancellationToken);
 
+    public Task<GsmSmsResult> SendRegistrationAcknowledgmentAsync(
+        GsmModemSettings? settings, string phone, string? employeeNumber, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(employeeNumber) || employeeNumber.Length > 40 ||
+            employeeNumber.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '-'))
+            return Task.FromResult(GsmSmsResult.InvalidInput);
+        return SendMessageAsync(settings, phone,
+            $"You are successfully registered in SmartClassAC. Your employee number is {employeeNumber}.",
+            cancellationToken);
+    }
+
     public Task<GsmSmsResult> SendAttendanceReminderAsync(
         GsmModemSettings? settings, string phone, CancellationToken cancellationToken = default) =>
         SendMessageAsync(settings, phone,

@@ -13,8 +13,10 @@ internal static class FacultyOtpRoutes
     public static void MapFacultyOtpRoutes(this WebApplication app, Func<HttpContext, IConfiguration, bool> isAuthorizedDevice)
     {
         MapChallenge(app, "/api/device/faculty/otp/request/challenge", "faculty_otp_request", isAuthorizedDevice);
+        MapChallenge(app, "/api/device/faculty/otp/employee/request/challenge", "faculty_otp_employee_request", isAuthorizedDevice);
         MapChallenge(app, "/api/device/faculty/otp/verify/challenge", "faculty_otp_verify", isAuthorizedDevice);
         MapOperation(app, "/api/device/faculty/otp/request", "faculty_otp_request", isAuthorizedDevice);
+        MapOperation(app, "/api/device/faculty/otp/employee/request", "faculty_otp_employee_request", isAuthorizedDevice);
         MapOperation(app, "/api/device/faculty/otp/verify", "faculty_otp_verify", isAuthorizedDevice);
     }
 
@@ -65,10 +67,11 @@ internal sealed class FacultyOtpProtocol(IConfiguration configuration, GsmSmsTra
     public async Task<FacultyOtpResponse?> ExecuteAsync(string operation, FacultyOtpRequest request,
         CancellationToken cancellationToken = default)
     {
-        var issuing = operation == "faculty_otp_request";
+        var employeeNumber = operation == "faculty_otp_employee_request";
+        var issuing = operation == "faculty_otp_request" || employeeNumber;
         if ((!issuing && operation != "faculty_otp_verify") ||
             !EnrollmentMessageAuthentication.IsValidDeviceId(request.DeviceId) ||
-            !ValidValue(request.Value, issuing) ||
+            !(employeeNumber ? FacultyOtpStore.ValidEmployeeNumber(request.Value) : ValidValue(request.Value, issuing)) ||
             !TryHex(request.Challenge, out var challenge) || !TryHex(request.Tag, out var tag))
             return null;
 
@@ -89,7 +92,7 @@ internal sealed class FacultyOtpProtocol(IConfiguration configuration, GsmSmsTra
             if (issuing)
             {
                 var result = await new FacultyOtpIssuer(store, new GsmModemSettingsStore(configuration), transport)
-                    .IssueAsync(request.DeviceId!, request.Value!, secret, cancellationToken);
+                    .IssueAsync(request.DeviceId!, request.Value!, secret, cancellationToken, employeeNumber: employeeNumber);
                 if (result.Result == FacultyOtpIssueResult.DeliveryFailed)
                     logger.LogWarning("Faculty OTP issuance failed: modem result {TransportResult}; reservation updated {ReservationUpdated}.",
                         result.TransportResult, result.ReservationUpdated);

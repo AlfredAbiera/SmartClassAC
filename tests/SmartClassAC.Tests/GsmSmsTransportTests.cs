@@ -35,6 +35,16 @@ public sealed class GsmSmsTransportTests
     }
 
     [Fact]
+    public async Task RegistrationAcknowledgmentIncludesEmployeeNumberWithoutCredentials()
+    {
+        var serial = new FakeSerial();
+        var result = await new GsmSmsTransport(_ => serial)
+            .SendRegistrationAcknowledgmentAsync(Settings, "09123456789", "EMP-000001");
+        Assert.Equal(GsmSmsResult.Accepted, result);
+        Assert.Equal("You are successfully registered in SmartClassAC. Your employee number is EMP-000001.\u001a", serial.Writes[^1]);
+    }
+
+    [Fact]
     public async Task AttendanceReminderSmsExplainsAutomaticMissingTimeOut()
     {
         var serial = new FakeSerial();

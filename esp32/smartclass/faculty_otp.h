@@ -7,6 +7,16 @@
 namespace FacultyOtp {
 enum class Result : uint8_t { Processed, Accepted, Denied };
 
+inline bool validEmployeeNumber(const char* value) {
+  if (!value || strlen(value) < 1 || strlen(value) > 18) return false;
+  bool nonzero = false;
+  for (const char* p = value; *p; ++p) {
+    if (*p < '0' || *p > '9') return false;
+    nonzero = nonzero || *p != '0';
+  }
+  return nonzero;
+}
+
 inline bool validValue(const char* value, bool issuing) {
   if (!value || strlen(value) != (issuing ? 11u : 6u)) return false;
   if (issuing && (value[0] != '0' || value[1] != '9')) return false;

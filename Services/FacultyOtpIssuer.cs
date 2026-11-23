@@ -14,9 +14,9 @@ internal sealed class FacultyOtpIssuer(
     FacultyOtpStore otpStore, GsmModemSettingsStore settingsStore, GsmSmsTransport transport)
 {
     public async Task<FacultyOtpIssueOutcome> IssueAsync(
-        string deviceId, string phone, byte[] secret, CancellationToken cancellationToken = default)
+        string deviceId, string value, byte[] secret, CancellationToken cancellationToken = default, bool employeeNumber = false)
     {
-        var reservation = await otpStore.ReserveAsync(deviceId, phone, secret, cancellationToken);
+        var reservation = await otpStore.ReserveAsync(deviceId, value, secret, cancellationToken, employeeNumber: employeeNumber);
         if (reservation is null) return new(FacultyOtpIssueResult.Denied, null, false);
 
         var accepted = false;
@@ -25,7 +25,7 @@ internal sealed class FacultyOtpIssuer(
         try
         {
             var settings = await settingsStore.GetAsync(cancellationToken);
-            transportResult = await transport.SendOtpAsync(settings, phone, reservation.Code, cancellationToken);
+            transportResult = await transport.SendOtpAsync(settings, reservation.Phone, reservation.Code, cancellationToken);
             accepted = transportResult == GsmSmsResult.Accepted;
         }
         finally

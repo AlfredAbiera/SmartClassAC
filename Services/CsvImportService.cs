@@ -28,7 +28,7 @@ internal sealed class CsvImportService(IAuthService auth)
             return CsvImportResult.Failure("The CSV file exceeds the 1 MB limit.");
         var required = kind switch
         {
-            "teachers" => new[] { "name", "employee_number", "phone" },
+            "teachers" => new[] { "name", "phone" },
             "semesters" => new[] { "name", "start_date", "end_date" },
             "schedules" => new[] { "employee_number", "semester", "classroom", "subject", "date", "start_time", "end_time" },
             _ => Array.Empty<string>()
@@ -59,9 +59,9 @@ internal sealed class CsvImportService(IAuthService auth)
             if (row.ParseError is not null)
                 result = OperationResult.Failure(row.ParseError);
             else if (kind == "teachers")
-                result = row.Get("name").Length > 160 || row.Get("employee_number").Length > 40
-                    ? OperationResult.Failure("Name must be at most 160 characters and employee number at most 40 characters.")
-                    : await auth.CreateImportedTeacherAsync(row.Get("name"), row.Get("employee_number"), row.Get("phone"));
+                result = row.Get("name").Length > 160
+                    ? OperationResult.Failure("Name must be at most 160 characters.")
+                    : await auth.CreateImportedTeacherAsync(row.Get("name"), row.Get("phone"));
             else if (kind == "semesters")
                 result = await ImportSemesterAsync(row);
             else

@@ -33,7 +33,7 @@ public sealed class FacultyOtpRouteTests
         await app.StartAsync();
         var address = Assert.Single(app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses);
         using var client = new HttpClient { BaseAddress = new Uri(address) };
-        var paths = new[] { "request", "verify" };
+        var paths = new[] { "request", "employee/request", "verify" };
         foreach (var action in new[] { "operation", "claim", "finish" })
         {
             using var disabledDelete = await client.PostAsJsonAsync($"api/device/fingerprint/delete/{action}/challenge",
