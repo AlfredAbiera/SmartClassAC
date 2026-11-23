@@ -1,7 +1,7 @@
 # Data model and table relationships
 
-This document describes the MariaDB schema defined by migrations `001`–`041`
-in the repository as of 2026-11-08. An installation may be on an older schema;
+This document describes the MariaDB schema defined by migrations `001`–`050`
+in the repository as of 2026-11-23. An installation may be on an older schema;
 check `schema_versions` before relying on a table or column. The diagrams show
 the most useful **declared foreign-key relationships**, not every field,
 index, historical identity, or application validation. See
@@ -81,6 +81,7 @@ erDiagram
         bigint teacher_account_id FK
         bigint semester_id FK
         bigint classroom_id FK
+        bigint replaces_schedule_id FK NULL
         date schedule_date
         string schedule_kind
     }
@@ -131,13 +132,16 @@ user and slot identifiers are globally unique in `fingerprint_templates`.
 |---|---|
 | `schema_versions` | Applied migration version keys and script names. |
 | `user_accounts` | Administrators and teachers, profile, role, activity and password hash; later migrations add admin device PIN hash. |
+| `user_accounts.phone_verified` | Existing accounts default to verified; CSV-imported teachers are explicitly unverified until SMS confirmation. |
 | `password_reset_tokens` | Hashed one-use expiring web-password reset tokens, FK to account. |
 | `semesters` | Named date ranges and active flag. |
 | `teacher_semesters` | Teacher-to-semester enrollment; unique pair. |
 | `classrooms` | Room, capacity, desired target, teacher minimum, recorded AC status and optional current-temperature field; target is not a measurement. |
-| `class_schedules` | Dated class, teacher, room, optional semester, subject, time and Regular/Makeup kind. Recurrences are expanded into rows. |
+| `class_schedules` | Dated class, current and original teacher, room, optional semester, subject, time and Regular/Makeup kind. Recurrences are expanded into rows; a makeup row may reference the one regular occurrence it replaces. Substitution verification and its version bind SMS authorization to the specific occurrence. |
 | `attendance_logs` | Schedule-linked or standalone attendance with teacher, room, status, punch-time storage and outcome. Absence and automatically closed missing time-outs must not be interpreted as physical punches. |
 | `fingerprint_templates` | User/finger-to-sensor-slot mappings, not sensor model bytes. |
+| `attendance_otp_requests` | The current admin-approved attendance request per scanner, bound to its class, action and session state. |
+| `attendance_otp_events` | Audit entries for successfully redeemed attendance SMS codes; codes are not stored. |
 | `biometric_devices` | Internal row ID, external numeric-string scanner ID, generated display name, pairing, nullable room, polling and feature controls. |
 | `temperature_logs` | Room events, optional actor, target and optional measured value. |
 | `teacher_requests`, `support_tickets` | Legacy schema tables with account relationships; the current UI does not expose a leave/request or support-ticket workflow. Their existence does not imply those features are active. |
@@ -261,6 +265,8 @@ proof that the sensor has or has not stored a model.
 |---|---|
 | `fingerprint_enrollment_scanner` | Singleton administrator-selected scanner. |
 | `fingerprint_slot_blocks` | Slot identifiers excluded from attendance matching while unsafe or reserved. |
+| `fingerprint_deletion_requests` | One pending or claimed deletion per scanner and slot; references the exact mapping and slot block until completion or pending cancellation. |
+| `fingerprint_deletion_completions` | Durable deletion receipts keyed by operation, permitting safe completion retries without deleting a reused slot. |
 | `fingerprint_enrollment_preparations` | Exact scanner, teacher, finger and blocked slot; optional replacement template identifier added by migration 025. Unique constraints prevent conflicting preparation. |
 | `fingerprint_enrollment_challenges` | Hashed single-use, expiring authentication challenges associated with a device and operation. |
 | `fingerprint_enrollment_authorizations` | Time-limited admin consent for a preparation/operation; consent alone is not a write grant. |

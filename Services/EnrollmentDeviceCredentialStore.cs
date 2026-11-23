@@ -54,6 +54,9 @@ internal sealed class EnrollmentDeviceCredentialStore
         guard.Parameters.Add("@device", MySqlDbType.Int64).Value = Convert.ToInt64(deviceRow);
         if (await guard.ExecuteScalarAsync(cancellationToken) is not null)
             return OperationResult.Failure("The scanner has an unresolved fingerprint write.");
+        guard.CommandText = "SELECT id FROM fingerprint_deletion_requests WHERE device_id=@device LIMIT 1 FOR UPDATE;";
+        if (await guard.ExecuteScalarAsync(cancellationToken) is not null)
+            return OperationResult.Failure("The scanner has an unresolved fingerprint deletion.");
 
         try
         {

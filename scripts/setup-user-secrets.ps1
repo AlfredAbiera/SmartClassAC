@@ -12,7 +12,7 @@ param(
     [string] $AdminUsername = "admin",
     [string] $AdminPassword = "R3m0vabl3!2028",
     [string] $DeviceApiKey,
-    [switch] $ConfigureSmtp
+    [switch] $ConfigurePasswordReset
 )
 
 $ErrorActionPreference = "Stop"
@@ -84,33 +84,16 @@ if ($DeviceApiKey) {
     Write-Host "Device API key configured for /api/device/fingerprint/*"
 }
 
-$configureEmail = $ConfigureSmtp.IsPresent
-if (-not $configureEmail) {
-    $smtpChoice = Read-Host "Configure SMTP for forgot-password? [y/N]"
-    $configureEmail = $smtpChoice -match '^[Yy]'
+$configurePasswordReset = $ConfigurePasswordReset.IsPresent
+if (-not $configurePasswordReset) {
+    $resetChoice = Read-Host "Configure SMS password-reset base URL? [y/N]"
+    $configurePasswordReset = $resetChoice -match '^[Yy]'
 }
 
-if ($configureEmail) {
+if ($configurePasswordReset) {
     $publicBaseUrl = Read-Host "Public base URL (e.g. http://localhost:5062 for local dev)"
-    $fromAddress = Read-Host "From email address"
-    $fromName = Read-Host "From display name [SmartClass AC]"
-    if (-not $fromName) { $fromName = "SmartClass AC" }
-    $smtpHost = Read-Host "SMTP host"
-    $smtpPort = Read-Host "SMTP port [587]"
-    if (-not $smtpPort) { $smtpPort = "587" }
-    $smtpUsername = Read-Host "SMTP username"
-    $smtpPassword = ConvertTo-PlainText (Read-SecretValue "SMTP password" -AsSecureString)
-
     dotnet user-secrets set "PasswordReset:PublicBaseUrl" $publicBaseUrl --project $project
-    dotnet user-secrets set "PasswordReset:FromAddress" $fromAddress --project $project
-    dotnet user-secrets set "PasswordReset:FromName" $fromName --project $project
-    dotnet user-secrets set "PasswordReset:SmtpHost" $smtpHost --project $project
-    dotnet user-secrets set "PasswordReset:SmtpPort" $smtpPort --project $project
-    dotnet user-secrets set "PasswordReset:SmtpUsername" $smtpUsername --project $project
-    dotnet user-secrets set "PasswordReset:SmtpPassword" $smtpPassword --project $project
-    dotnet user-secrets set "PasswordReset:EnableSsl" "true" --project $project
-
-    Write-Host "SMTP secrets saved." -ForegroundColor Green
+    Write-Host "SMS password-reset URL saved." -ForegroundColor Green
 }
 
 Write-Host ""
@@ -119,6 +102,6 @@ Write-Host "  1. Ensure XAMPP MySQL/MariaDB is running"
 Write-Host "  2. Database/tables are created automatically on first start (or run Migrations/*.sql)"
 Write-Host "  3. Start the app:  dotnet run"
 Write-Host "  4. Open http://localhost:5062/first-access"
-Write-Host "  5. Sign in at http://localhost:5062/login"
+Write-Host "  5. Sign in at http://localhost:5062/login and configure the GSM modem in Settings"
 Write-Host "  6. Device enroll/scan: POST /api/device/fingerprint/enroll|scan with header X-Device-Api-Key"
 Write-Host ""

@@ -45,7 +45,7 @@ Detailed guides: [Portal process flow](docs/PORTAL_PROCESS_FLOW.md) ·
 | UI | Blazor Server, Razor Pages, Bootstrap 5 |
 | Database | MariaDB via MySqlConnector |
 | Auth | Custom authentication with PBKDF2 password hashing |
-| Email | MailKit (SMTP) for password-reset links |
+| SMS | GSM modem for administrator password-reset links and verification codes |
 | Device API | JSON + `X-Device-Api-Key` (fingerprint enroll / scan) |
 | Hardware (companion) | ESP32 sketch in `SmartClassAC-ESP32` |
 
@@ -55,7 +55,7 @@ Detailed guides: [Portal process flow](docs/PORTAL_PROCESS_FLOW.md) ·
 
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) or newer
 - [XAMPP](https://www.apachefriends.org/) with MariaDB/MySQL running (e.g. `D:\xampp`)
-- (Optional) SMTP credentials for the forgot-password flow
+- (Optional) A configured GSM modem and public base URL for administrator password recovery by SMS
 - (Optional) [Bruno](https://www.usebruno.com/) to call the device API without the UI
 - [Cursor](https://cursor.com) or any editor with **C# Dev Kit** / **C#** — Visual Studio is not required
 
@@ -92,7 +92,7 @@ Open **http://localhost:5062**. Health: **http://localhost:5062/health**.
 ### 4. First-time setup
 
 1. App seeds the default administrator on first start.
-2. Visit `/first-access` to save the administrator recovery email.
+2. Visit `/first-access` to save the administrator recovery mobile number.
 3. Sign in at `/login`.
 4. Use **Admin** to create teachers, classrooms, and schedules (or use [demo data](#demo--test-data) in Development).
 
@@ -142,7 +142,7 @@ dotnet user-secrets set "DefaultAdmin:Password" "R3m0vabl3!2028" --project $proj
 dotnet user-secrets set "DeviceApi:ApiKey" "dev-device-key-smartclass" --project $project
 ```
 
-4. (Optional) Configure SMTP under `PasswordReset:*` for Login → **Forgot password?** (prompted by the setup script, or set via `dotnet user-secrets`).
+4. Configure `PasswordReset:PublicBaseUrl` for SMS reset links (prompted by the setup script, or set via `dotnet user-secrets`); after signing in, configure the GSM modem under Settings.
 5. `dotnet run` — migrations run, default admin is seeded; check `/health`.
 6. Open `/first-access`, then `/login`.
 
@@ -174,6 +174,15 @@ dotnet user-secrets set "FacultyOtp:EnableMenuApi" "true" --project .\SmartClass
 dotnet user-secrets set "FacultyOtp:EnableAcTargetApi" "true" --project .\SmartClassAC.csproj
 ```
 
+**Admin-approved attendance SMS fallback** (independent of Faculty menu login):
+
+```powershell
+dotnet user-secrets set "AttendanceOtp:EnableDeviceApi" "true" --project .\SmartClassAC.csproj
+```
+
+This also requires the existing `FacultyOtp:Secret`, GSM modem, fleet API key,
+per-scanner enrollment key and migration `048`. It is disabled by default.
+
 **AC IR and attendance power toggle:**
 
 ```powershell
@@ -185,7 +194,7 @@ The power flag is global and disables the legacy IR routes. Upgrade **all**
 scanners that use IR to power-capable firmware first; source 1.6.60 defaults
 to the v2 protocol. A v2 scanner cannot synchronize IR until both portal flags
 are enabled. Apply migration `042`, restart the portal and scanner, and have an
-admin physically verify the AC target and ON/OFF state in **AC control →
+admin physically verify the AC target and ON/OFF state in **Monitor →
 Reconcile**. A toggle may be sent after confirmation. A transmitted signal
 does not prove the AC received it.
 
@@ -224,7 +233,7 @@ protected configuration. Outside Development, device APIs require HTTPS.
 | `DeviceApi:ApiKey` | User Secrets / env | Yes (device fingerprint API) |
 | `DemoData:Enabled` | `appsettings.Development.json` | Dev sample teachers/rooms |
 | `SchoolTime:TimeZoneId` | `appsettings.json` / env | Recommended |
-| `PasswordReset:*` | User Secrets / env | Forgot-password SMTP |
+| `PasswordReset:PublicBaseUrl` | User Secrets / env | Base URL used in SMS reset links |
 
 Env vars use double underscores (e.g. `ConnectionStrings__SmartClassMariaDb`).
 
@@ -238,10 +247,15 @@ Administrators can open **Admin → Attendance → Create attendance report**, c
 
 Administrators can export schedules from **Admin → Schedules** for an inclusive date range and one selected teacher or all teachers. Exports are available as Excel workbooks or browser print/save-as-PDF.
 
+Both report layouts use A4 landscape for printing, wrap long text, and repeat
+table headings on subsequent pages. Excel workbooks also include a print area
+and fit the report to one page wide. Browser print settings can override the
+PDF page layout; check the print preview before saving.
+
 | Setting | Default | Meaning |
 |---------|---------|---------|
 | `SchoolTime:LateGraceMinutes` | `15` | Time-in after schedule start + this many minutes → **Late** |
-| `SchoolTime:MissingTimeOutGraceMinutes` | `15` | Open session past schedule end + this many minutes → **Missing time-out** (AC off) |
+| `SchoolTime:MissingTimeOutGraceMinutes` | `15` (max `29`) | Open session past schedule end + this many minutes → **Missing time-out** (AC off); checked every minute and SMS reminder sent |
 
 ---
 
@@ -287,14 +301,16 @@ SQL in [`Migrations/`](Migrations/) is applied in order by `DatabaseMigrationRun
 | `034_fingerprint_recovery_intent_history.sql` | Retains issued recovery identities while their guard is unresolved |
 | `040_buzzer_settings.sql` | Global schedule-ending buzzer reminder settings |
 | `041_buzzer_test_requests.sql` | Short-lived, per-device buzzer tests |
+| `045_class_extension.sql` | Per-attendance 30-minute class extension |
+| `046_makeup_schedule_replacements.sql` | Links a one-off makeup schedule to the original occurrence it replaces |
+| `047_schedule_substitutions.sql` | Records substitution verification and invalidates codes after schedule changes |
+| `050_fingerprint_deletion.sql` | Guards individual sensor deletion requests and stores completion receipts |
 
 Fresh installs also define `employee_number` / `device_pin` / unique `phone` in `001`; later migrations stay safe for older databases.
 
 ### Schedule-ending buzzer
 
-**System settings → Buzzer settings** lets administrators enable reminders and set the first reminder and repeat interval (1–180 minutes each). Migration `040` initializes the requested enabled, 15-minute lead and 5-minute repeat. Starting at the lead time, a connected scanner plays a five-second melody for an active attendance session in its assigned room, repeating at the configured interval strictly before the scheduled end. Firmware before `1.6.56` plays three short tones instead. A class that ends early stops producing reminders. The scanner checks the portal approximately every five seconds using school-local schedule time; network delays, disconnected scanners, blocking device operations, and a 20-second reminder window can cause reminders to be missed. Missed reminders are not replayed; a scanner reboot during a reminder window may repeat that reminder.
-
-Administrators can select an active, paired device and use **Test buzzer** to queue the same melody, even when reminders are disabled or no class is active. The test expires after 30 seconds, is claimed at most once, and is invalidated by re-pairing. A queued or claimed request does not confirm the sound played; listen at the device. An offline scanner, an older firmware version, network errors, or a busy scanner can cause the test to be missed.
+**Settings → Buzzer settings** lets administrators enable reminders and set the first reminder and repeat interval (1–180 minutes each). Migration `040` initializes the requested enabled, 15-minute lead and 5-minute repeat. Starting at the lead time, a connected scanner plays a five-second melody for an active attendance session in its assigned room, repeating at the configured interval strictly before the scheduled end. Firmware before `1.6.56` plays three short tones instead. A class that ends early stops producing reminders. The scanner checks the portal approximately every five seconds using school-local schedule time; network delays, disconnected scanners, blocking device operations, and a 20-second reminder window can cause reminders to be missed. Missed reminders are not replayed; a scanner reboot during a reminder window may repeat that reminder.
 
 Firmware source `1.6.57` expects a **passive buzzer on GPIO13**. Do not connect a low-impedance speaker directly to the ESP32 GPIO; use a suitable audio amplifier. Confirm electrical compatibility and use a suitable driver if a buzzer draws more current than the ESP32 GPIO can safely supply. The portal and firmware must both be updated, migrations `040` and `041` applied, and the sketch built and uploaded before testing. The buzzer endpoint requires the fleet device API key and HTTPS outside Development; Development HTTP is for a trusted LAN only. Physical sound and timing require hardware testing.
 
@@ -318,7 +334,7 @@ Hardware (or Bruno) calls these endpoints with header **`X-Device-Api-Key`** = `
 | `POST` | `/api/device/admin/rooms` | `{ "deviceId", "adminPin" }` | Verify the admin device PIN; return unassigned active rooms plus this device's current room (`rooms`, compact `roomList`). `401` wrong PIN, `429` locked out (5 failures → 5 min, per device) |
 | `POST` | `/api/device/admin/assign` | `{ "deviceId", "adminPin", "classroomId" }` | Re-verify the PIN, then assign the device to a free room, or unassign when `classroomId` is `null`. `409` if the room was taken or a class session is active |
 
-**On-device room assignment (firmware `1.5.0+`):** an admin sets a 6-digit **Device admin PIN** in **Admin → System settings** (stored hashed, migration `013`). On the scanner press `#` → Admin → enter the PIN (checked by the server, never stored on the device) → **Assign room** to pick from free rooms (current room marked `*`) or **Unassign**. Until a PIN is set, device admin options stay locked.
+**On-device room assignment (firmware `1.5.0+`):** an admin sets a 6-digit **Device admin PIN** in **Admin → Settings** (stored hashed, migration `013`). On the scanner press `#` → Admin → enter the PIN (checked by the server, never stored on the device) → **Assign room** to pick from free rooms (current room marked `*`) or **Unassign**. Until a PIN is set, device admin options stay locked.
 
 **Scanner navigation (firmware `1.6.2+`):** press `#` on the ready screen to open the menu. In menu lists, press `*` for previous, `#` for next, and tap `0` to select; hold `0` for one second to go back. In PIN, ID, and pairing-code entry, digits enter the value, `*` deletes a digit (or goes back when empty), and `#` submits. Firmware `1.6.3+` uses a stationary text menu; unsupported characters in room names appear as `?` on the scanner.
 
@@ -326,7 +342,7 @@ Firmware `1.6.45+` displays the matched teacher's server-provided name with succ
 
 Starting with firmware `1.6.46`, recognized scans show the teacher's name first for at least two seconds, then the attendance, AC, or denial result. Scans without a server-provided teacher name show the result directly.
 
-Shared header `X-Device-Api-Key` authenticates the fleet; **`deviceId`** is generated by the server as a long numeric ID (`1000000001`, `1000000002`, …) and remains the same regardless of classroom assignment. For **pairing**, first save a 6-digit Device admin PIN in Admin → System settings. This is distinct from the one-time 6-digit pairing code shown in the device table. On an unpaired scanner, press `#` → Admin → enter the admin PIN → enter the pairing code when prompted. On an already paired scanner, enter the admin PIN, then choose **Pair device** and enter the code. The registered device must be active. A successful response returns `{ ok, deviceId, deviceDisplayName }` and the scanner saves the ID in flash; unpaired IDs are rejected by other device endpoints. Migration `014` renumbers existing devices, which must be re-paired (firmware `1.6.0+`). Admin-managed display names (`Device 1`, `Device 2`, …) are also generated and cannot be edited. A device can remain unassigned while being provisioned, but attendance scanning and fingerprint enrollment are rejected until an admin assigns it to a classroom.
+Shared header `X-Device-Api-Key` authenticates the fleet; **`deviceId`** is generated by the server as a long numeric ID (`1000000001`, `1000000002`, …) and remains the same regardless of classroom assignment. For **pairing**, first save a 6-digit Device admin PIN in Admin → Settings. This is distinct from the one-time 6-digit pairing code shown in the device table. On an unpaired scanner, press `#` → Admin → enter the admin PIN → enter the pairing code when prompted. On an already paired scanner, enter the admin PIN, then choose **Pair device** and enter the code. The registered device must be active. A successful response returns `{ ok, deviceId, deviceDisplayName }` and the scanner saves the ID in flash; unpaired IDs are rejected by other device endpoints. Migration `014` renumbers existing devices, which must be re-paired (firmware `1.6.0+`). Admin-managed display names (`Device 1`, `Device 2`, …) are also generated and cannot be edited. A device can remain unassigned while being provisioned, but attendance scanning and fingerprint enrollment are rejected until an admin assigns it to a classroom.
 
 Firmware `1.6.1+` distinguishes invalid PIN/code, an invalid device API key, server errors, and lockout on the LCD. Five failed pairing attempts in one minute cause a five-minute lockout; generating another code does not clear it. If the code was consumed but the scanner did not save its ID, generate a new code. Do not share PINs, pairing codes, or API keys when reporting an error.
 
@@ -426,6 +442,51 @@ Firmware 1.6.10 introduced a checked slot-index inspection helper with capacity 
 
 Administrators can use **Management → Teachers → Manage fingerprints** on a teacher's row to view that teacher's server mappings and automatically reserve a slot for a selected finger. This records an active teacher, finger, and selected active, paired scanner assigned to an active room, and blocks the slot from attendance matching in the same transaction. The scanner must have enrollment enabled and no pending sensor clear. The server rejects new preparations for teachers with two or more fingerprints and keeps existing mappings intact. A preparation does not grant permission to overwrite a sensor model or initiate capture. Only one preparation per scanner, slot, or teacher/finger is allowed. Same-slot replacement is separately gated.
 
+Use **Edit label** to correct the named finger on an unblocked mapping. This
+changes only the server label: it does not scan a finger or change the sensor
+template. A duplicate finger label or a pending preparation for that finger
+is rejected. For a new biometric scan, use the separately gated **Replace**
+workflow below.
+
+**Individual fingerprint deletion** is experimental and disabled by default.
+Apply migration `050`, provision the scanner's enrollment key, and use matching
+firmware source `1.6.66` or newer built with both `ENROLLMENT_WRITES_ENABLED=1`
+and `FINGERPRINT_DELETION_ENABLED=1`. Enable the portal flag and restart:
+
+```powershell
+dotnet user-secrets set "EnrollmentSecurity:EnableFingerprintDeletion" "true" --project .\SmartClassAC.csproj
+```
+
+For an Arduino CLI build, add
+`--build-property "compiler.cpp.extra_flags=-DFINGERPRINT_DELETION_ENABLED=1"`
+to the existing board-specific compile command. Include any other required
+extra flags in the same property; enrollment writes must remain enabled.
+
+In **Teachers → Manage fingerprints**, choose **Delete** and confirm the exact
+teacher, finger, scanner and slot. The portal immediately blocks that slot from
+attendance and shows the request as `Pending`; use another approved attendance
+method if needed. On the bound scanner, sign in with the device admin PIN,
+select **Delete finger**, compare the displayed slot with the portal, and press
+`#` to confirm. The scanner checks the occupied slot, journals the operation,
+obtains a one-use signed claim, sends a checked single-slot delete command, and
+checks the slot is empty. Only its authenticated confirmation removes the
+mapping and block. Refresh the dialog to see completion. The scanner must be
+active, paired, provisioned, have enrollment enabled, and have no pending wipe;
+legacy unbound mappings cannot be deleted through this flow. Templates are not
+synchronized across sensors.
+
+`Pending` may be canceled before the scanner claims the deletion. Cancellation
+does not erase a fingerprint; if the scanner already wrote a local journal it
+may remain held. `Claimed`, uncertain or interrupted operations remain blocked
+and cannot be canceled or automatically retried; do not manually clear the
+journal, request, block, or sensor. Investigate before reusing the scanner or
+slot. A confirmed scanner journal can retry its completion when connectivity
+returns. Keep the deletion flag enabled until pending completions are resolved.
+An authenticated scanner's confirmation is an attestation, not independent
+proof of sensor contents. Host simulations pass, but the new deletion flow has
+not been built, uploaded or tested on hardware; validate on a controlled
+scanner before relying on it. Do not use the all-scanner wipe for one finger.
+
 Migration `024` and firmware `1.6.22` add an experimental, read-only inventory prerequisite for automatic slot selection. When the firmware is compiled with enrollment writes enabled and the independent `EnrollmentSecurity:EnableInventoryApi` flag is enabled, an idle paired scanner periodically reads its capacity and index bitmap and sends an authenticated, challenge-bound snapshot. The server stores only the latest accepted snapshot. Inventory is disabled by default, supports capacities from 2 through 2048, and requires the per-device enrollment key and the same Development-only HTTP policy as the enrollment routes. The teacher fingerprint dialog automatically reserves a sensor-empty, globally unmapped and unblocked slot from a snapshot whose challenge was issued within 90 seconds. If no recent inventory is available, check that the scanner is online and retry after it refreshes. Snapshots and outstanding inventory challenges are invalidated when writes are guarded or finished and when sensor clearing is requested or reported. Reports are rejected while a write is guarded or a clear is pending. Even a recent snapshot is not write permission: the scanner checks the slot again before capture and refuses an occupied slot.
 
 On the development scanner `1000000005`, a hardware report was received with capacity 300 and the index bits for slots 2 and 3 set. This confirms one report was stored; it does not validate all sensor index behavior, freshness after a write, or automatic allocation.
@@ -522,7 +583,7 @@ The local development setup now has a Base64 random 32-byte master key in User S
 
 For the interim workflow, use one physical scanner for both teacher enrollment and attendance in its assigned classroom. Development route flags must be enabled in local User Secrets, and the application must be started in Development for HTTP enrollment routes to work. Verify the firmware actually installed on the scanner: source changes do not update a device until built and uploaded. Device `1000000005` has a verified protocol key and completed one manual enrollment and attendance scan; automatic slot allocation and the keypad enrollment entry have not yet been validated end-to-end on hardware. Do not treat fingerprints enrolled locally by diagnostic sketches as teacher enrollments: they have no corresponding server mapping and an existing legacy mapping for the same slot could identify a different teacher. The device previously reported sensor slots 2 and 3 occupied; do not replace or clear them. Before enrollment, confirm the intended teacher, finger, scanner, and automatically reserved slot.
 
-Fingerprint slot blocks remain enforced by the guarded enrollment and replacement workflows, but the System settings page no longer exposes manual slot blocking or inspection. A block prevents attendance matching for that slot on every scanner without changing its server mapping or sensor contents. Blocks persist through fingerprint clears and resets; do not remove one directly from the database unless the physical slot and its mapping have been verified and a safe replacement procedure is available. If migration `016` is missing, fingerprint matching fails rather than bypassing the block.
+Fingerprint slot blocks remain enforced by the guarded enrollment and replacement workflows, but the Settings page no longer exposes manual slot blocking or inspection. A block prevents attendance matching for that slot on every scanner without changing its server mapping or sensor contents. Blocks persist through fingerprint clears and resets; do not remove one directly from the database unless the physical slot and its mapping have been verified and a safe replacement procedure is available. If migration `016` is missing, fingerprint matching fails rather than bypassing the block.
 
 Legacy repository enrollment also rejects blocked slots. Older scanner firmware writes a sensor slot before contacting the now-disabled API and may attempt to delete it when that call fails. Do not use legacy enrollment on older firmware; disabling the API alone does not protect its sensor contents.
 
@@ -530,13 +591,13 @@ The **Inspect slot** action shows the current global server mapping and block st
 
 Admins can permanently delete a device after ending any active session and turning off its assigned room's AC. Verify the physical relay is off before disconnecting: deleting the device prevents further status sync and does not erase fingerprints stored on its sensor. Attendance history and classroom settings are retained.
 
-**Remote AC from Admin:** **Admin → AC control** uses per-room **On** / **Off** in the status table (`RemoteOn` → `Remote`, `RemoteOff` → `Off`). That updates MariaDB desired state; firmware `1.2.12+` polls `/api/device/status` about every 30s (with `/health`) and applies `acOn` without a fingerprint scan. Firmware `1.2.13+` keeps the idle LCD on **Ready to scan** if a status sync blip fails (health still drives online/offline). Remote / Override stay on until an explicit Off (portal, hard shutdown, scan end, or clear-session); schedule-window auto-off only clears session-tied `Cooling`.
+**Admin → Monitor** shows per-room AC status and recent temperature events; it does not offer manual on/off controls. Firmware `1.2.12+` polls `/api/device/status` and applies the reported `acOn` state. The portal's reported state does not prove that the physical AC received a command.
 
-**Clear fingerprints from Admin:** **Admin → System settings → Clear fingerprint device data** deletes all `fingerprint_templates` rows and sets `pending_clear_fingerprints` on every active scanner. Firmware `1.2.15+` reads `clearFingerprints: true` from `/status`, runs `emptyDatabase()` on the sensor, then `POST /api/device/clear-session` (AC off + clears the pending flag). Teachers must re-enroll afterward.
+**Clear fingerprints from Admin:** **Admin → Settings → Clear fingerprint device data** deletes all `fingerprint_templates` rows and sets `pending_clear_fingerprints` on every active scanner. Firmware `1.2.15+` reads `clearFingerprints: true` from `/status`, runs `emptyDatabase()` on the sensor, then `POST /api/device/clear-session` (AC off + clears the pending flag). Teachers must re-enroll afterward.
 
 **Server health:** firmware `1.2.9+` polls `GET /health` every 30s (and on boot / WiFi reconnect / Serial `HEALTH`). Idle LCD (firmware `1.2.14+`) keeps **Ready to scan** on row 1 and shows **Offline** on row 2 when WiFi is up but SmartClass is unreachable (or WiFi is down); fingerprint scans are blocked until health returns Healthy (HTTP 200).
 
-**Attendance vs AC re-entry:** the first in-window scan creates one attendance session (`started` → AC Cooling); the next ends it and records time-out. The room remains on if a different class is active or currently scheduled, otherwise it turns off, even if the ending class's own window remains open. A further scan in the same window reopens that attendance row regardless of the room's existing AC status; the next scan ends it again. Outside the window, scans return `no_schedule`. Automatic missing-time-out closure applies the same overlap rule. Reconciliation clears attendance power when no active session or in-window schedule remains; `Remote` / `Override` status is not automatically cleared.
+**Attendance vs AC re-entry:** the first eligible scan, from 15 minutes before the scheduled start until the scheduled end, creates one attendance session (`started` → AC Cooling); an early punch is on time and does not change the scheduled end or buzzer times. The next scan ends it and records time-out. The room remains on if a different class is active or currently scheduled, otherwise it turns off, even if the ending class's own window remains open. A further scan in the same window, including the early window, reopens that attendance row regardless of the room's existing AC status; the next scan ends it again. Outside the window, scans return `no_schedule`. Automatic missing-time-out closure applies the same overlap rule. Reconciliation clears attendance power when no active session or in-window schedule remains; `Remote` / `Override` status is not automatically cleared. An early scan requests AC immediately; physical operation still depends on the scanner and AC configuration.
 
 ### Device PIN
 
@@ -665,15 +726,15 @@ The current sketch does not automatically run the SIM900L startup check; the cal
 
 Power the SIM900L from a supply appropriate for the exact module/breakout; cellular transmit bursts can require high current, so do not assume the ESP32 3.3 V pin can power it. Share ground with the ESP32, cross TX/RX as shown above, and verify the board's UART logic-level compatibility before connecting GPIO19 to the modem RX.
 
-**System settings → GSM settings** can list Windows COM ports and save a selected port and standard baud rate (migration `035`). Discovery does not distinguish the USB modem from other serial devices; verify the port before selecting it. A serialized SIM800L SMS transport and the Faculty OTP API have been tested with a fake serial connection, not a real modem. Modem acceptance of an SMS is not proof of handset delivery; an interrupted submission has an uncertain outcome and must not be blindly retried.
+**Settings → GSM settings** can list Windows COM ports and save a selected port and standard baud rate (migration `035`). Discovery does not distinguish the USB modem from other serial devices; verify the port before selecting it. A serialized SIM800L SMS transport and the Faculty OTP API have been tested with a fake serial connection, not a real modem. Modem acceptance of an SMS is not proof of handset delivery; an interrupted submission has an uncertain outcome and must not be blindly retried.
 
-Administrators can use **System settings → Test SMS** to send the fixed message “SmartClassAC modem test message.” Enter an `09xxxxxxxxx` recipient, save and verify the modem port and baud rate, then explicitly confirm the recipient and port before sending. Standard SMS charges may apply. This test uses the saved modem settings independently of Faculty OTP configuration and does not issue an OTP. If delivery is uncertain, check the phone before attempting another send.
+Administrators can use **Settings → Test SMS** to send the fixed message “SmartClassAC modem test message.” Enter an `09xxxxxxxxx` recipient, save and verify the modem port and baud rate, then explicitly confirm the recipient and port before sending. Standard SMS charges may apply. This test uses the saved modem settings independently of Faculty OTP configuration and does not issue an OTP. If delivery is uncertain, check the phone before attempting another send.
 
 The Faculty OTP store (migration `036`) reserves six-digit codes for five minutes, activates them only after modem acceptance, limits requests to three per phone and ten per scanner in a five-minute fixed window, and allows at most five guesses and one successful use. Codes and phone numbers are represented by keyed digests in the OTP tables; verification rechecks the teacher's current status and phone. The device API is **disabled by default** (`FacultyOtp:EnableDeviceApi`). Firmware source `1.6.53` replaces the demo Faculty ID/PIN with an 11-digit mobile number and six-digit SMS code, verifies the signed response before allowing access, and fails closed if the API is unavailable. It has been compiled but not uploaded or hardware-tested; previously installed firmware may still have the insecure demo login.
 
 Portal teacher registration and mobile changes use a separate SMS verification
 workflow (migration `043`), not the scanner OTP endpoints. Configure the GSM
-modem under **System settings → GSM settings** and retain a stable random 32-byte
+modem under **Settings → GSM settings** and retain a stable random 32-byte
 Base64 `FacultyOtp:Secret` in protected configuration. The admin receives a
 six-digit code at the proposed number when creating a teacher or changing that
 number; a teacher changing their own number follows the same flow. Other profile
@@ -719,27 +780,53 @@ Experimental IR synchronization is disabled by default in portal configuration (
 
 The companion firmware repository includes a separate `ir_receiver_diagnostic` sketch for an IdeaSpark ESP32 with an integrated ST7789 display and a 38 kHz IR receiver on GPIO13. It labels the temperature commands and power toggle; see its README for wiring and use. It cannot confirm reception or state at the actual AC.
 
-Firmware source `1.6.57` runs periodic health, room-status, and buzzer network requests in a background task to keep the keypad responsive during number and code entry. User-initiated requests, such as submitting an OTP or changing a target, can still take time and show a waiting message. If the background task cannot start, the scanner logs an error and falls back to blocking polling. Network delays, other blocking scanner operations, and offline periods can still delay or miss buzzer reminders.
+Firmware source `1.6.57` runs periodic health, room-status, and buzzer network requests in a background task to keep the keypad responsive during number and code entry. User-initiated requests, such as submitting an OTP or changing a target, can still take time and show a waiting message. If the background task cannot start, the scanner logs an error and falls back to blocking polling. Buzzer reminders retain their configured pre-end lead and repeat times, with an additional reminder at the actual schedule end (including an accepted 30-minute extension). Network delays, other blocking scanner operations, and offline periods can still delay or miss buzzer reminders.
 
-Migration `039` stores the boot, assumed setpoint, pending step and audit history. After every scanner restart, an administrator must use the remote to set the assigned AC to the current portal target and confirm it under **AC control → Reconcile**. The confirmation is tied to that boot, room and unchanged target. A relative step is recorded as in flight before it can be transmitted; an unknown claim or acknowledgement halts the scanner until restart and reconciliation, rather than retrying. Reassignment, deactivation, re-pairing, deletion, room retirement and reset are blocked while a step is in flight; otherwise changing assignment or pairing, deactivating the scanner, or retiring its room invalidates its IR state and requires a fresh boot. The AC control page distinguishes reconciliation, pending, uncertain and not-recently-seen states; its two-minute heartbeat is not proof the scanner is online. Apply migration `039` before deploying this portal version even if IR is disabled, because device and classroom management checks the IR state.
+Migration `039` stores the boot, assumed setpoint, pending step and audit history. After every scanner restart, an administrator must use the remote to set the assigned AC to the current portal target and confirm it under **Monitor → Reconcile**. The confirmation is tied to that boot, room and unchanged target. A relative step is recorded as in flight before it can be transmitted; an unknown claim or acknowledgement halts the scanner until restart and reconciliation, rather than retrying. Reassignment, deactivation, re-pairing, deletion, room retirement and reset are blocked while a step is in flight; otherwise changing assignment or pairing, deactivating the scanner, or retiring its room invalidates its IR state and requires a fresh boot. The Monitor page distinguishes reconciliation, pending, uncertain and not-recently-seen states; its two-minute heartbeat is not proof the scanner is online. Apply migration `039` before deploying this portal version even if IR is disabled, because device and classroom management checks the IR state.
 
 Firmware source `1.6.58` checks for pending IR steps every five seconds while on the normal scanning screen, instead of every ten seconds. Exit the Faculty menu after saving a target to allow IR polling. Network authentication and other scanner work add delay; each degree requires a separately claimed and acknowledged step. More frequent polling increases server requests and still does not verify physical AC reception.
 
 **Experimental attendance power toggle:** migration `042` adds an attendance-derived desired power state, an assumed power state and guarded in-flight toggle. Apply migrations before deploying this portal. Scanner source `1.6.60` enables `AC_IR_POWER_ENABLED=1` by default; all scanners must use power-capable firmware compiled with that flag enabled, and the portal must have both `AcIr:EnableDeviceApi=true` and `AcIr:EnablePowerToggle=true`. The portal flags remain off by default. A v2 scanner cannot synchronize IR with a portal that has power toggle disabled; the portal power flag globally disables legacy IR routes, so old scanners cannot synchronize IR until upgraded or the flag is turned off. Switching protocol versions requires a fresh scanner restart. Firmware source `1.6.60` has not been uploaded or physically tested as part of this change.
 
-After each restart, an admin must set the AC to the target temperature with its remote, physically verify whether it is ON or OFF, and select that state in **AC control → Reconcile**. Reconciliation can immediately result in a toggle if the confirmed state differs from attendance demand. The NEC `0x08E700FF` command is one toggle, not separate ON/OFF codes; a missed signal or manual remote use can invalidate the assumption. After any uncertain claim or completion, restart and physically reconcile; never retry the toggle blindly. Temperature steps wait while assumed power is off. Admin dashboard and scanner Faculty menu Remote or Override controls retain their existing room/relay behavior and are not IR power-toggle requests. Neither server acknowledgment nor the diagnostic receiver proves that the AC received or applied a signal.
+After each restart, an admin must set the AC to the target temperature with its remote, physically verify whether it is ON or OFF, and select that state in **Monitor → Reconcile**. Reconciliation can immediately result in a toggle if the confirmed state differs from attendance demand. The NEC `0x08E700FF` command is one toggle, not separate ON/OFF codes; a missed signal or manual remote use can invalidate the assumption. After any uncertain claim or completion, restart and physically reconcile; never retry the toggle blindly. Temperature steps wait while assumed power is off. Admin dashboard and scanner Faculty menu Remote or Override controls retain their existing room/relay behavior and are not IR power-toggle requests. Neither server acknowledgment nor the diagnostic receiver proves that the AC received or applied a signal.
 
 Migration `038` adds a five-minute scanner-bound teacher session. Session creation consumes a delivered OTP atomically and stores only a hash of a random token; session lookup rechecks the paired scanner, pairing timestamp, active teacher and phone. An authenticated query returns only that teacher's schedules for the current school date, across classrooms. These menu routes are separately gated by `FacultyOtp:EnableMenuApi` (default false) in addition to `FacultyOtp:EnableDeviceApi`. Scanner target changes additionally require `FacultyOtp:EnableAcTargetApi` (default false). Firmware source `1.6.53` has been compiled but not uploaded or hardware-tested; validate the complete deployment before enabling menu flags.
 
-On the scanner schedule screen, `*` and `#` navigate today's classes (up to the first 1,000), `0` toggles subject/room, and holding `0` returns to the Faculty menu. The second row shows class times. AC info displays the assigned room's portal target and teacher minimum, not a measured AC setpoint. On AC info `*` lowers and `#` raises the target by one degree, `0` refreshes and holding `0` returns. An uncertain target request must be followed by reopening AC info, not a blind retry. Attendance remains fingerprint-based.
+On the scanner schedule screen, `*` and `#` navigate today's classes (up to the first 1,000), `0` toggles subject/room, and holding `0` returns to the Faculty menu. The second row shows class times. The faculty menu also offers **Extend +30 min**: the server accepts one extension for an active scheduled class only when no other schedule for that teacher or classroom overlaps the added 30 minutes. Buzzer reminders and missing-time-out reconciliation use the extended end time. AC info displays the assigned room's portal target and teacher minimum, not a measured AC setpoint. On AC info `*` lowers and `#` raises the target by one degree, `0` refreshes and holding `0` returns. An uncertain target request must be followed by reopening AC info, not a blind retry. Faculty menu login does not authorize attendance.
+
+**Attendance fallback:** When a teacher cannot scan their fingerprint, they call
+the admin. In **Schedules**, the admin selects the class's **Attendance SMS
+code** action, chooses time-in or time-out, and sends the code to the scheduled
+teacher's registered mobile. On the assigned scanner press `#`, select
+**Attendance OTP**, enter the six-digit SMS code, and press `#`. No employee
+number is entered. The code is valid for five minutes, permits five attempts,
+and is usable once, for that action and class on that paired scanner only.
+Only one attendance request can be pending per scanner; a newer request replaces
+it. A fresh admin-issued code is required for time-out. The normal 15-minute
+early time-in window, class eligibility, verified-substitute requirement,
+extension and missing-time-out rules still apply. If the class, assignment,
+phone, pairing or attendance session changes, request a new code. A code is
+not activated when SMS delivery is uncertain. Attendance and AC requests are
+updated atomically with code use; physical IR reception is not guaranteed.
+The scanner still requires a successful fingerprint-sensor handshake at boot.
+The updated sketch has not been built, uploaded or hardware-tested here.
+If the scanner loses the response, check the portal attendance record before
+requesting another code: the original action may already have succeeded.
+
+Attendance routes `/api/device/attendance/otp/challenge` and `/verify` use
+purpose `attendance_otp_verify`, the scanner key and fleet API key, and the same
+signed code and response format as faculty verification. They require HTTPS
+outside Development and do not accept faculty-menu OTPs. Migration `048` keeps
+an attendance OTP event without storing the code; new attendance rows identify
+SMS verification in `verification_method`.
 
 The new `/api/device/faculty/menu/login` and `/schedule` routes each have a `/challenge` route and use purposes `faculty_menu_login` and `faculty_menu_schedule`. The request MAC covers ASCII `value\nindex\n`, where value is the six-digit OTP for login or the 64-character session token for schedule; login requires index zero. Signed responses begin with the lowercase SHA-256 digest of the request body and a newline. Login returns `denied\n` or `accepted\n<token>\n`; schedule returns `denied\n`, `end\n`, or `item\n<index>\n<count>\n<subject>\n<room>\n<start HH:mm>\n<end HH:mm>\n`. Subject and room are limited to 16 printable ASCII characters, replacing unsupported characters with `?`. Session tokens are credentials: do not log them or response bodies; HTTP on a Development LAN exposes them to observers.
 
 The read-only `/api/device/faculty/menu/ac` and `/challenge` routes use purpose `faculty_menu_ac`, the session token and index zero with the same signed protocol. The response is `denied\n` for an invalid session or unavailable assignment, or `info\n<target>\n<minimum>\n<active-class 0 or 1>\n`. The active-class value is informational and is not an authorization for a future temperature change.
 
-Firmware uses `/api/device/faculty/menu/ac-v2`, purpose `faculty_menu_ac_v2`, which adds the assigned room ID before the target in that response. `/api/device/faculty/menu/ac-target` uses `faculty_menu_ac_target` and signs `token\n<old target * 100 + new target>\n<room id>\n`; the server rechecks the assigned room, session, attendance, minimum and old target transactionally. Signed results are `saved`, `denied`, `no_class`, `minimum`, or `stale`. The IR `/api/device/ac-ir/boot`, `/claim`, and `/complete` routes each have a challenge endpoint and use a signed boot identifier plus command identifier. A claimed step is never proof of delivery.
+Firmware uses `/api/device/faculty/menu/ac-v2`, purpose `faculty_menu_ac_v2`, which adds the assigned room ID before the target in that response. `/api/device/faculty/menu/ac-target` uses `faculty_menu_ac_target` and signs `token\n<old target * 100 + new target>\n<room id>\n`; the server rechecks the assigned room, session, attendance, minimum and old target transactionally. Signed results are `saved`, `denied`, `no_class`, `minimum`, or `stale`. `/api/device/faculty/menu/extend` and `/challenge` use purpose `faculty_menu_extend`, sign `token\n0\n`, and return `extended`, `denied`, `no_class`, `already`, `conflict`, or `invalid` (class ends too close to midnight). Migration `045` stores the extension on the attendance row, not the class schedule. The IR `/api/device/ac-ir/boot`, `/claim`, and `/complete` routes each have a challenge endpoint and use a signed boot identifier plus command identifier. A claimed step is never proof of delivery.
 
-Before enabling Faculty OTP and menu routes, apply migrations `035` through `039`, configure the protected server secret and the scanner's existing enrollment key, select the verified USB modem COM port, and deploy a user-built `1.6.53` or newer sketch after validation. The current sketch sets `FACULTY_OTP_ALLOW_HTTP=1` for Development: HTTP exposes phone numbers, OTPs, and session tokens and must be used only on an explicitly trusted LAN. Set it to `0` for HTTPS and set `facultyOtpCaCertificate` in the sketch to the PEM CA that validates the portal hostname; an empty CA fails closed. Configure the portal's matching HTTPS endpoint and a valid certificate; the separate legacy scanner requests have not been validated end-to-end over HTTPS. The request screen may block while the modem responds; a timeout or unknown delivery outcome does not grant access. Obtain consent before sending a live test SMS.
+Before enabling Faculty OTP and menu routes, apply migrations through `047`, configure the protected server secret and the scanner's existing enrollment key, select the verified USB modem COM port, and deploy a user-built `1.6.53` or newer sketch after validation. Migration `045` is required for class extensions, `046` for makeup replacements, and `047` for substitutions. The current sketch sets `FACULTY_OTP_ALLOW_HTTP=1` for Development: HTTP exposes phone numbers, OTPs, and session tokens and must be used only on an explicitly trusted LAN. Set it to `0` for HTTPS and set `facultyOtpCaCertificate` in the sketch to the PEM CA that validates the portal hostname; an empty CA fails closed. Configure the portal's matching HTTPS endpoint and a valid certificate; the separate legacy scanner requests have not been validated end-to-end over HTTPS. The request screen may block while the modem responds; a timeout or unknown delivery outcome does not grant access. Obtain consent before sending a live test SMS.
 
 Usual use: device boots in **scanning mode** (`Ready to scan`). After a successful status sync, row 1 alternates every four seconds between the assigned classroom name (or **Unassigned**) and the ready/disabled prompt or active teacher name. Room names are truncated to the 16-column LCD; the last synced room is shown only while the server is online. Place an enrolled finger anytime → local match → `POST /api/device/fingerprint/scan` for attendance logging → AC follows `started` / `ended` / `ac_on` / `ac_off`. While AC is on, row 2 shows **clock · session timer · temp · AC icon** (both times use a blinking colon). Overlays return to scanning automatically.
 
@@ -841,7 +928,7 @@ Prefer applying schema (or relying on `DatabaseMigrationRunner`) with a least-pr
 | `DefaultAdmin__Username` | `admin` |
 | `DefaultAdmin__Password` | *(strong)* |
 | `DeviceApi__ApiKey` | *(long random)* |
-| `PasswordReset__*` | SMTP when needed |
+| `PasswordReset__PublicBaseUrl` | Public app URL used in SMS reset links |
 | `SchoolTime__TimeZoneId` | e.g. `Singapore Standard Time` |
 
 Monitor `GET /health` from the load balancer. Never commit secrets. Use managed MariaDB with backups.
@@ -874,19 +961,61 @@ Profiles: HTTP **5062**, HTTPS **7044** (`.vscode/launch.json` / `Properties/lau
 SmartClassAC/
 ├── .vscode/              # Launch and build tasks
 ├── scripts/              # setup-user-secrets.ps1
-├── Migrations/           # Versioned MariaDB SQL (001–004+)
+├── Migrations/           # Versioned MariaDB SQL
 ├── bruno/                # Device API HTTP collection + Local env
 ├── Pages/                # Blazor pages
 ├── Shared/               # Layout / navigation
-├── Services/             # Auth, MariaDB, migrations, device API, demo seed
+├── Services/             # Models/contracts, route handlers, services and data access
+├── esp32/                # Companion firmware
+├── docs/                 # Process and data-model documentation
 ├── wwwroot/
 ├── Properties/
 ├── Program.cs            # Entry + device routes
 ├── appsettings*.json
-└── README.md             # ← canonical docs (only markdown in this repo)
+└── README.md             # Canonical project documentation
 ```
 
-Companion hardware: `SmartClassAC-ESP32/smartclass/`.
+### C# backend file guide
+
+The backend uses Blazor Server and ASP.NET Core minimal APIs, not a traditional
+MVC folder structure. There are currently no separate `Models/` or
+`Controllers/` folders. The table maps those responsibilities to the actual
+files; some files contain more than one responsibility.
+
+| Responsibility | Files | Contents |
+|---|---|---|
+| Models and contracts | [Services/Contracts.cs](Services/Contracts.cs) | Shared request, response and directory records, configuration options, `IAuthService`, `IUserAccountRepository`, and result types. |
+| Feature-specific models | [Services/CsvImportService.cs](Services/CsvImportService.cs), [Services/AttendanceReport.cs](Services/AttendanceReport.cs), [Services/ScheduleReport.cs](Services/ScheduleReport.cs), and the protocol files below | CSV results, report data, and device request/response records live alongside their features. |
+| Controller-style endpoints | [Program.cs](Program.cs) | App setup, dependency injection, authentication, and minimal API routes for login and device operations. |
+| Additional endpoint handlers | [EnrollmentRecoveryProtocol.cs](Services/EnrollmentRecoveryProtocol.cs), [FacultyOtpProtocol.cs](Services/FacultyOtpProtocol.cs), [AttendanceOtpProtocol.cs](Services/AttendanceOtpProtocol.cs), [FacultyDeviceMenuProtocol.cs](Services/FacultyDeviceMenuProtocol.cs), [AcIrProtocol.cs](Services/AcIrProtocol.cs), [BuzzerSettingsStore.cs](Services/BuzzerSettingsStore.cs), [AttendanceReport.cs](Services/AttendanceReport.cs), [ScheduleReport.cs](Services/ScheduleReport.cs) | Minimal API route mappings for enrollment, device features, buzzer and reports; registered from `Program.cs`. |
+| Portal actions | [Pages/Admin.razor](Pages/Admin.razor), [Pages/Login.razor](Pages/Login.razor), and other [Pages](Pages/) | Blazor pages handle UI events and call backend services. |
+| Authentication and validation | [AuthService.cs](Services/AuthService.cs), [TeacherAccountValidation.cs](Services/TeacherAccountValidation.cs), [PasswordHasher.cs](Services/PasswordHasher.cs), [LoginAttemptLimiter.cs](Services/LoginAttemptLimiter.cs) | Portal authorization, account operations, validation, password hashing and login throttling. |
+| Data access and startup | [MariaDbUserAccountRepository.cs](Services/MariaDbUserAccountRepository.cs), [DatabaseMigrationRunner.cs](Services/DatabaseMigrationRunner.cs), [DatabaseInitializationService.cs](Services/DatabaseInitializationService.cs), [MariaDbHealthCheck.cs](Services/MariaDbHealthCheck.cs) | MariaDB operations, schema migrations, startup initialization and health checks. |
+| Attendance and schedules | [AttendanceReconciliationService.cs](Services/AttendanceReconciliationService.cs), [AttendanceOtpService.cs](Services/AttendanceOtpService.cs), [ScheduleSubstitutionService.cs](Services/ScheduleSubstitutionService.cs), [CsvImportService.cs](Services/CsvImportService.cs) | Attendance reconciliation, approved OTPs, substitutions and CSV imports. |
+| Devices and AC | [DeviceFingerprintService.cs](Services/DeviceFingerprintService.cs), [FacultyDeviceScheduleStore.cs](Services/FacultyDeviceScheduleStore.cs), [FacultyDeviceAcStore.cs](Services/FacultyDeviceAcStore.cs), [AcIrStateStore.cs](Services/AcIrStateStore.cs), [AcIrAdministration.cs](Services/AcIrAdministration.cs) | Fingerprint and device operations, faculty schedules, AC state and administration. |
+| SMS and OTP | [GsmModemSettingsStore.cs](Services/GsmModemSettingsStore.cs), [GsmSmsTransport.cs](Services/GsmSmsTransport.cs), [PortalMobileOtp.cs](Services/PortalMobileOtp.cs), [FacultyOtpIssuer.cs](Services/FacultyOtpIssuer.cs), [FacultyOtpStore.cs](Services/FacultyOtpStore.cs) | Modem settings, SMS delivery, and portal and device OTP flows. |
+
+### Error handling files
+
+There is **no single dedicated error-handling file**. Error handling is
+currently distributed across the backend:
+
+- [Services/Contracts.cs](Services/Contracts.cs) defines `OperationResult`,
+  `LoginResult` and other result records used to report expected failures.
+  [Services/CsvImportService.cs](Services/CsvImportService.cs) also reports
+  file and row import errors.
+- [Program.cs](Program.cs) logs exceptions and returns HTTP error responses
+  for selected device endpoints. Outside Development it configures
+  `UseExceptionHandler("/Error")`, but the repository currently has no
+  dedicated `/Error` page or handler.
+- [Services/MariaDbUserAccountRepository.cs](Services/MariaDbUserAccountRepository.cs)
+  handles specific database errors and rolls back transactions; unexpected
+  errors are rethrown. [Services/DatabaseMigrationRunner.cs](Services/DatabaseMigrationRunner.cs)
+  logs migration failures, and [Services/DatabaseInitializationService.cs](Services/DatabaseInitializationService.cs)
+  logs and retries startup failures.
+- [Pages/Admin.razor](Pages/Admin.razor) logs and displays errors for various
+  admin operations. [Pages/_Host.cshtml](Pages/_Host.cshtml) contains the
+  Blazor error UI shown when the app encounters an unhandled client/circuit error.
 
 ---
 
@@ -896,7 +1025,7 @@ Companion hardware: `SmartClassAC-ESP32/smartclass/`.
 |-------|-------------|
 | `/` | Landing |
 | `/login` | Administrator sign in |
-| `/first-access` | Admin recovery email (once) |
+| `/first-access` | Admin recovery mobile number (once) |
 | `/forgot-password` / `/reset-password` | Administrator password reset |
 | `/admin` | Administrator dashboard |
 | `/health` | MariaDB health |
@@ -914,13 +1043,74 @@ option does not keep the user signed in.
 
 ## Admin and teacher workflow
 
-**Admin:** create/edit teachers (name, employee number, and **required mobile** `09xxxxxxxxx`; usernames are generated internally, school email is not collected, and device PINs are assigned automatically; **active/inactive** status — only active teachers appear when creating schedules or enrolling in a semester; new registrations and mobile-number changes require SMS OTP verification), **semesters** (enroll teachers), classrooms, schedules with **Regular/Makeup** kind and optional **repeat through semester end** (None / Weekly / Mon–Wed / Tue–Thu / MWF / TTH / Custom weekdays — expands to one `class_schedules` row per date; conflicts are skipped and reported); **move** a single schedule to another date/time; system reset (`RESET`) / delete.
+**Admin:** create/edit teachers (name, employee number, and **required mobile** `09xxxxxxxxx`; usernames are generated internally, school email is not collected, and device PINs are assigned automatically; **active/inactive** status — only active teachers appear when creating schedules or enrolling in a semester; manual registrations and mobile-number changes require SMS OTP verification), **semesters** (enroll teachers), classrooms, regular schedules with optional recurrence through semester end (None / Weekly / Mon–Wed / Tue–Thu / MWF / TTH / Custom weekdays — expands to one `class_schedules` row per date; conflicts are skipped and reported), and one-off **Makeup** schedules that replace a selected original occurrence within the next 7 days; the original weekly schedule resumes on its next occurrence. Makeup schedules may use a different teacher, room, subject, and time. **Move** a single schedule to another date/time; system reset (`RESET`) / delete.
+
+### CSV import
+
+Restart the portal to apply migrations through `049`; check the startup log if
+database initialization fails. In **Teachers**, **Semesters**, or
+**Schedules**, select **Import CSV** and download that page's template. Use
+separate UTF-8 comma-separated files with a header row. Import
+teachers and semesters first; create classrooms before importing schedules.
+Choose a file and select **Import** to save. Files are limited to 1 MB and
+1,000 data rows. Valid rows are saved individually, while invalid and duplicate
+rows and conflicting schedule occurrences are reported. Invalid headers or
+malformed CSV quoting reject the file before any rows are saved. If an
+unexpected error interrupts the import, review the lists before retrying.
+
+| File | Required columns | Optional columns |
+|---|---|---|
+| Teachers | `name,employee_number,phone` | None |
+| Semesters | `name,start_date,end_date` | `active` (`true` or `false`, defaults to `true`) |
+| Schedules | `employee_number,semester,classroom,subject,date,start_time,end_time` | `recurrence,weekdays,kind,replaces_schedule_id` |
+
+For example, the following are three separate files; replace the sample
+details and phone number with actual data:
+
+```csv
+name,employee_number,phone
+Example Teacher,EMP001,09123456789
+```
+
+```csv
+name,start_date,end_date,active
+Term 1,2030-01-07,2030-05-31,true
+```
+
+```csv
+employee_number,semester,classroom,subject,date,start_time,end_time,recurrence,weekdays,kind,replaces_schedule_id
+EMP001,Term 1,Room A,Math,2030-01-07,09:00,10:00,Weekly,,Regular,
+```
+
+Use dates `YYYY-MM-DD` and 24-hour times `HH:mm`. Schedule references are the
+teacher's employee number and the exact names of an active semester and active
+classroom. A successful schedule row automatically enrolls its teacher in the
+semester. Leave `recurrence` blank or use `None` for one date; other supported
+values are `Weekly`, `MonWed`, `TueThu`, `MWF`, `TTH`, and `Custom`. For
+`Custom`, supply one or more distinct weekdays such as `Mon|Wed|Fri`; leave
+`weekdays` blank for other patterns. Repeats extend through the semester end,
+limited to 1,000 proposed occurrences per row and 10,000 per file. Leave
+`kind` blank for `Regular`; `Makeup` requires the existing original schedule's
+numeric ID in `replaces_schedule_id`, is nonrepeating, and follows the normal
+seven-day replacement rules. Quote fields containing commas or newlines.
+
+Imported teachers have generated internal credentials and **unverified** mobile
+numbers. Fingerprint attendance remains available, but faculty-menu OTP,
+attendance OTP, substitute approval and missing-time-out SMS cannot use an
+unverified number. In **Teachers**, edit the teacher and save to send a
+verification code, then enter the code received by that teacher. The code
+requires the configured GSM modem and `FacultyOtp:Secret`; no live SMS is sent
+by the import itself. Migration `049` treats existing accounts as verified to
+preserve their current behavior; review legacy numbers if their ownership was
+never confirmed. Keep CSV files containing personal data private.
 
 From **Admin → Classrooms**, select **View schedules** in the room's Schedules column to view its schedules, then move or delete individual entries. Current and future schedules must be moved or deleted before a classroom can be retired; device assignments are managed separately in Devices.
 
+For a substitute, use **Admin → Schedules → Manage substitute** on the individual class. Choose a different active teacher enrolled in that semester, send the SMS code to their registered phone, and enter the code they provide within five minutes. The verified substitute uses their enrolled fingerprint or a separate admin-approved attendance SMS code at that room's scanner; their attendance activates AC for that class, while the original teacher remains identified on the schedule and is not automatically marked absent. The substitute cannot have an overlapping class, including an extended class. Before attendance is recorded and before the class ends, the admin may remove the substitution or confirm another substitute with a new code. Remove the substitution before moving the class. Legacy substitutions have no SMS confirmation and cannot start or adjust AC until verified; end any existing legacy substitute sessions before deploying migration `047`, then verify or remove those assignments. Existing physical AC state is not automatically verified or reset by the migration.
+
 **Devices:** Admin → Management → **Devices** registers scanners and manages their room assignment, display name, room target temperature, status polling interval, active state, and attendance scan/fingerprint enrollment permissions. Devices fetch these settings after connecting and during status polls; Wi-Fi/server/API credentials stay provisioned locally.
 
-**Teacher:** no web dashboard or username/password sign-in. Existing mapped fingerprints can start/end attendance by scan when a schedule window is active in an **active semester**; the scanner Faculty menu may provide schedule and AC functions when enabled.
+**Teacher:** no web dashboard or username/password sign-in. Existing mapped fingerprints can start attendance by scan up to 15 minutes before the scheduled class in an **active semester**; the scanner Faculty menu may provide schedule and AC functions when enabled.
 
 ### Required domain flow (status)
 
@@ -962,7 +1152,7 @@ AC ON / AC OFF
 |------|--------|-------|
 | **TEACHER** | Done | Create/edit; employee #; device PIN; fingerprints; active/inactive (schedule eligibility) |
 | **TEACHER_SEMESTER** | Done | Semesters + enroll/unenroll; schedules require enrollment |
-| **REGULAR / MAKEUP** | Done | `schedule_kind`; Makeup preferred when overlapping; expand-on-create recurrence through semester end |
+| **REGULAR / MAKEUP** | Done | Makeup links to one original occurrence, suppressing it for that date only; eligible within 7 days |
 | **CLASSROOM** | Done | Rooms, target and minimum temperatures |
 | **BIOMETRIC_DEVICE** | Done | Generated `deviceId` identifies the device; assignment determines its room |
 | **AC_UNIT** | Done | Room `ac_status` + Admin remote on/off; ESP polls `/status` (~30s) |
@@ -991,10 +1181,10 @@ Teacher → TeacherSemester → RegularSchedule / MakeupClass → Classroom
 
 - **Semesters** — Admin → Semesters: create and edit date-ranged terms, activate/deactivate, enroll teachers.
 - **Enrollment** — required in `teacher_semesters` before creating schedules for that semester.
-- **Schedule kind** — `Regular` or `Makeup`; date must fall inside the semester; when both are in window, **Makeup is preferred** for biometric/dashboard start.
-- **Recurring schedules** — Admin → Schedules → Add schedule: choose a start date, times, and a repeat pattern. Matching weekdays from the start date through the semester `end_date` are expanded into individual schedule rows (same subject/room/teacher/kind/times). Overlaps with existing teacher or classroom bookings are **skipped**; the toast reports how many were created vs skipped. Custom lets you pick Mon–Fri checkboxes. Makeup can still repeat, but the UI warns that makeups are usually one-off.
-- **Move schedule** — each row has a move action to change that single class’s date and times (teacher/room/subject/kind unchanged). Rejects overlaps, dates outside the semester, and schedules with an active attendance session.
-- Demo seed creates “Demo Semester {year}”, enrolls all demo teachers, and marks Science Lab as Makeup.
+- **Schedule kind** — `Regular` or `Makeup`; date must fall inside the semester. A Makeup is one occurrence linked to an unreplaced Regular class on the same date, no more than 7 days ahead. The original occurrence is hidden from teacher/scanner attendance and absence processing; later original occurrences remain unchanged. Makeup details can change teacher, room, subject and time.
+- **Recurring schedules** — Admin → Schedules → Add schedule: choose a start date, times, and a repeat pattern. Matching weekdays from the start date through the semester `end_date` are expanded into individual schedule rows (same subject/room/teacher/kind/times). Overlaps with existing teacher or classroom bookings are **skipped**; the toast reports how many were created vs skipped. Custom lets you pick Mon–Fri checkboxes. Makeup replacements cannot repeat.
+- **Move schedule** — each regular row has a move action to change that single class’s date and times (teacher/room/subject/kind unchanged). Rejects overlaps, dates outside the semester, and schedules with an active attendance session. Delete a makeup replacement before moving either it or its original occurrence.
+- Demo seed creates “Demo Semester {year}” and enrolls all demo teachers.
 
 ### Attendance outcomes
 
@@ -1006,7 +1196,7 @@ BiometricEvent → Attendance → Late | Absent | MissingTimeOut | OnTime
 |---------|------|
 | **On time** | Time-in within `LateGraceMinutes` after schedule start; normal time-out |
 | **Late** | Time-in after the late grace, still inside the schedule window |
-| **Missing time-out** | Session still open after schedule end + `MissingTimeOutGraceMinutes` (auto-closed; AC off) |
+| **Missing time-out** | Session still open after schedule end + `MissingTimeOutGraceMinutes` (capped at 29; auto-closed and SMS reminder sent; AC off) |
 | **Absent** | Schedule ended with no time-in punch (system row) |
 
 Session lifecycle remains `Active` → `Completed` (**one attendance row per schedule**). After time-out, in-window re-login (`ac_on`) reopens that row (clears time-out); the next logout (`ended`) writes a fresh time-out. Reconciliation runs every minute and also before scan / dashboard attendance reads; it turns AC Off when a room is Cooling and **no schedule is still in-window** for that room (even if the teacher has not logged out). If a back-to-back class for the same room is already in its window, Cooling stays on.
@@ -1030,7 +1220,7 @@ The device scan API can be exercised with Bruno; legacy enrollment remains disab
 
 ## Security notes
 
-- Keep DB, device API key, and SMTP out of source control (User Secrets / env).
+- Keep DB and device API key out of source control (User Secrets / env).
 - Connection string stays on the server only.
 - Require `X-Device-Api-Key` on device routes.
 - Device PINs are short shared secrets assigned automatically to teachers; do not reuse admin passwords.
@@ -1055,7 +1245,7 @@ Document every shipped change here (newest first). Also update the relevant sect
 
 #### 2026-11-07 — Admin device management and startup settings
 
-- Added **Admin → Devices** to register devices and manage room assignment, generated display name, target temperature, status polling interval, active state, and scan/enrollment permissions. Moved the fingerprint wipe control out of System settings into Devices.
+- Added **Admin → Devices** to register devices and manage room assignment, generated display name, target temperature, status polling interval, active state, and scan/enrollment permissions. Moved the fingerprint wipe control out of Settings into Devices.
 - Added migrations `010_biometric_device_settings.sql`, `011_unassigned_biometric_devices.sql`, and `012_generated_device_ids.sql`; device IDs are generated independently of room names, and devices can remain unassigned.
 - Active sessions prevent changing affected room assignments, deactivating devices, or disabling scans.
 - `/api/device/status` supplies the managed settings; scan and enrollment permissions are enforced server-side.
@@ -1149,7 +1339,7 @@ Document every shipped change here (newest first). Also update the relevant sect
 
 - Migration `005`: `semesters`, `teacher_semesters`, `class_schedules.semester_id` / `schedule_kind`.
 - Admin Semesters page (create, activate, enroll/unenroll); schedule form requires semester + kind.
-- Biometric/dashboard class start only matches schedules in an active semester with teacher enrollment; Makeup preferred when overlapping.
+- Biometric/dashboard class start only matches schedules in an active semester with teacher enrollment; a linked Makeup suppresses only its replaced occurrence.
 - Demo seed creates a demo semester and enrolls teachers.
 
 #### 2026-09-27 — Consolidate documentation into README

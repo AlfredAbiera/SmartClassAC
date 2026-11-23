@@ -308,7 +308,6 @@ public sealed class DeviceDeletionTests
             new PasswordHasher(),
             Options.Create(new DefaultAdminOptions()),
             Options.Create(new PasswordResetOptions()),
-            null!,
             new LoginAttemptLimiter(),
             Options.Create(new SchoolTimeOptions()),
             new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(

@@ -11,6 +11,11 @@ public sealed class DefaultAdminOptions
     public string Password { get; set; } = string.Empty;
 }
 
+public sealed class PasswordResetOptions
+{
+    public string PublicBaseUrl { get; set; } = string.Empty;
+}
+
 public sealed class SchoolTimeOptions
 {
     public string TimeZoneId { get; set; } = string.Empty;
@@ -130,7 +135,7 @@ public sealed record OperationResult(bool Succeeded, string? Error = null)
 
 public sealed record CreateTeacherRequest(string DisplayName, string Username, string EmployeeNumber, string? Email, string Phone, string Password, string? DevicePin = null, string? RegistrationOtp = null, long VerificationActorId = 0);
 public sealed record UpdateAdminTeacherRequest(long AccountId, string DisplayName, string Username, string EmployeeNumber, string? Email, string Phone, string? DevicePin, string? NewPassword, string? MobileOtp = null, long VerificationActorId = 0);
-public sealed record TeacherDirectoryEntry(long Id, string DisplayName, string Username, string? EmployeeNumber, string? Email, string? Phone, int FingerprintTemplateCount, bool IsActive);
+public sealed record TeacherDirectoryEntry(long Id, string DisplayName, string Username, string? EmployeeNumber, string? Email, string? Phone, int FingerprintTemplateCount, bool IsActive, bool PhoneVerified = true);
 public sealed record ClassroomEntry(long Id, string Name, int TargetTemperature, decimal? CurrentTemperature, string AcStatus, bool IsActive, int MinimumTemperature = 16);
 public sealed record CreateClassroomRequest(string Name, int TargetTemperature, int MinimumTemperature = 16);
 public sealed record UpdateClassroomRequest(long Id, string Name, int TargetTemperature, bool IsActive, int MinimumTemperature = 16);
@@ -145,7 +150,8 @@ public sealed record CreateScheduleRequest(
     TimeOnly StartTime,
     TimeOnly EndTime,
     string RecurrencePattern = ScheduleRecurrence.None,
-    IReadOnlyList<DayOfWeek>? CustomWeekdays = null);
+    IReadOnlyList<DayOfWeek>? CustomWeekdays = null,
+    long? ReplacesScheduleId = null);
 
 public sealed record CreateSchedulesResult(bool Succeeded, string? Error = null, int CreatedCount = 0, int SkippedCount = 0)
 {
@@ -174,7 +180,9 @@ public sealed record ScheduleDirectoryEntry(
     string SubjectName,
     DateOnly ScheduleDate,
     TimeOnly StartTime,
-    TimeOnly EndTime);
+    TimeOnly EndTime,
+    long? ReplacesScheduleId = null,
+    bool SubstitutionVerified = false);
 
 public sealed record SemesterEntry(long Id, string Name, DateOnly StartDate, DateOnly EndDate, bool IsActive);
 public sealed record CreateSemesterRequest(string Name, DateOnly StartDate, DateOnly EndDate, bool IsActive = true);
@@ -307,6 +315,10 @@ public sealed record AttendanceLogEntry(
     string Status,
     string? Outcome);
 
+public sealed record MissingTimeOutNotification(
+    long AttendanceId,
+    string? TeacherPhone);
+
 public sealed record TeacherRequestEntry(
     long Id,
     long TeacherAccountId,
@@ -351,7 +363,7 @@ public sealed record TemperatureLogEntry(
 
 public sealed record SetTemperatureRequest(long ClassroomId, int TargetTemperature, string EventType, string? Notes = null);
 
-public sealed record PasswordResetDelivery(string Email, string RawToken);
+public sealed record PasswordResetDelivery(string Phone, string RawToken);
 
 public sealed record UserAccountRecord(long Id, string Username, string DisplayName, string? Email, string PasswordHash, UserRole Role, bool IsDefaultAdmin);
 
@@ -435,7 +447,8 @@ public sealed record FingerprintTeacherMatch(long TeacherAccountId, string Displ
 
 public sealed record FingerprintSlotInspection(long Slot, bool IsBlocked, string? TeacherName, bool? TeacherIsActive);
 
-public sealed record TeacherFingerprint(string FingerPosition, long Slot, string? DeviceId, bool IsBlocked);
+public sealed record TeacherFingerprint(string FingerPosition, long Slot, string? DeviceId, bool IsBlocked,
+    string? DeletionState = null, string? DeletionRequestId = null);
 
 public static class FingerprintReplacementAvailability
 {
@@ -560,7 +573,7 @@ public interface IUserAccountRepository
     Task<UserAccountRecord?> FindByIdentifierAsync(string usernameOrEmail, CancellationToken cancellationToken = default);
     Task<UserAccountRecord?> FindByIdAsync(long accountId, CancellationToken cancellationToken = default);
     Task<bool> IsInitialAdminSetupRequiredAsync(CancellationToken cancellationToken = default);
-    Task<bool> SetInitialAdminEmailAsync(string email, CancellationToken cancellationToken = default);
+    Task<bool> SetInitialAdminPhoneAsync(string phone, CancellationToken cancellationToken = default);
     Task<OperationResult> UpdateDefaultAdminPasswordAsync(long accountId, string passwordHash, CancellationToken cancellationToken = default);
     Task<OperationResult> CreateTeacherAsync(CreateTeacherRequest request, string passwordHash, CancellationToken cancellationToken = default);
     Task<OperationResult> UpdateAdminTeacherAsync(UpdateAdminTeacherRequest request, string? passwordHash, CancellationToken cancellationToken = default);
@@ -584,7 +597,7 @@ public interface IUserAccountRepository
     Task<IReadOnlyList<TeacherSemesterEntry>> GetTeacherSemestersAsync(long? semesterId = null, CancellationToken cancellationToken = default);
     Task<OperationResult> EnrollTeacherInSemesterAsync(long teacherAccountId, long semesterId, CancellationToken cancellationToken = default);
     Task<OperationResult> UnenrollTeacherFromSemesterAsync(long teacherAccountId, long semesterId, CancellationToken cancellationToken = default);
-    Task<PasswordResetDelivery?> CreatePasswordResetAsync(string email, DateTimeOffset expiresUtc, CancellationToken cancellationToken = default);
+    Task<PasswordResetDelivery?> CreatePasswordResetAsync(string phone, DateTimeOffset expiresUtc, CancellationToken cancellationToken = default);
     Task<bool> ResetPasswordAsync(string rawToken, string passwordHash, CancellationToken cancellationToken = default);
     Task<TeacherProfileEntry?> GetTeacherProfileAsync(long accountId, CancellationToken cancellationToken = default);
     Task<OperationResult> UpdateTeacherProfileAsync(long accountId, UpdateTeacherProfileRequest request, string? passwordHash, CancellationToken cancellationToken = default);
@@ -593,6 +606,8 @@ public interface IUserAccountRepository
     Task<OperationResult> StartClassAsync(long teacherAccountId, long scheduleId, DateOnly schoolDate, TimeOnly schoolTime, CancellationToken cancellationToken = default, string verificationMethod = "Biometric / dashboard verification");
     Task<OperationResult> EndClassAsync(long teacherAccountId, CancellationToken cancellationToken = default);
     Task<int> ReconcileAttendanceOutcomesAsync(DateOnly schoolDate, TimeOnly schoolTime, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<MissingTimeOutNotification>> ClaimMissingTimeOutNotificationsAsync(CancellationToken cancellationToken = default);
+    Task CompleteMissingTimeOutNotificationAsync(long attendanceId, string status, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TeacherRequestEntry>> GetTeacherRequestsAsync(long? teacherAccountId = null, CancellationToken cancellationToken = default);
     Task<OperationResult> SubmitTeacherRequestAsync(long teacherAccountId, SubmitTeacherRequest request, CancellationToken cancellationToken = default);
     Task<OperationResult> ReviewTeacherRequestAsync(long adminAccountId, ReviewTeacherRequest request, CancellationToken cancellationToken = default);
@@ -614,6 +629,7 @@ public interface IUserAccountRepository
     Task<OperationResult> PrepareFingerprintReplacementAsync(long scannerId, long teacherId, string fingerPosition, long slot, CancellationToken cancellationToken = default);
     Task<OperationResult> AuthorizeFingerprintReplacementAsync(long adminAccountId, long scannerId, long teacherId, string fingerPosition, long slot, string id, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TeacherFingerprint>> GetTeacherFingerprintsAsync(long teacherId, CancellationToken cancellationToken = default);
+    Task<OperationResult> RenameTeacherFingerprintAsync(long teacherId, long slot, string currentFinger, string newFinger, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<FingerprintEnrollmentPreparation>> GetFingerprintEnrollmentPreparationsAsync(CancellationToken cancellationToken = default);
     Task<OperationResult> CancelFingerprintEnrollmentPreparationAsync(string id, CancellationToken cancellationToken = default);
     Task<OperationResult> AuthorizeFingerprintEnrollmentAsync(long adminAccountId, string id, bool allowOccupiedSlot, CancellationToken cancellationToken = default);
@@ -656,10 +672,15 @@ public interface IAuthService
     Task<AuthenticatedUser?> GetCurrentUserAsync();
     Task<AuthenticatedUser?> RestoreUserAsync(long accountId, CancellationToken cancellationToken = default);
     Task<bool> IsInitialAdminSetupRequiredAsync();
-    Task<OperationResult> CompleteInitialAdminSetupAsync(string email);
+    Task<OperationResult> CompleteInitialAdminSetupAsync(string phone);
     Task<OperationResult> UpdateAdministratorPasswordAsync(string currentPassword, string newPassword);
     Task<OperationResult> RequestMobileOtpAsync(long? teacherId, string phone);
+    Task<OperationResult> RequestSubstitutionOtpAsync(long scheduleId, long substituteId);
+    Task<OperationResult> RequestAttendanceOtpAsync(long scheduleId, string action);
+    Task<OperationResult> ConfirmSubstitutionAsync(long scheduleId, long substituteId, string code);
+    Task<OperationResult> RemoveSubstitutionAsync(long scheduleId);
     Task<OperationResult> CreateTeacherAsync(CreateTeacherRequest request);
+    Task<OperationResult> CreateImportedTeacherAsync(string name, string employeeNumber, string phone);
     Task<OperationResult> UpdateAdminTeacherAsync(UpdateAdminTeacherRequest request);
     Task<IReadOnlyList<TeacherDirectoryEntry>> GetTeachersAsync();
     Task<TeacherProfileEntry?> GetTeacherProfileForAdminAsync(long accountId);
@@ -671,6 +692,8 @@ public interface IAuthService
     Task<OperationResult> DeleteClassroomAsync(long classroomId);
     Task<OperationResult> CreateScheduleAsync(CreateScheduleRequest request);
     Task<CreateSchedulesResult> CreateSchedulesAsync(CreateScheduleRequest request);
+    Task<CreateSchedulesResult> CreateImportedSchedulesAsync(CreateScheduleRequest request);
+    Task<CsvImportResult> ImportCsvAsync(string kind, string csv);
     Task<IReadOnlyList<ScheduleDirectoryEntry>> GetSchedulesAsync();
     Task<OperationResult> MoveScheduleAsync(MoveScheduleRequest request);
     Task<OperationResult> DeleteScheduleAsync(long scheduleId);
@@ -681,7 +704,7 @@ public interface IAuthService
     Task<IReadOnlyList<TeacherSemesterEntry>> GetTeacherSemestersAsync(long? semesterId = null);
     Task<OperationResult> EnrollTeacherInSemesterAsync(long teacherAccountId, long semesterId);
     Task<OperationResult> UnenrollTeacherFromSemesterAsync(long teacherAccountId, long semesterId);
-    Task<OperationResult> RequestPasswordResetAsync(string email);
+    Task<OperationResult> RequestPasswordResetAsync(string phone);
     Task<OperationResult> ResetPasswordAsync(string token, string newPassword, string confirmPassword);
     Task<TeacherProfileEntry?> GetMyTeacherProfileAsync();
     Task<OperationResult> UpdateMyTeacherProfileAsync(UpdateTeacherProfileRequest request);
@@ -707,6 +730,9 @@ public interface IAuthService
     Task<OperationResult> PrepareFingerprintReplacementAsync(long scannerId, long teacherId, string fingerPosition, long slot);
     Task<OperationResult> AuthorizeFingerprintReplacementAsync(long scannerId, long teacherId, string fingerPosition, long slot, string id);
     Task<IReadOnlyList<TeacherFingerprint>> GetTeacherFingerprintsAsync(long teacherId);
+    Task<OperationResult> RenameTeacherFingerprintAsync(long teacherId, long slot, string currentFinger, string newFinger);
+    Task<OperationResult> RequestFingerprintDeletionAsync(long teacherId, long slot, string fingerPosition, string deviceId);
+    Task<OperationResult> CancelFingerprintDeletionAsync(long teacherId, long slot, string requestId);
     Task<IReadOnlyList<FingerprintEnrollmentPreparation>> GetFingerprintEnrollmentPreparationsAsync();
     Task<OperationResult> CancelFingerprintEnrollmentPreparationAsync(string id);
     Task<OperationResult> AuthorizeFingerprintEnrollmentAsync(string id, bool allowOccupiedSlot);

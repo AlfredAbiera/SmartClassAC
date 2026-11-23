@@ -20,6 +20,577 @@ namespace SmartClassAC.Tests;
 public sealed class FacultyOtpStoreTests
 {
     [MariaDbFact]
+    public async Task FingerprintDeletionRequiresOneUseClaimAndConfirmedScannerCompletion()
+    {
+        await WithDatabase(async (_, connection, _) =>
+        {
+            await Execute(connection, """
+                INSERT INTO user_accounts (id, username, display_name, password_hash, role, is_active)
+                VALUES (2, 'admin', 'Admin', 'hash', 'Admin', 1);
+                INSERT INTO fingerprint_templates (user_account_id, finger_position, template_identifier)
+                VALUES (1, 'Right thumb', 7);
+                INSERT INTO fingerprint_template_device_bindings (fingerprint_template_id, device_id)
+                SELECT id, '1000000001' FROM fingerprint_templates WHERE template_identifier=7;
+                """);
+            var master = RandomNumberGenerator.GetBytes(32);
+            var key = RandomNumberGenerator.GetBytes(32);
+            var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString,
+                ["EnrollmentSecurity:MasterKey"] = Convert.ToBase64String(master),
+                ["EnrollmentSecurity:EnableFingerprintDeletion"] = "true"
+            }).Build();
+            var credentials = new EnrollmentDeviceCredentialStore(configuration);
+            Assert.True((await credentials.StoreNewAsync("1000000001", key, master)).Succeeded);
+            var service = new FingerprintDeletionService(configuration);
+            var repository = new MariaDbUserAccountRepository(configuration, Options.Create(new SchoolTimeOptions()));
+            Assert.False((await service.RequestAsync(1, 1, 7, "Right thumb", "1000000001")).Succeeded);
+            Assert.False((await service.RequestAsync(2, 1, 7, "Left thumb", "1000000001")).Succeeded);
+            Assert.False((await service.RequestAsync(2, 1, 7, "Right thumb", "1000000002")).Succeeded);
+            Assert.True((await service.RequestAsync(2, 1, 7, "Right thumb", "1000000001")).Succeeded);
+            Assert.False((await service.RequestAsync(2, 1, 7, "Right thumb", "1000000001")).Succeeded);
+            var pending = Assert.Single(await repository.GetTeacherFingerprintsAsync(1));
+            Assert.True(pending.IsBlocked);
+            Assert.Equal("Pending", pending.DeletionState);
+            Assert.False((await service.CancelAsync(1, 7, Guid.NewGuid())).Succeeded);
+            Assert.False((await repository.SetTeacherActiveAsync(1, false)).Succeeded);
+            Assert.Null(await repository.FindTeacherByFingerprintTemplateIdAsync(7, "1000000001"));
+            Assert.False((await repository.SetFingerprintSlotBlockedAsync(7, false)).Succeeded);
+            Assert.False((await repository.RequestClearAllFingerprintDevicesAsync()).Succeeded);
+
+            var challenges = new EnrollmentChallengeStore(configuration);
+            var replayChallenge = Assert.IsType<byte[]>((await challenges.IssueAsync("1000000001", "delete_operation")).Challenge);
+            var replayNonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+            var replayTag = EnrollmentMessageAuthentication.ComputeTag(key, false, "1000000001", "delete_operation",
+                replayChallenge, Encoding.ASCII.GetBytes($"{replayNonce}\n"));
+            var replayRequest = new FingerprintDeletionMessage("1000000001", null, 0,
+                Convert.ToHexString(replayChallenge).ToLowerInvariant(), replayNonce, Convert.ToHexString(replayTag).ToLowerInvariant());
+            Assert.Null(await service.ExecuteAsync("operation", replayRequest with { Tag = new string('0', 64) }));
+            Assert.NotNull(await service.ExecuteAsync("operation", replayRequest));
+            Assert.Null(await service.ExecuteAsync("operation", replayRequest));
+            async Task<EnrollmentRecoveryResponse?> Exchange(string action, string? id = null, ushort slot = 0)
+            {
+                var challenge = Assert.IsType<byte[]>((await challenges.IssueAsync("1000000001", $"delete_{action}")).Challenge);
+                var nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+                var body = action == "operation" ? $"{nonce}\n"
+                    : $"{id}\n{slot}\n{nonce}\n{(action == "claim" ? "claim" : "confirmed")}\n";
+                var tag = EnrollmentMessageAuthentication.ComputeTag(key, false, "1000000001", $"delete_{action}",
+                    challenge, Encoding.ASCII.GetBytes(body));
+                var request = new FingerprintDeletionMessage("1000000001", id, slot,
+                    Convert.ToHexString(challenge).ToLowerInvariant(), nonce, Convert.ToHexString(tag).ToLowerInvariant());
+                var response = await service.ExecuteAsync(action, request);
+                if (response is not null)
+                    Assert.True(EnrollmentMessageAuthentication.VerifyTag(key, true, "1000000001", $"delete_{action}",
+                        challenge, Encoding.ASCII.GetBytes(response.Body), Convert.FromHexString(response.Tag)));
+                return response;
+            }
+
+            var operation = Assert.IsType<EnrollmentRecoveryResponse>(await Exchange("operation"));
+            var operationId = operation.Body.Split('\n')[0];
+            Assert.True(Guid.TryParseExact(operationId, "D", out _));
+            Assert.Null(await Exchange("finish", operationId, 7));
+            Assert.Null(await Exchange("claim", operationId, 8));
+            var claims = await Task.WhenAll(Exchange("claim", operationId, 7), Exchange("claim", operationId, 7));
+            Assert.Single(claims, item => item is not null);
+            Assert.False((await service.CancelAsync(1, 7, Guid.Parse(operationId))).Succeeded);
+            Assert.Equal("Claimed", Assert.Single(await repository.GetTeacherFingerprintsAsync(1)).DeletionState);
+            Assert.NotNull(await Exchange("finish", operationId, 7));
+            Assert.NotNull(await Exchange("finish", operationId, 7));
+            Assert.Empty(await repository.GetTeacherFingerprintsAsync(1));
+            Assert.DoesNotContain(7, await repository.GetBlockedFingerprintSlotsAsync());
+            Assert.Null(await Exchange("claim", operationId, 7));
+            await Execute(connection, """
+                INSERT INTO fingerprint_templates (user_account_id, finger_position, template_identifier)
+                VALUES (1, 'Right index', 7);
+                """);
+            Assert.NotNull(await Exchange("finish", operationId, 7));
+            Assert.Equal("Right index", Assert.Single(await repository.GetTeacherFingerprintsAsync(1)).FingerPosition);
+        });
+    }
+
+    [MariaDbFact]
+    public async Task FingerprintDeletionCancellationPreservesTheFingerprint()
+    {
+        await WithDatabase(async (_, connection, _) =>
+        {
+            await Execute(connection, """
+                INSERT INTO user_accounts (id, username, display_name, password_hash, role, is_active)
+                VALUES (2, 'admin', 'Admin', 'hash', 'Admin', 1);
+                INSERT INTO fingerprint_templates (user_account_id, finger_position, template_identifier)
+                VALUES (1, 'Right thumb', 7), (1, 'Left thumb', 8);
+                INSERT INTO fingerprint_template_device_bindings (fingerprint_template_id, device_id)
+                SELECT id, '1000000001' FROM fingerprint_templates WHERE template_identifier=7;
+                """);
+            var master = RandomNumberGenerator.GetBytes(32);
+            var key = RandomNumberGenerator.GetBytes(32);
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString,
+                ["EnrollmentSecurity:MasterKey"] = Convert.ToBase64String(master),
+                ["EnrollmentSecurity:EnableFingerprintDeletion"] = "true"
+            }).Build();
+            Assert.True((await new EnrollmentDeviceCredentialStore(config).StoreNewAsync("1000000001", key, master)).Succeeded);
+            var service = new FingerprintDeletionService(config);
+            config["EnrollmentSecurity:EnableFingerprintDeletion"] = "false";
+            Assert.False((await service.RequestAsync(2, 1, 7, "Right thumb", "1000000001")).Succeeded);
+            config["EnrollmentSecurity:EnableFingerprintDeletion"] = "true";
+            Assert.False((await service.RequestAsync(2, 1, 8, "Left thumb", "1000000001")).Succeeded);
+            config["EnrollmentSecurity:MasterKey"] = null;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.RequestAsync(2, 1, 7, "Right thumb", "1000000001"));
+            config["EnrollmentSecurity:MasterKey"] = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+            await Assert.ThrowsAsync<CryptographicException>(() => service.RequestAsync(2, 1, 7, "Right thumb", "1000000001"));
+            var repository = new MariaDbUserAccountRepository(config, Options.Create(new SchoolTimeOptions()));
+            Assert.False(Assert.Single(await repository.GetTeacherFingerprintsAsync(1), f => f.Slot == 7).IsBlocked);
+            config["EnrollmentSecurity:MasterKey"] = Convert.ToBase64String(master);
+            Assert.True((await service.RequestAsync(2, 1, 7, "Right thumb", "1000000001")).Succeeded);
+            var deletionId = Guid.Parse(Assert.Single(await repository.GetTeacherFingerprintsAsync(1), f => f.Slot == 7).DeletionRequestId!);
+            Assert.True((await service.CancelAsync(1, 7, deletionId)).Succeeded);
+            var fingerprint = Assert.Single(await repository.GetTeacherFingerprintsAsync(1), f => f.Slot == 7);
+            Assert.False(fingerprint.IsBlocked);
+            Assert.Null(fingerprint.DeletionState);
+            Assert.NotNull(await repository.FindTeacherByFingerprintTemplateIdAsync(7, "1000000001"));
+        });
+    }
+
+    [MariaDbFact]
+    public async Task AdminCanCorrectFingerprintLabelWithoutChangingSensorMapping()
+    {
+        await WithDatabase(async (_, connection, secret) =>
+        {
+            await Execute(connection, """
+                INSERT INTO user_accounts (id, username, display_name, password_hash, role, is_active)
+                VALUES (2, 'admin', 'Admin', 'hash', 'Admin', 1);
+                INSERT INTO fingerprint_templates (user_account_id, finger_position, template_identifier)
+                VALUES (1, 'Right thumb', 7), (1, 'Left thumb', 8);
+                INSERT INTO fingerprint_template_device_bindings (fingerprint_template_id, device_id)
+                SELECT id, '1000000001' FROM fingerprint_templates WHERE template_identifier=7;
+                """);
+            var (auth, _, services) = await CsvAuthFixture(connection, secret);
+            await using (services)
+            {
+                Assert.False((await auth.RenameTeacherFingerprintAsync(1, 7, "Right thumb", "Left thumb")).Succeeded);
+                Assert.False((await auth.RenameTeacherFingerprintAsync(1, 7, "Right index", "Right middle")).Succeeded);
+                Assert.False((await auth.RenameTeacherFingerprintAsync(1, 7, "Right thumb", "Invalid")).Succeeded);
+                await Execute(connection, "INSERT INTO fingerprint_slot_blocks (template_identifier) VALUES (7), (9);");
+                Assert.False((await auth.RenameTeacherFingerprintAsync(1, 7, "Right thumb", "Right index")).Succeeded);
+                await Execute(connection, """
+                    DELETE FROM fingerprint_slot_blocks WHERE template_identifier=7;
+                    INSERT INTO fingerprint_enrollment_preparations
+                        (id, device_id, teacher_account_id, finger_position, template_identifier)
+                    VALUES ('22222222-2222-2222-2222-222222222222', 1, 1, 'Right index', 9);
+                    """);
+                Assert.False((await auth.RenameTeacherFingerprintAsync(1, 7, "Right thumb", "Right index")).Succeeded);
+                Assert.True((await auth.RenameTeacherFingerprintAsync(1, 7, "Right thumb", "Right middle")).Succeeded);
+                var fingerprint = Assert.Single(await auth.GetTeacherFingerprintsAsync(1), f => f.Slot == 7);
+                Assert.Equal("Right middle", fingerprint.FingerPosition);
+                Assert.Equal("1000000001", fingerprint.DeviceId);
+                await auth.RestoreUserAsync(1);
+                Assert.False((await auth.RenameTeacherFingerprintAsync(1, 7, "Right middle", "Right ring")).Succeeded);
+            }
+        });
+    }
+
+    [MariaDbFact]
+    public async Task CsvTeachersRemainUnverifiedUntilAdminConfirmsSms()
+    {
+        await WithDatabase(async (store, connection, secret) =>
+        {
+            await Execute(connection, """
+                INSERT INTO user_accounts (id, username, display_name, password_hash, role, is_active)
+                VALUES (2, 'admin', 'Admin', 'hash', 'Admin', 1);
+                INSERT INTO gsm_modem_settings (singleton_id, port_name, baud_rate) VALUES (1, 'COM42', 9600);
+                """);
+            var (auth, serial, services) = await CsvAuthFixture(connection, secret);
+            await using (services)
+            {
+                var result = await auth.ImportCsvAsync("teachers", "\uFEFFname,employee_number,phone\n\"Doe, Jane\",EMP42,09912345678\nBad,EMP43,invalid\nDuplicate,EMP42,09999999999\nShort,EMP44\n");
+                Assert.Null(result.Error);
+                Assert.Equal(1, result.ImportedRows);
+                Assert.Equal(3, result.SkippedRows);
+                Assert.Contains(result.Errors, error => error.StartsWith("Row 5:", StringComparison.Ordinal));
+                var teacher = Assert.Single(await auth.GetTeachersAsync(), t => t.EmployeeNumber == "EMP42");
+                Assert.Equal("Doe, Jane", teacher.DisplayName);
+                Assert.False(teacher.PhoneVerified);
+                Assert.Null(await store.ReserveAsync("1000000001", teacher.Phone!, secret));
+
+                var profile = (await auth.GetTeacherProfileForAdminAsync(teacher.Id))!;
+                var update = new UpdateAdminTeacherRequest(teacher.Id, profile.DisplayName, profile.Username,
+                    profile.EmployeeNumber!, profile.Email, profile.Phone!, null, null);
+                Assert.False((await auth.UpdateAdminTeacherAsync(update)).Succeeded);
+                Assert.True((await auth.RequestMobileOtpAsync(teacher.Id, teacher.Phone!)).Succeeded);
+                var wrong = serial.Code == "000000" ? "000001" : "000000";
+                Assert.False((await auth.UpdateAdminTeacherAsync(update with { MobileOtp = wrong })).Succeeded);
+                Assert.False((await auth.GetTeachersAsync()).Single(t => t.Id == teacher.Id).PhoneVerified);
+                Assert.True((await auth.UpdateAdminTeacherAsync(update with { MobileOtp = serial.Code })).Succeeded);
+                Assert.True((await auth.GetTeachersAsync()).Single(t => t.Id == teacher.Id).PhoneVerified);
+                Assert.NotNull(await store.ReserveAsync("1000000001", teacher.Phone!, secret));
+            }
+        });
+    }
+
+    [MariaDbFact]
+    public async Task CsvSchedulesExpandAndEnrollAtomicallyWhileReportingSkippedRows()
+    {
+        await WithDatabase(async (_, connection, secret) =>
+        {
+            await Execute(connection, """
+                INSERT INTO user_accounts (id, username, display_name, password_hash, role, is_active)
+                VALUES (2, 'admin', 'Admin', 'hash', 'Admin', 1);
+                INSERT INTO classrooms (id, name, capacity) VALUES (1, 'Room A', 30);
+                """);
+            var (auth, _, services) = await CsvAuthFixture(connection, secret);
+            await using (services)
+            {
+                var date = SchoolClock.Today(new SchoolTimeOptions()).AddDays(1);
+                var semesters = await auth.ImportCsvAsync("semesters",
+                    $"name,start_date,end_date,active\nTerm,{date:yyyy-MM-dd},{date.AddDays(14):yyyy-MM-dd},true\nTerm,{date:yyyy-MM-dd},{date.AddDays(14):yyyy-MM-dd},true\n");
+                Assert.Equal(1, semesters.ImportedRows);
+                Assert.Equal(1, semesters.SkippedRows);
+                var teachers = await auth.ImportCsvAsync("teachers",
+                    "name,employee_number,phone\nTeacher A,EMP-A,09912345678\nTeacher B,EMP-B,09912345679\n");
+                Assert.Equal(2, teachers.ImportedRows);
+                var semester = (await auth.GetSemestersAsync()).Single(s => s.Name == "Term");
+                var teacherA = (await auth.GetTeachersAsync()).Single(t => t.EmployeeNumber == "EMP-A");
+                var teacherB = (await auth.GetTeachersAsync()).Single(t => t.EmployeeNumber == "EMP-B");
+                await Execute(connection, $"""
+                    INSERT INTO teacher_semesters (teacher_account_id, semester_id) VALUES (1, {semester.Id});
+                    INSERT INTO class_schedules (teacher_account_id, original_teacher_account_id, classroom_id,
+                        classroom_name, semester_id, schedule_kind, subject_name, schedule_date, start_time, end_time)
+                    VALUES (1, 1, 1, 'Room A', {semester.Id}, 'Regular', 'Existing', '{date.AddDays(7):yyyy-MM-dd}', '09:00:00', '10:00:00');
+                    """);
+                var csv = "employee_number,semester,classroom,subject,date,start_time,end_time,recurrence,weekdays,kind,replaces_schedule_id\n" +
+                    $"EMP-A,Term,Room A,Math,{date:yyyy-MM-dd},09:00,10:00,Weekly,,Regular,\n" +
+                    $"EMP-B,Term,Room A,Conflict,{date.AddDays(7):yyyy-MM-dd},09:00,10:00,None,,Regular,\n" +
+                    $"EMP-B,Term,Missing,Class,{date:yyyy-MM-dd},11:00,12:00,None,,Regular,\n";
+                var schedules = await auth.ImportCsvAsync("schedules", csv);
+                Assert.Null(schedules.Error);
+                Assert.Equal(1, schedules.ImportedRows);
+                Assert.Equal(2, schedules.CreatedRecords);
+                Assert.Equal(2, schedules.SkippedRows);
+                Assert.Equal(1, schedules.SkippedOccurrences);
+                var enrolled = await auth.GetTeacherSemestersAsync(semester.Id);
+                Assert.Contains(enrolled, e => e.TeacherAccountId == teacherA.Id);
+                Assert.DoesNotContain(enrolled, e => e.TeacherAccountId == teacherB.Id);
+                var header = "employee_number,semester,classroom,subject,date,start_time,end_time,recurrence,weekdays,kind,replaces_schedule_id\n";
+                var single = await auth.ImportCsvAsync("schedules", header +
+                    $"EMP-B,Term,Room A,Original,{date:yyyy-MM-dd},11:00,12:00,None,,Regular,\n");
+                Assert.Equal(1, single.CreatedRecords);
+                var original = Assert.Single(await auth.GetSchedulesAsync(), s => s.SubjectName == "Original");
+                var makeup = await auth.ImportCsvAsync("schedules", header +
+                    $"EMP-A,Term,Room A,Makeup,{date:yyyy-MM-dd},13:00,14:00,None,,Makeup,{original.Id}\n");
+                Assert.Equal(1, makeup.CreatedRecords);
+                Assert.Contains(await auth.GetSchedulesAsync(), s => s.SubjectName == "Makeup" && s.ReplacesScheduleId == original.Id);
+                var lateMakeup = await auth.ImportCsvAsync("schedules", header +
+                    $"EMP-A,Term,Room A,Late,{date.AddDays(7):yyyy-MM-dd},13:00,14:00,None,,Makeup,{original.Id}\n");
+                Assert.Equal(1, lateMakeup.SkippedRows);
+                Assert.Contains(lateMakeup.Errors, error => error.Contains("next 7 days", StringComparison.Ordinal));
+                var monday = date.AddDays(((int)DayOfWeek.Monday - (int)date.DayOfWeek + 7) % 7);
+                var custom = await auth.ImportCsvAsync("schedules", header +
+                    $"EMP-A,Term,Room A,Custom,{monday:yyyy-MM-dd},16:00,17:00,Custom,Mon,Regular,\n");
+                Assert.Equal(monday == date ? 3 : 2, custom.CreatedRecords);
+                Assert.Equal(0, custom.SkippedRows);
+                var badHeader = await auth.ImportCsvAsync("teachers", "name,name,phone\nBad,EMP-C,09912345670");
+                Assert.NotNull(badHeader.Error);
+                var malformed = await auth.ImportCsvAsync("teachers", "name,employee_number,phone\nGood,EMP-C,09912345670\n\"unterminated,EMP-D,09912345671");
+                Assert.NotNull(malformed.Error);
+                Assert.DoesNotContain(await auth.GetTeachersAsync(), t => t.EmployeeNumber == "EMP-C");
+                await auth.RestoreUserAsync(teacherA.Id);
+                Assert.NotNull((await auth.ImportCsvAsync("semesters", $"name,start_date,end_date\nNo,{date:yyyy-MM-dd},{date:yyyy-MM-dd}")).Error);
+            }
+        });
+    }
+
+    [MariaDbFact]
+    public async Task UnverifiedNumbersCannotAuthorizeAttendanceSubstitutionsOrExistingMenuSessions()
+    {
+        await WithDatabase(async (store, connection, secret) =>
+        {
+            var (attendance, _) = await AttendanceOtpFixture(connection, secret);
+            const string device = "1000000001", phone = "09123456789";
+            var reservation = Assert.IsType<FacultyOtpReservation>(await store.ReserveAsync(device, phone, secret));
+            Assert.True(await store.CompleteDeliveryAsync(device, reservation.RequestId, true));
+            var session = Assert.IsType<string>(await store.VerifyAndCreateSessionAsync(device, reservation.Code, secret));
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString,
+                ["FacultyOtp:Secret"] = Convert.ToBase64String(secret)
+            }).Build();
+            var zone = TimeZoneInfo.GetSystemTimeZones().First(z =>
+            {
+                var hour = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, z).Hour;
+                return hour >= 10 && hour < 20;
+            });
+            var schoolTime = Options.Create(new SchoolTimeOptions { TimeZoneId = zone.Id });
+            var menu = new FacultyDeviceScheduleStore(config, schoolTime);
+            Assert.NotNull(await menu.GetTodayAsync(device, session, secret));
+            await Execute(connection, """
+                UPDATE user_accounts SET phone_verified=FALSE WHERE id=1;
+                UPDATE user_accounts SET phone='09987654321', phone_verified=FALSE WHERE id=3;
+                INSERT INTO teacher_semesters (teacher_account_id, semester_id) VALUES (3, 100);
+                """);
+            Assert.Null(await menu.GetTodayAsync(device, session, secret));
+            Assert.Null(await store.ReserveAsync(device, phone, secret));
+            Assert.False((await attendance.RequestAsync(2, 101, "in")).Succeeded);
+            var serial = new FakeSerial();
+            var otp = new PortalMobileOtp(config, new GsmSmsTransport(_ => serial), NullLogger<PortalMobileOtp>.Instance);
+            var substitutions = new ScheduleSubstitutionService(config, schoolTime, otp);
+            Assert.False((await substitutions.RequestAsync(2, 101, 3)).Succeeded);
+            await Execute(connection, "UPDATE user_accounts SET phone_verified=TRUE WHERE id IN (1, 3);");
+            Assert.True((await substitutions.RequestAsync(2, 101, 3)).Succeeded);
+            Assert.True((await attendance.RequestAsync(2, 101, "in")).Succeeded);
+        });
+    }
+
+    private static async Task<(IAuthService Auth, FakeSerial Serial, ServiceProvider Services)> CsvAuthFixture(
+        MySqlConnection connection, byte[] secret)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString,
+            ["FacultyOtp:Secret"] = Convert.ToBase64String(secret)
+        }).Build();
+        var options = Options.Create(new SchoolTimeOptions());
+        var repository = new MariaDbUserAccountRepository(config, options);
+        var serial = new FakeSerial();
+        var services = new ServiceCollection();
+        services.AddSingleton<IUserAccountRepository>(repository);
+        services.AddSingleton(new PortalMobileOtp(config, new GsmSmsTransport(_ => serial), NullLogger<PortalMobileOtp>.Instance));
+        services.AddScoped<CsvImportService>();
+        services.AddScoped<IAuthService>(provider => new AuthService(repository, new PasswordHasher(),
+            Options.Create(new DefaultAdminOptions()), Options.Create(new PasswordResetOptions()), new LoginAttemptLimiter(),
+            options, config, provider));
+        var provider = services.BuildServiceProvider();
+        var auth = provider.GetRequiredService<IAuthService>();
+        Assert.NotNull(await auth.RestoreUserAsync(2));
+        return (auth, serial, provider);
+    }
+
+    [MariaDbFact]
+    public async Task AttendanceOtpStartsAndEndsOnlyApprovedClassOnApprovedDevice()
+    {
+        await WithDatabase(async (_, connection, secret) =>
+        {
+            var (service, serial) = await AttendanceOtpFixture(connection, secret);
+            Assert.False((await service.RequestAsync(1, 101, "in")).Succeeded);
+            Assert.False((await service.RequestAsync(2, 101, "out")).Succeeded);
+            Assert.True((await service.RequestAsync(2, 101, "in")).Succeeded);
+            var timeIn = serial.Code!;
+            Assert.False(await service.RedeemAsync("1000000002", timeIn, default));
+            Assert.False(await service.RedeemAsync("1000000001", timeIn == "000000" ? "000001" : "000000", default));
+            var attempts = await Task.WhenAll(Enumerable.Range(0, 2).Select(_ => service.RedeemAsync("1000000001", timeIn, default)));
+            Assert.Single(attempts, value => value);
+            Assert.False(await service.RedeemAsync("1000000001", timeIn, default));
+            await using (var state = new MySqlCommand("""
+                SELECT a.verification_method, a.outcome, c.ir_attendance_power
+                FROM attendance_logs a JOIN classrooms c ON c.id=a.classroom_id WHERE a.class_schedule_id=101;
+                """, connection))
+            await using (var reader = await state.ExecuteReaderAsync())
+            {
+                Assert.True(await reader.ReadAsync());
+                Assert.Equal("Admin-approved SMS OTP", reader.GetString(0));
+                Assert.Equal("OnTime", reader.GetString(1));
+                Assert.True(reader.GetBoolean(2));
+            }
+            Assert.False((await service.RequestAsync(2, 101, "in")).Succeeded);
+            Assert.True((await service.RequestAsync(2, 101, "out")).Succeeded);
+            var timeOut = serial.Code!;
+            Assert.True(await service.RedeemAsync("1000000001", timeOut, default));
+            Assert.False(await service.RedeemAsync("1000000001", timeOut, default));
+            await using var completed = new MySqlCommand("""
+                SELECT a.time_out_utc IS NOT NULL, c.ir_attendance_power,
+                    (SELECT COUNT(*) FROM attendance_otp_events)
+                FROM attendance_logs a JOIN classrooms c ON c.id=a.classroom_id WHERE a.class_schedule_id=101;
+                """, connection);
+            await using var completedReader = await completed.ExecuteReaderAsync();
+            Assert.True(await completedReader.ReadAsync());
+            Assert.True(completedReader.GetBoolean(0));
+            Assert.False(completedReader.GetBoolean(1));
+            Assert.Equal(2L, completedReader.GetInt64(2));
+        });
+    }
+
+    [MariaDbFact]
+    public async Task AttendanceOtpRejectsExpiredInvalidSupersededAndUnverifiedRequests()
+    {
+        await WithDatabase(async (_, connection, secret) =>
+        {
+            var (service, serial) = await AttendanceOtpFixture(connection, secret);
+            await Execute(connection, "UPDATE class_schedules SET original_teacher_account_id=3, substitution_verified=FALSE WHERE id=101;");
+            Assert.False((await service.RequestAsync(2, 101, "in")).Succeeded);
+            await Execute(connection, "UPDATE class_schedules SET substitution_verified=TRUE WHERE id=101;");
+            Assert.True((await service.RequestAsync(2, 101, "in")).Succeeded);
+            var code = serial.Code!;
+            await Execute(connection, "UPDATE portal_mobile_otp_requests SET expires_utc=DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 1 SECOND);");
+            Assert.False(await service.RedeemAsync("1000000001", code, default));
+            Assert.True((await service.RequestAsync(2, 101, "in")).Succeeded);
+            code = serial.Code!;
+            var wrong = code == "000000" ? "000001" : "000000";
+            for (var i = 0; i < 5; i++) Assert.False(await service.RedeemAsync("1000000001", wrong, default));
+            Assert.False(await service.RedeemAsync("1000000001", code, default));
+            Assert.True((await service.RequestAsync(2, 101, "in")).Succeeded);
+            code = serial.Code!;
+            await Execute(connection, "UPDATE biometric_devices SET paired_at=DATE_ADD(paired_at, INTERVAL 1 SECOND) WHERE id=1;");
+            Assert.False(await service.RedeemAsync("1000000001", code, default));
+            await Execute(connection, "DELETE FROM portal_mobile_otp_limits;");
+            Assert.True((await service.RequestAsync(2, 101, "in")).Succeeded);
+            code = serial.Code!;
+            Assert.True(await service.RedeemAsync("1000000001", code, default));
+        });
+    }
+
+    [MariaDbFact]
+    public async Task AttendanceOtpFailsClosedOnUncertainSmsAndInvalidatesEarlierSessions()
+    {
+        await WithDatabase(async (_, connection, secret) =>
+        {
+            var (service, serial) = await AttendanceOtpFixture(connection, secret);
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString,
+                ["FacultyOtp:Secret"] = Convert.ToBase64String(secret)
+            }).Build();
+            var failingSerial = new FakeSerial { FailAfterSubmission = true };
+            var failingOtp = new PortalMobileOtp(config, new GsmSmsTransport(_ => failingSerial), NullLogger<PortalMobileOtp>.Instance);
+            var zone = TimeZoneInfo.GetSystemTimeZones().First(z =>
+            {
+                var hour = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, z).Hour;
+                return hour >= 10 && hour < 20;
+            });
+            var options = Options.Create(new SchoolTimeOptions { TimeZoneId = zone.Id });
+            var failing = new AttendanceOtpService(config, options, failingOtp, new MariaDbUserAccountRepository(config, options));
+            Assert.False((await failing.RequestAsync(2, 101, "in")).Succeeded);
+            Assert.NotNull(failingSerial.Code);
+            Assert.False(await service.RedeemAsync("1000000001", failingSerial.Code!, default));
+
+            Assert.True((await service.RequestAsync(2, 101, "in")).Succeeded);
+            Assert.True(await service.RedeemAsync("1000000001", serial.Code!, default));
+            Assert.True((await service.RequestAsync(2, 101, "out")).Succeeded);
+            var previousSessionCode = serial.Code!;
+            var repository = new MariaDbUserAccountRepository(config, options);
+            Assert.True((await repository.EndClassAsync(1)).Succeeded);
+            var now = SchoolClock.GetNow(options.Value);
+            Assert.NotNull(await repository.TryInWindowAcReentryAsync(1, 101, 1,
+                DateOnly.FromDateTime(now), TimeOnly.FromDateTime(now)));
+            Assert.False(await service.RedeemAsync("1000000001", previousSessionCode, default));
+            await Execute(connection, "DELETE FROM portal_mobile_otp_limits;");
+            Assert.True((await service.RequestAsync(2, 101, "out")).Succeeded);
+            Assert.True(await service.RedeemAsync("1000000001", serial.Code!, default));
+        });
+    }
+
+    [MariaDbFact]
+    public async Task AttendanceOtpRouteRequiresDeviceSignatureAndReturnsSignedResult()
+    {
+        await WithDatabase(async (_, connection, secret) =>
+        {
+            var (service, serial) = await AttendanceOtpFixture(connection, secret);
+            var master = RandomNumberGenerator.GetBytes(32);
+            var key = RandomNumberGenerator.GetBytes(32);
+            try
+            {
+                var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { EnvironmentName = "Development" });
+                builder.WebHost.UseUrls("http://127.0.0.1:0");
+                builder.Logging.ClearProviders();
+                builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString,
+                    ["EnrollmentSecurity:MasterKey"] = Convert.ToBase64String(master),
+                    ["AttendanceOtp:EnableDeviceApi"] = "true"
+                });
+                builder.Services.AddSingleton(service);
+                await using var app = builder.Build();
+                app.MapAttendanceOtpRoutes((context, _) => context.Request.Headers["X-Device-Api-Key"] == "test-key");
+                const string device = "1000000001", operation = "attendance_otp_verify";
+                Assert.True((await new EnrollmentDeviceCredentialStore(app.Configuration).StoreNewAsync(device, key, master)).Succeeded);
+                Assert.True((await service.RequestAsync(2, 101, "in")).Succeeded);
+                await app.StartAsync();
+                var address = Assert.Single(app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses);
+                using var client = new HttpClient { BaseAddress = new Uri(address) };
+                client.DefaultRequestHeaders.Add("X-Device-Api-Key", "test-key");
+                using var challengeResponse = await client.PostAsJsonAsync("api/device/attendance/otp/challenge", new FacultyOtpChallengeRequest(device));
+                var challenge = (await challengeResponse.Content.ReadFromJsonAsync<ChallengeResponse>())!.Challenge;
+                var challengeBytes = Convert.FromHexString(challenge);
+                var body = Encoding.ASCII.GetBytes(serial.Code + "\n");
+                var tag = EnrollmentMessageAuthentication.ComputeTag(key, false, device, operation, challengeBytes, body);
+                var request = new FacultyOtpRequest(device, serial.Code, challenge, Convert.ToHexString(tag).ToLowerInvariant());
+                using var invalid = await client.PostAsJsonAsync("api/device/attendance/otp/verify", request with { Tag = new string('0', 64) });
+                Assert.Equal(HttpStatusCode.Forbidden, invalid.StatusCode);
+                using var accepted = await client.PostAsJsonAsync("api/device/attendance/otp/verify", request);
+                Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+                var response = (await accepted.Content.ReadFromJsonAsync<FacultyOtpResponse>())!;
+                Assert.EndsWith("\naccepted\n", response.Body);
+                Assert.True(EnrollmentMessageAuthentication.VerifyTag(key, true, device, operation,
+                    challengeBytes, Encoding.ASCII.GetBytes(response.Body), Convert.FromHexString(response.Tag)));
+                using var replay = await client.PostAsJsonAsync("api/device/attendance/otp/verify", request);
+                Assert.Equal(HttpStatusCode.Forbidden, replay.StatusCode);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(master);
+                CryptographicOperations.ZeroMemory(key);
+            }
+        });
+    }
+
+    [MariaDbFact]
+    public async Task AttendanceOtpConsumptionRollsBackWhenAcUpdateFails()
+    {
+        await WithDatabase(async (_, connection, secret) =>
+        {
+            var (service, serial) = await AttendanceOtpFixture(connection, secret);
+            Assert.True((await service.RequestAsync(2, 101, "in")).Succeeded);
+            var code = serial.Code!;
+            await Execute(connection, """
+                CREATE TRIGGER reject_attendance_ac BEFORE UPDATE ON classrooms
+                FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Simulated AC update failure';
+                """);
+            await Assert.ThrowsAsync<MySqlException>(() => service.RedeemAsync("1000000001", code, default));
+            await Execute(connection, "DROP TRIGGER reject_attendance_ac;");
+            await using (var count = new MySqlCommand("SELECT COUNT(*) FROM attendance_logs WHERE class_schedule_id=101;", connection))
+                Assert.Equal(0L, Convert.ToInt64(await count.ExecuteScalarAsync()));
+            Assert.True(await service.RedeemAsync("1000000001", code, default));
+        });
+    }
+
+    private static async Task<(AttendanceOtpService Service, FakeSerial Serial)> AttendanceOtpFixture(
+        MySqlConnection connection, byte[] secret)
+    {
+        var zone = TimeZoneInfo.GetSystemTimeZones().First(z =>
+        {
+            var hour = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, z).Hour;
+            return hour >= 10 && hour < 20;
+        });
+        var options = new SchoolTimeOptions { TimeZoneId = zone.Id };
+        var now = SchoolClock.GetNow(options);
+        var start = now.AddMinutes(10);
+        var end = now.AddMinutes(70);
+        await Execute(connection, $"""
+            INSERT INTO user_accounts (id, username, display_name, password_hash, role, is_active)
+            VALUES (2, 'admin', 'Admin', 'hash', 'Admin', 1), (3, 'original', 'Original', 'hash', 'Teacher', 1);
+            INSERT INTO classrooms (id, name, capacity) VALUES (1, 'Room A', 30), (2, 'Room B', 30);
+            UPDATE biometric_devices SET classroom_id=1 WHERE id=1;
+            INSERT INTO biometric_devices (id, device_id, display_name, is_active, paired_at, classroom_id)
+            VALUES (2, '1000000002', 'Device 2', 1, CURRENT_TIMESTAMP, 2);
+            INSERT INTO gsm_modem_settings (singleton_id, port_name, baud_rate) VALUES (1, 'COM42', 9600);
+            INSERT INTO semesters (id, name, start_date, end_date, is_active)
+            VALUES (100, 'Test', '{now:yyyy-MM-dd}', '{now.AddDays(1):yyyy-MM-dd}', 1);
+            INSERT INTO teacher_semesters (teacher_account_id, semester_id) VALUES (1, 100);
+            INSERT INTO class_schedules (id, teacher_account_id, original_teacher_account_id, classroom_id,
+                classroom_name, semester_id, schedule_kind, subject_name, schedule_date, start_time, end_time)
+            VALUES (101, 1, 1, 1, 'Room A', 100, 'Regular', 'Class', '{now:yyyy-MM-dd}', '{start:HH:mm:ss}', '{end:HH:mm:ss}');
+            """);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString,
+            ["FacultyOtp:Secret"] = Convert.ToBase64String(secret)
+        }).Build();
+        var serial = new FakeSerial();
+        var otp = new PortalMobileOtp(config, new GsmSmsTransport(_ => serial), NullLogger<PortalMobileOtp>.Instance);
+        var schoolTime = Options.Create(options);
+        return (new AttendanceOtpService(config, schoolTime, otp, new MariaDbUserAccountRepository(config, schoolTime)), serial);
+    }
+
+    [MariaDbFact]
     public async Task LifecycleEnforcesDeliveryExpiryAttemptsReplayAndAccountStatus()
     {
         await WithDatabase(async (store, connection, secret) =>
@@ -191,6 +762,51 @@ public sealed class FacultyOtpStoreTests
     }
 
     [MariaDbFact]
+    public async Task ClassExtensionRejectsTeacherOrRoomConflictsAndCanBeAppliedOnlyOnce()
+    {
+        await WithDatabase(async (store, connection, secret) =>
+        {
+            const string device = "1000000001";
+            await Execute(connection, """
+                INSERT INTO classrooms (id, name, capacity) VALUES (1, 'Room A', 30), (2, 'Room B', 30);
+                INSERT INTO user_accounts (id, username, display_name, password_hash, role)
+                    VALUES (2, 'second', 'Second teacher', 'hash', 'Teacher');
+                UPDATE biometric_devices SET classroom_id = 1 WHERE device_id = '1000000001';
+                INSERT INTO class_schedules
+                    (id, teacher_account_id, classroom_id, classroom_name, subject_name, schedule_date, start_time, end_time)
+                VALUES (1, 1, 1, 'Room A', 'Current', '2026-03-01', '09:00:00', '10:00:00'),
+                       (2, 1, 2, 'Room B', 'Next', '2026-03-01', '10:20:00', '11:00:00');
+                INSERT INTO attendance_logs (class_schedule_id, teacher_account_id, classroom_id, status)
+                    VALUES (1, 1, 1, 'Active');
+                """);
+            var reservation = Assert.IsType<FacultyOtpReservation>(await store.ReserveAsync(device, "09123456789", secret));
+            Assert.True(await store.CompleteDeliveryAsync(device, reservation.RequestId, true));
+            var token = Assert.IsType<string>(await store.VerifyAndCreateSessionAsync(device, reservation.Code, secret));
+            var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString
+            }).Build();
+            var extensions = new FacultyDeviceAcStore.FacultyDeviceClassExtensionStore(configuration);
+            var date = new DateOnly(2026, 3, 1);
+            var time = new TimeOnly(9, 30);
+
+            Assert.Equal(FacultyClassExtensionResult.ScheduleConflict,
+                await extensions.ExtendAsync(device, token, secret, date, time));
+            await Execute(connection, "UPDATE class_schedules SET teacher_account_id = 2, classroom_id = 1 WHERE id = 2;");
+            Assert.Equal(FacultyClassExtensionResult.ScheduleConflict,
+                await extensions.ExtendAsync(device, token, secret, date, time));
+            await Execute(connection, "UPDATE class_schedules SET start_time = '10:30:00' WHERE id = 2;");
+            Assert.Equal(FacultyClassExtensionResult.Extended,
+                await extensions.ExtendAsync(device, token, secret, date, time));
+            Assert.Equal(FacultyClassExtensionResult.AlreadyExtended,
+                await extensions.ExtendAsync(device, token, secret, date, time));
+            await using var verify = new MySqlCommand(
+                "SELECT class_extension_minutes FROM attendance_logs WHERE class_schedule_id = 1;", connection);
+            Assert.Equal(30, Convert.ToInt32(await verify.ExecuteScalarAsync()));
+        });
+    }
+
+    [MariaDbFact]
     public async Task MenuProtocolAuthenticatesOtpAndBoundScheduleResponses()
     {
         await WithDatabase(async (store, connection, secret) =>
@@ -345,6 +961,139 @@ public sealed class FacultyOtpStoreTests
     }
 
     [MariaDbFact]
+    public async Task EarlyTimeInStartsAcAtFifteenMinutesAndSupportsReentry()
+    {
+        await WithDatabase(async (_, connection, _) =>
+        {
+            var options = new SchoolTimeOptions();
+            var date = SchoolClock.Today(options).AddDays(1);
+            await Execute(connection, $"""
+                INSERT INTO classrooms (id, name, capacity) VALUES (1, 'Room A', 30), (2, 'Room B', 30);
+                INSERT INTO semesters (id, name, start_date, end_date, is_active)
+                VALUES (100, 'Test', '{date:yyyy-MM-dd}', '{date.AddDays(7):yyyy-MM-dd}', 1);
+                INSERT INTO teacher_semesters (teacher_account_id, semester_id) VALUES (1, 100);
+                INSERT INTO class_schedules (id, teacher_account_id, original_teacher_account_id, classroom_id,
+                    classroom_name, semester_id, schedule_kind, subject_name, schedule_date, start_time, end_time)
+                VALUES (101, 1, 1, 1, 'Room A', 100, 'Regular', 'Class', '{date:yyyy-MM-dd}', '09:00:00', '10:00:00'),
+                       (102, 1, 1, 1, 'Room A', 100, 'Makeup', 'Next class', '{date:yyyy-MM-dd}', '10:00:00', '11:00:00');
+                """);
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString
+            }).Build();
+            var repository = new MariaDbUserAccountRepository(config, Options.Create(options));
+            var tooEarly = new TimeOnly(8, 44, 59);
+            var opening = new TimeOnly(8, 45);
+            Assert.Null(await repository.FindInWindowScheduleIdAsync(1, 1, date, tooEarly));
+            Assert.False((await repository.StartClassAsync(1, 101, date, tooEarly)).Succeeded);
+            Assert.Null(await repository.FindInWindowScheduleIdAsync(1, 2, date, opening));
+            Assert.Equal(101, await repository.FindInWindowScheduleIdAsync(1, 1, date, opening));
+            Assert.True((await repository.StartClassAsync(1, 101, date, opening)).Succeeded);
+            await using (var state = new MySqlCommand("""
+                SELECT a.outcome, c.ac_status, c.ir_attendance_power, s.end_time
+                FROM attendance_logs a JOIN classrooms c ON c.id = a.classroom_id
+                JOIN class_schedules s ON s.id = a.class_schedule_id WHERE s.id = 101;
+                """, connection))
+            await using (var reader = await state.ExecuteReaderAsync())
+            {
+                Assert.True(await reader.ReadAsync());
+                Assert.Equal("OnTime", reader.GetString(0));
+                Assert.Equal("Cooling", reader.GetString(1));
+                Assert.True(reader.GetBoolean(2));
+                Assert.Equal(new TimeSpan(10, 0, 0), reader.GetTimeSpan(3));
+            }
+            Assert.Equal(0, await repository.ReconcileAttendanceOutcomesAsync(date, new TimeOnly(8, 50)));
+            await Execute(connection, "UPDATE attendance_logs SET status = 'Completed', time_out_utc = UTC_TIMESTAMP(6) WHERE class_schedule_id = 101;");
+            Assert.Null(await repository.TryInWindowAcReentryAsync(1, 101, 1, date, tooEarly));
+            Assert.Equal("ac_on", (await repository.TryInWindowAcReentryAsync(1, 101, 1, date, new TimeOnly(8, 50)))?.Action);
+            Assert.Equal(101, await repository.FindInWindowScheduleIdAsync(1, 1, date, new TimeOnly(9, 50)));
+            Assert.Equal(102, await repository.FindInWindowScheduleIdAsync(1, 1, date, new TimeOnly(10, 0)));
+            Assert.Null(await repository.FindInWindowScheduleIdAsync(1, 1, date, new TimeOnly(11, 0)));
+        });
+    }
+
+    [MariaDbFact]
+    public async Task FingerprintScanStartsEarlyAttendanceAndRequestsAc()
+    {
+        await WithDatabase(async (_, connection, _) =>
+        {
+            var options = new SchoolTimeOptions();
+            var start = SchoolClock.GetNow(options).AddMinutes(10);
+            if (start.TimeOfDay >= new TimeSpan(23, 58, 0))
+                start = start.Date.AddDays(1).AddMinutes(1);
+            var date = DateOnly.FromDateTime(start);
+            await Execute(connection, $"""
+                INSERT INTO classrooms (id, name, capacity) VALUES (1, 'Room A', 30);
+                UPDATE biometric_devices SET classroom_id = 1 WHERE id = 1;
+                INSERT INTO fingerprint_templates (user_account_id, finger_position, template_identifier)
+                VALUES (1, 'Left thumb', 10);
+                INSERT INTO semesters (id, name, start_date, end_date, is_active)
+                VALUES (100, 'Test', '{date:yyyy-MM-dd}', '{date.AddDays(1):yyyy-MM-dd}', 1);
+                INSERT INTO teacher_semesters (teacher_account_id, semester_id) VALUES (1, 100);
+                INSERT INTO class_schedules (id, teacher_account_id, original_teacher_account_id, classroom_id,
+                    classroom_name, semester_id, subject_name, schedule_date, start_time, end_time)
+                VALUES (101, 1, 1, 1, 'Room A', 100, 'Class', '{date:yyyy-MM-dd}', '{start:HH:mm:ss}', '{start.AddMinutes(1):HH:mm:ss}');
+                """);
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString
+            }).Build();
+            var repository = new MariaDbUserAccountRepository(config, Options.Create(options));
+            var scanner = new DeviceFingerprintService(repository, Options.Create(options), new PasswordHasher(), new LoginAttemptLimiter());
+            var result = await scanner.ScanAsync(10, "1000000001");
+            Assert.Equal("started", result.Action);
+            Assert.Equal(101, result.ScheduleId);
+            await using var verify = new MySqlCommand("""
+                SELECT a.outcome, c.ac_status, c.ir_attendance_power FROM attendance_logs a
+                JOIN classrooms c ON c.id = a.classroom_id WHERE a.class_schedule_id = 101;
+                """, connection);
+            await using var reader = await verify.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal("OnTime", reader.GetString(0));
+            Assert.Equal("Cooling", reader.GetString(1));
+            Assert.True(reader.GetBoolean(2));
+        });
+    }
+
+    [MariaDbFact]
+    public async Task EarlyTimeInCanCrossMidnightAtSemesterStart()
+    {
+        await WithDatabase(async (_, connection, _) =>
+        {
+            var options = new SchoolTimeOptions();
+            var classDate = SchoolClock.Today(options).AddDays(1);
+            var previousDate = classDate.AddDays(-1);
+            await Execute(connection, $"""
+                INSERT INTO classrooms (id, name, capacity) VALUES (1, 'Room A', 30);
+                INSERT INTO semesters (id, name, start_date, end_date, is_active)
+                VALUES (100, 'Test', '{classDate:yyyy-MM-dd}', '{classDate.AddDays(7):yyyy-MM-dd}', 1);
+                INSERT INTO teacher_semesters (teacher_account_id, semester_id) VALUES (1, 100);
+                INSERT INTO class_schedules (id, teacher_account_id, original_teacher_account_id, classroom_id,
+                    classroom_name, semester_id, subject_name, schedule_date, start_time, end_time)
+                VALUES (101, 1, 1, 1, 'Room A', 100, 'Class', '{classDate:yyyy-MM-dd}', '00:05:00', '01:00:00');
+                """);
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString
+            }).Build();
+            var repository = new MariaDbUserAccountRepository(config, Options.Create(options));
+            Assert.Null(await repository.FindInWindowScheduleIdAsync(1, 1, previousDate, new TimeOnly(23, 49, 59)));
+            Assert.Equal(101, await repository.FindInWindowScheduleIdAsync(1, 1, previousDate, new TimeOnly(23, 50)));
+            Assert.True((await repository.StartClassAsync(1, 101, previousDate, new TimeOnly(23, 50))).Succeeded);
+            Assert.Equal(0, await repository.ReconcileAttendanceOutcomesAsync(previousDate, new TimeOnly(23, 51)));
+            await using var verify = new MySqlCommand("""
+                SELECT a.outcome, a.status, c.ir_attendance_power FROM attendance_logs a
+                JOIN classrooms c ON c.id = a.classroom_id WHERE a.class_schedule_id = 101;
+                """, connection);
+            await using var reader = await verify.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Equal("OnTime", reader.GetString(0));
+            Assert.Equal("Active", reader.GetString(1));
+            Assert.True(reader.GetBoolean(2));
+        });
+    }
+
+    [MariaDbFact]
     public async Task AttendancePowerHandlesEarlyEndOverlapReentryAndAutomaticClosure()
     {
         await WithDatabase(async (_, connection, _) =>
@@ -395,6 +1144,262 @@ public sealed class FacultyOtpStoreTests
             await Execute(connection, "DELETE FROM class_schedules WHERE id = 102;");
             await repository.ReconcileAttendanceOutcomesAsync(date, time);
             Assert.False(await Desired());
+        });
+    }
+
+    [MariaDbFact]
+    public async Task MakeupScheduleReplacesOneOriginalOccurrenceForAllAttendanceAndScheduleQueries()
+    {
+        await WithDatabase(async (_, connection, _) =>
+        {
+            var schoolTime = new SchoolTimeOptions { MissingTimeOutGraceMinutes = 0 };
+            var date = SchoolClock.Today(schoolTime).AddDays(1);
+            await Execute(connection, $"""
+                INSERT INTO classrooms (id, name, capacity) VALUES (1, 'Room A', 30), (2, 'Room B', 30);
+                INSERT INTO semesters (id, name, start_date, end_date, is_active)
+                    VALUES (1, 'Makeup test semester', '{date.AddDays(-1):yyyy-MM-dd}', '{date.AddDays(14):yyyy-MM-dd}', 1);
+                INSERT INTO teacher_semesters (teacher_account_id, semester_id) VALUES (1, 1);
+                INSERT INTO class_schedules
+                    (id, teacher_account_id, classroom_id, classroom_name, semester_id, schedule_kind,
+                     subject_name, schedule_date, start_time, end_time)
+                    VALUES (1, 1, 1, 'Room A', 1, 'Regular', 'Original class', '{date:yyyy-MM-dd}', '09:00:00', '10:00:00');
+                """);
+            var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString
+            }).Build();
+            var repository = new MariaDbUserAccountRepository(configuration, Options.Create(schoolTime));
+
+            var outsideWindow = await repository.CreateSchedulesAsync(new CreateScheduleRequest(
+                1, 2, 1, ScheduleKinds.Makeup, "Too late", date.AddDays(7), new TimeOnly(10, 0), new TimeOnly(11, 0),
+                ReplacesScheduleId: 1));
+            Assert.False(outsideWindow.Succeeded);
+
+            var created = await repository.CreateSchedulesAsync(new CreateScheduleRequest(
+                1, 2, 1, ScheduleKinds.Makeup, "Replacement class", date, new TimeOnly(10, 0), new TimeOnly(11, 0),
+                ReplacesScheduleId: 1));
+            Assert.True(created.Succeeded, created.Error);
+
+            var schedules = await repository.GetSchedulesAsync();
+            var makeup = Assert.Single(schedules, item => item.ScheduleKind == ScheduleKinds.Makeup);
+            Assert.Equal(1, makeup.ReplacesScheduleId);
+            Assert.Single(await repository.GetTeacherSchedulesAsync(1));
+
+            Assert.Null(await repository.FindInWindowScheduleIdAsync(1, 1, date, new TimeOnly(9, 30)));
+            Assert.Equal(makeup.Id, await repository.FindInWindowScheduleIdAsync(1, 2, date, new TimeOnly(10, 30)));
+            Assert.False((await repository.StartClassAsync(1, 1, date, new TimeOnly(9, 30))).Succeeded);
+
+            await repository.ReconcileAttendanceOutcomesAsync(date, new TimeOnly(10, 0));
+            await using (var originalAttendance = new MySqlCommand(
+                "SELECT COUNT(*) FROM attendance_logs WHERE class_schedule_id = 1;", connection))
+                Assert.Equal(0L, Convert.ToInt64(await originalAttendance.ExecuteScalarAsync()));
+
+            Assert.True((await repository.StartClassAsync(1, makeup.Id, date, new TimeOnly(10, 30))).Succeeded);
+        });
+    }
+
+    [MariaDbFact]
+    public async Task SubstitutionRequiresClassBoundSmsAndFingerprintAndPreservesOtherOccurrences()
+    {
+        await WithDatabase(async (_, connection, secret) =>
+        {
+            var options = new SchoolTimeOptions();
+            var date = SchoolClock.Today(options).AddDays(1);
+            await Execute(connection, $"""
+                INSERT INTO user_accounts (id, username, display_name, phone, password_hash, role, is_active)
+                VALUES (2, 'admin', 'Admin', NULL, 'hash', 'Admin', 1),
+                       (3, 'substitute', 'Substitute', '09999999993', 'hash', 'Teacher', 1),
+                       (4, 'other', 'Other', '09999999994', 'hash', 'Teacher', 1);
+                INSERT INTO gsm_modem_settings (singleton_id, port_name, baud_rate) VALUES (1, 'COM42', 9600);
+                INSERT INTO classrooms (id, name, capacity) VALUES (1, 'Room A', 30);
+                INSERT INTO semesters (id, name, start_date, end_date, is_active)
+                VALUES (100, 'Test', '{date.AddDays(-1):yyyy-MM-dd}', '{date.AddDays(14):yyyy-MM-dd}', 1);
+                INSERT INTO teacher_semesters (teacher_account_id, semester_id) VALUES (1, 100), (3, 100), (4, 100);
+                INSERT INTO class_schedules (id, teacher_account_id, original_teacher_account_id, classroom_id,
+                    classroom_name, semester_id, subject_name, schedule_date, start_time, end_time)
+                VALUES (1, 1, 1, 1, 'Room A', 100, 'Class', '{date:yyyy-MM-dd}', '09:00:00', '10:00:00'),
+                       (2, 1, 1, 1, 'Room A', 100, 'Class', '{date.AddDays(7):yyyy-MM-dd}', '09:00:00', '10:00:00');
+                """);
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString,
+                ["FacultyOtp:Secret"] = Convert.ToBase64String(secret)
+            }).Build();
+            var serial = new FakeSerial();
+            var otp = new PortalMobileOtp(config, new GsmSmsTransport(_ => serial), NullLogger<PortalMobileOtp>.Instance);
+            var substitutions = new ScheduleSubstitutionService(config, Options.Create(options), otp);
+            var repository = new MariaDbUserAccountRepository(config, Options.Create(options));
+
+            Assert.False((await substitutions.RequestAsync(1, 1, 3)).Succeeded);
+            Assert.False((await substitutions.ConfirmAsync(2, 1, 3, "123456")).Succeeded);
+            Assert.True((await substitutions.RequestAsync(2, 1, 3)).Succeeded);
+            var code = Assert.IsType<string>(serial.Code);
+            Assert.False((await substitutions.ConfirmAsync(2, 2, 3, code)).Succeeded);
+            Assert.False((await substitutions.ConfirmAsync(2, 1, 4, code)).Succeeded);
+            Assert.True((await substitutions.ConfirmAsync(2, 1, 3, code)).Succeeded);
+            Assert.False((await substitutions.ConfirmAsync(2, 1, 3, code)).Succeeded);
+
+            var schedules = await repository.GetSchedulesAsync();
+            Assert.Equal(3, Assert.Single(schedules, s => s.Id == 1).TeacherAccountId);
+            Assert.Equal(1, Assert.Single(schedules, s => s.Id == 1).OriginalTeacherAccountId);
+            Assert.Equal(1, Assert.Single(schedules, s => s.Id == 2).TeacherAccountId);
+            var time = new TimeOnly(9, 30);
+            Assert.Null(await repository.FindInWindowScheduleIdAsync(1, 1, date, time));
+            Assert.Equal(1, await repository.FindInWindowScheduleIdAsync(3, 1, date, time));
+            Assert.False((await repository.StartClassAsync(3, 1, date, time)).Succeeded);
+            Assert.True((await repository.StartClassAsync(3, 1, date, time,
+                verificationMethod: "Biometric / fingerprint scanner")).Succeeded);
+            Assert.False((await substitutions.RemoveAsync(2, 1)).Succeeded);
+            await using var ac = new MySqlCommand("SELECT ir_attendance_power FROM classrooms WHERE id = 1;", connection);
+            Assert.True(Convert.ToBoolean(await ac.ExecuteScalarAsync()));
+            await using var attendance = new MySqlCommand(
+                "SELECT COUNT(*) FROM attendance_logs WHERE class_schedule_id = 1 AND teacher_account_id = 1;", connection);
+            Assert.Equal(0L, Convert.ToInt64(await attendance.ExecuteScalarAsync()));
+        });
+    }
+
+    [MariaDbFact]
+    public async Task SubstitutionAllowsOnlyVerifiedTeachersFingerprintAtRoomScanner()
+    {
+        await WithDatabase(async (_, connection, secret) =>
+        {
+            var options = new SchoolTimeOptions();
+            var date = SchoolClock.Today(options);
+            await Execute(connection, $"""
+                INSERT INTO user_accounts (id, username, display_name, phone, password_hash, role, is_active)
+                VALUES (2, 'admin', 'Admin', NULL, 'hash', 'Admin', 1),
+                       (3, 'substitute', 'Substitute', '09999999993', 'hash', 'Teacher', 1);
+                INSERT INTO gsm_modem_settings (singleton_id, port_name, baud_rate) VALUES (1, 'COM42', 9600);
+                INSERT INTO classrooms (id, name, capacity) VALUES (1, 'Room A', 30);
+                UPDATE biometric_devices SET classroom_id = 1 WHERE id = 1;
+                INSERT INTO fingerprint_templates (user_account_id, finger_position, template_identifier)
+                VALUES (1, 'Left thumb', 10), (3, 'Left thumb', 11);
+                INSERT INTO semesters (id, name, start_date, end_date, is_active)
+                VALUES (100, 'Test', '{date.AddDays(-1):yyyy-MM-dd}', '{date.AddDays(1):yyyy-MM-dd}', 1);
+                INSERT INTO teacher_semesters (teacher_account_id, semester_id) VALUES (1, 100), (3, 100);
+                INSERT INTO class_schedules (id, teacher_account_id, original_teacher_account_id, classroom_id,
+                    classroom_name, semester_id, subject_name, schedule_date, start_time, end_time)
+                VALUES (1, 1, 1, 1, 'Room A', 100, 'Class', '{date:yyyy-MM-dd}', '00:00:00', '23:59:59');
+                """);
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString,
+                ["FacultyOtp:Secret"] = Convert.ToBase64String(secret)
+            }).Build();
+            var serial = new FakeSerial();
+            var otp = new PortalMobileOtp(config, new GsmSmsTransport(_ => serial), NullLogger<PortalMobileOtp>.Instance);
+            var substitutions = new ScheduleSubstitutionService(config, Options.Create(options), otp);
+            var repository = new MariaDbUserAccountRepository(config, Options.Create(options));
+            var scanner = new DeviceFingerprintService(repository, Options.Create(options), new PasswordHasher(), new LoginAttemptLimiter());
+            Assert.Equal("no_schedule", (await scanner.ScanAsync(11, "1000000001")).Action);
+            Assert.True((await substitutions.RequestAsync(2, 1, 3)).Succeeded);
+            Assert.True((await substitutions.ConfirmAsync(2, 1, 3, Assert.IsType<string>(serial.Code))).Succeeded);
+            Assert.Equal("no_schedule", (await scanner.ScanAsync(10, "1000000001")).Action);
+            Assert.Equal("started", (await scanner.ScanAsync(11, "1000000001")).Action);
+        });
+    }
+
+    [MariaDbFact]
+    public async Task SubstitutionRejectsConflictsAndInvalidatesCodesAfterRemoval()
+    {
+        await WithDatabase(async (_, connection, secret) =>
+        {
+            var options = new SchoolTimeOptions();
+            var date = SchoolClock.Today(options).AddDays(1);
+            await Execute(connection, $"""
+                INSERT INTO user_accounts (id, username, display_name, phone, password_hash, role, is_active)
+                VALUES (2, 'admin', 'Admin', NULL, 'hash', 'Admin', 1),
+                       (3, 'substitute', 'Substitute', '09999999993', 'hash', 'Teacher', 1),
+                       (4, 'admin2', 'Admin 2', NULL, 'hash', 'Admin', 1);
+                INSERT INTO gsm_modem_settings (singleton_id, port_name, baud_rate) VALUES (1, 'COM42', 9600);
+                INSERT INTO classrooms (id, name, capacity) VALUES (1, 'Room A', 30), (2, 'Room B', 30);
+                INSERT INTO semesters (id, name, start_date, end_date, is_active)
+                VALUES (100, 'Test', '{date.AddDays(-1):yyyy-MM-dd}', '{date.AddDays(14):yyyy-MM-dd}', 1);
+                INSERT INTO teacher_semesters (teacher_account_id, semester_id) VALUES (1, 100), (3, 100);
+                INSERT INTO class_schedules (id, teacher_account_id, original_teacher_account_id, classroom_id,
+                    classroom_name, semester_id, subject_name, schedule_date, start_time, end_time)
+                VALUES (1, 1, 1, 1, 'Room A', 100, 'Class', '{date:yyyy-MM-dd}', '09:00:00', '10:00:00'),
+                       (2, 3, 3, 2, 'Room B', 100, 'Conflict', '{date:yyyy-MM-dd}', '09:30:00', '10:30:00');
+                """);
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString,
+                ["FacultyOtp:Secret"] = Convert.ToBase64String(secret)
+            }).Build();
+            var serial = new FakeSerial();
+            var otp = new PortalMobileOtp(config, new GsmSmsTransport(_ => serial), NullLogger<PortalMobileOtp>.Instance);
+            var substitutions = new ScheduleSubstitutionService(config, Options.Create(options), otp);
+            Assert.False((await substitutions.RequestAsync(2, 1, 3)).Succeeded);
+            await Execute(connection, "UPDATE class_schedules SET start_time = '10:00:00', end_time = '11:00:00' WHERE id = 2;");
+            Assert.True((await substitutions.RequestAsync(2, 1, 3)).Succeeded);
+            var code = Assert.IsType<string>(serial.Code);
+            await Execute(connection, "UPDATE class_schedules SET start_time = '09:30:00', end_time = '10:30:00' WHERE id = 2;");
+            Assert.False((await substitutions.ConfirmAsync(2, 1, 3, code)).Succeeded);
+            await Execute(connection, "DELETE FROM class_schedules WHERE id = 2;");
+            Assert.True((await substitutions.RequestAsync(4, 1, 3)).Succeeded);
+            var oldCode = Assert.IsType<string>(serial.Code);
+            Assert.True((await substitutions.ConfirmAsync(2, 1, 3, code)).Succeeded);
+            Assert.True((await substitutions.RemoveAsync(2, 1)).Succeeded);
+            Assert.False((await substitutions.ConfirmAsync(4, 1, 3, oldCode)).Succeeded);
+
+            await Execute(connection, "UPDATE class_schedules SET teacher_account_id = 3, substitution_verified = FALSE WHERE id = 1;");
+            var repository = new MariaDbUserAccountRepository(config, Options.Create(options));
+            Assert.Null(await repository.FindInWindowScheduleIdAsync(3, 1, date, new TimeOnly(9, 30)));
+            Assert.False((await repository.StartClassAsync(3, 1, date, new TimeOnly(9, 30),
+                verificationMethod: "Biometric / fingerprint scanner")).Succeeded);
+            await Execute(connection, """
+                INSERT INTO attendance_logs (class_schedule_id, teacher_account_id, classroom_id, status, time_out_utc)
+                VALUES (1, 3, 1, 'Completed', UTC_TIMESTAMP(6));
+                """);
+            Assert.Null(await repository.TryInWindowAcReentryAsync(3, 1, 1, date, new TimeOnly(9, 30)));
+            await Execute(connection, "UPDATE attendance_logs SET status = 'Active', time_out_utc = NULL WHERE class_schedule_id = 1;");
+            Assert.False((await repository.SetTemperatureAsync(3, new SetTemperatureRequest(1, 24, "TargetSet"))).Succeeded);
+            await Execute(connection, "DELETE FROM attendance_logs WHERE class_schedule_id = 1;");
+            Assert.True((await substitutions.RequestAsync(2, 1, 3)).Succeeded);
+            Assert.True((await substitutions.ConfirmAsync(2, 1, 3, Assert.IsType<string>(serial.Code))).Succeeded);
+            Assert.Equal(1, await repository.FindInWindowScheduleIdAsync(3, 1, date, new TimeOnly(9, 30)));
+        });
+    }
+
+    [MariaDbFact]
+    public async Task MissingTimeOutReconciliationWaitsForExtendedClassEnd()
+    {
+        await WithDatabase(async (_, connection, _) =>
+        {
+            await Execute(connection, """
+                INSERT INTO classrooms (id, name, capacity) VALUES (1, 'Room A', 30);
+                INSERT INTO class_schedules
+                    (id, teacher_account_id, classroom_id, classroom_name, schedule_date, start_time, end_time)
+                VALUES (1, 1, 1, 'Room A', '2026-03-01', '09:00:00', '10:00:00');
+                INSERT INTO attendance_logs
+                    (class_schedule_id, teacher_account_id, classroom_id, status, class_extension_minutes)
+                VALUES (1, 1, 1, 'Active', 30);
+                """);
+            var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:SmartClassMariaDb"] = connection.ConnectionString
+            }).Build();
+            var options = new SchoolTimeOptions { MissingTimeOutGraceMinutes = 0 };
+            var repository = new MariaDbUserAccountRepository(configuration, Options.Create(options));
+            var date = new DateOnly(2026, 3, 1);
+            Assert.Equal(0, await repository.ReconcileAttendanceOutcomesAsync(date, new TimeOnly(10, 29)));
+            Assert.Equal(1, await repository.ReconcileAttendanceOutcomesAsync(date, new TimeOnly(10, 30)));
+            await using (var verify = new MySqlCommand(
+                "SELECT status, outcome FROM attendance_logs WHERE class_schedule_id = 1;", connection))
+            await using (var reader = await verify.ExecuteReaderAsync())
+            {
+                Assert.True(await reader.ReadAsync());
+                Assert.Equal("Completed", reader.GetString(0));
+                Assert.Equal("MissingTimeOut", reader.GetString(1));
+            }
+            await Execute(connection, "UPDATE user_accounts SET phone_verified=FALSE WHERE id=1;");
+            Assert.Null(Assert.Single(await repository.ClaimMissingTimeOutNotificationsAsync()).TeacherPhone);
+            await Execute(connection, """
+                UPDATE user_accounts SET phone_verified=TRUE WHERE id=1;
+                UPDATE attendance_logs SET missing_time_out_sms_status='Pending', missing_time_out_sms_attempted_utc=NULL
+                WHERE class_schedule_id=1;
+                """);
+            Assert.Equal("09123456789", Assert.Single(await repository.ClaimMissingTimeOutNotificationsAsync()).TeacherPhone);
         });
     }
 
@@ -911,7 +1916,7 @@ public sealed class FacultyOtpStoreTests
             var repository = new MariaDbUserAccountRepository(config, Options.Create(new SchoolTimeOptions()));
             var hasher = new PasswordHasher();
             var auth = new AuthService(repository, hasher, Options.Create(new DefaultAdminOptions()),
-                Options.Create(new PasswordResetOptions()), null!, new LoginAttemptLimiter(),
+                Options.Create(new PasswordResetOptions()), new LoginAttemptLimiter(),
                 Options.Create(new SchoolTimeOptions()));
             Assert.NotNull(await auth.RestoreUserAsync(2));
             const string phone = "09999999999";

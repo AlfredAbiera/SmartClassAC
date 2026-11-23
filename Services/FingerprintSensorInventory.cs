@@ -61,6 +61,7 @@ internal sealed class FingerprintSensorInventory
         device.CommandText = @"SELECT d.id FROM biometric_devices d
             WHERE d.device_id = @device AND d.is_active = TRUE AND d.paired_at IS NOT NULL
               AND d.pending_clear_fingerprints = FALSE
+              AND NOT EXISTS (SELECT 1 FROM fingerprint_deletion_requests r WHERE r.device_id = d.id)
               AND NOT EXISTS (SELECT 1 FROM fingerprint_enrollment_preparations p
                   INNER JOIN fingerprint_enrollment_write_guards g ON g.preparation_id = p.id
                   WHERE p.device_id = d.id)

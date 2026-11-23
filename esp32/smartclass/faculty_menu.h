@@ -6,6 +6,7 @@
 namespace FacultyMenu {
 enum class Result : uint8_t { Denied, Accepted, End, Item };
 enum class TargetResult : uint8_t { Saved, Denied, NoClass, Minimum, Stale };
+enum class ExtensionResult : uint8_t { Extended, Denied, NoClass, Already, Conflict, InvalidWindow };
 inline bool decodeJsonBody(const char* escaped, size_t length, char* out, size_t capacity, size_t& written) {
   if (!escaped || !out || capacity == 0) return false;
   size_t n = 0;
@@ -132,6 +133,24 @@ bool parseTarget(const char* digest, Verify verify, const uint8_t* body, size_t 
   else if (strcmp(status, "no_class") == 0) result = TargetResult::NoClass;
   else if (strcmp(status, "minimum") == 0) result = TargetResult::Minimum;
   else if (strcmp(status, "stale") == 0) result = TargetResult::Stale;
+  else return false;
+  return true;
+}
+template <typename Verify>
+bool parseExtension(const char* digest, Verify verify, const uint8_t* body, size_t length,
+                    const uint8_t* tag, size_t tagLength, ExtensionResult& result) {
+  if (!digest || strlen(digest) != 64 || !body || !tag || tagLength != 32 || length < 69 ||
+      memcmp(body, digest, 64) != 0 || body[64] != '\n' || !verify(body, length, tag, tagLength)) return false;
+  const char* p = reinterpret_cast<const char*>(body) + 65;
+  const char* end = reinterpret_cast<const char*>(body) + length;
+  char status[12];
+  if (!line(p, end, status, sizeof(status)) || p != end) return false;
+  if (strcmp(status, "extended") == 0) result = ExtensionResult::Extended;
+  else if (strcmp(status, "denied") == 0) result = ExtensionResult::Denied;
+  else if (strcmp(status, "no_class") == 0) result = ExtensionResult::NoClass;
+  else if (strcmp(status, "already") == 0) result = ExtensionResult::Already;
+  else if (strcmp(status, "conflict") == 0) result = ExtensionResult::Conflict;
+  else if (strcmp(status, "invalid") == 0) result = ExtensionResult::InvalidWindow;
   else return false;
   return true;
 }

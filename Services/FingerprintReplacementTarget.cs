@@ -28,6 +28,7 @@ internal static class FingerprintReplacementTarget
             WHERE s.singleton_id = 1 AND d.id = @scanner
               AND d.is_active = TRUE AND d.paired_at IS NOT NULL
               AND d.fingerprint_enrollment_enabled = TRUE AND d.pending_clear_fingerprints = FALSE
+              AND NOT EXISTS (SELECT 1 FROM fingerprint_deletion_requests r WHERE r.device_id=d.id)
               AND c.is_active = TRUE AND u.is_active = TRUE AND u.role = 'Teacher'
               AND f.finger_position = @finger COLLATE utf8mb4_unicode_ci
               AND f.template_identifier = @slot

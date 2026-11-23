@@ -4,6 +4,7 @@ namespace SmartClassAC.Services;
 
 internal sealed record FacultyDeviceAcInfo(long ClassroomId, int Target, int Minimum, bool HasActiveClass);
 internal enum FacultyDeviceTargetResult { Updated, Denied, NoActiveClass, BelowMinimum, StaleTarget, InvalidTarget }
+internal enum FacultyClassExtensionResult { Extended, Denied, NoActiveClass, AlreadyExtended, ScheduleConflict, InvalidWindow }
 
 internal sealed class FacultyDeviceAcStore(IConfiguration configuration)
 {
@@ -23,8 +24,11 @@ internal sealed class FacultyDeviceAcStore(IConfiguration configuration)
         command.CommandText = """
             SELECT c.id, c.target_temperature, c.minimum_temperature,
                    EXISTS (SELECT 1 FROM attendance_logs a
+                           LEFT JOIN class_schedules s ON s.id = a.class_schedule_id
                            WHERE a.teacher_account_id = @teacher AND a.classroom_id = c.id
-                             AND a.status = 'Active' AND a.time_out_utc IS NULL)
+                             AND a.status = 'Active' AND a.time_out_utc IS NULL
+                             AND (a.class_schedule_id IS NULL OR
+                                  (s.id IS NOT NULL AND (COALESCE(s.original_teacher_account_id, s.teacher_account_id) = s.teacher_account_id OR s.substitution_verified = TRUE))))
             FROM biometric_devices d
             INNER JOIN classrooms c ON c.id = d.classroom_id AND c.is_active = TRUE
             WHERE d.device_id = @device AND d.is_active = TRUE AND d.paired_at IS NOT NULL;
@@ -38,6 +42,132 @@ internal sealed class FacultyDeviceAcStore(IConfiguration configuration)
                 : null;
         await transaction.CommitAsync(cancellationToken);
         return info;
+    }
+
+    internal sealed class FacultyDeviceClassExtensionStore(IConfiguration configuration)
+    {
+        public async Task<FacultyClassExtensionResult> ExtendAsync(
+            string deviceId, string sessionToken, byte[] secret, DateOnly schoolDate, TimeOnly schoolTime,
+            CancellationToken cancellationToken = default)
+        {
+            var connectionString = configuration.GetConnectionString("SmartClassMariaDb")
+                ?? throw new InvalidOperationException("Set ConnectionStrings:SmartClassMariaDb before using the Faculty menu.");
+            await using var connection = new MySqlConnection(connectionString);
+            await connection.OpenAsync(cancellationToken);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+            try
+            {
+                var teacherId = await FacultyOtpStore.LockSessionAsync(
+                    connection, transaction, deviceId, sessionToken, secret, cancellationToken);
+                if (teacherId is null)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return FacultyClassExtensionResult.Denied;
+                }
+
+                await using var attendance = connection.CreateCommand();
+                attendance.Transaction = transaction;
+                attendance.CommandText = """
+                    SELECT a.id, a.class_schedule_id, a.classroom_id, a.class_extension_minutes,
+                           schedule.end_time, schedule.schedule_date
+                    FROM attendance_logs a
+                    INNER JOIN class_schedules schedule ON schedule.id = a.class_schedule_id
+                    INNER JOIN biometric_devices device ON device.classroom_id = a.classroom_id
+                        AND device.device_id = @device AND device.is_active = TRUE AND device.paired_at IS NOT NULL
+                    WHERE a.teacher_account_id = @teacher AND a.status = 'Active' AND a.time_out_utc IS NULL
+                      AND schedule.teacher_account_id = a.teacher_account_id
+                      AND (COALESCE(schedule.original_teacher_account_id, schedule.teacher_account_id) = schedule.teacher_account_id OR schedule.substitution_verified = TRUE)
+                      AND schedule.classroom_id = a.classroom_id
+                      AND schedule.schedule_date = @date
+                      AND @time >= schedule.start_time AND @time < schedule.end_time
+                    LIMIT 1
+                    FOR UPDATE;
+                    """;
+                attendance.Parameters.Add("@device", MySqlDbType.VarChar).Value = deviceId;
+                attendance.Parameters.Add("@teacher", MySqlDbType.Int64).Value = teacherId.Value;
+                attendance.Parameters.Add("@date", MySqlDbType.Date).Value = schoolDate;
+                attendance.Parameters.Add("@time", MySqlDbType.Time).Value = schoolTime.ToTimeSpan();
+
+                long attendanceId, scheduleId, classroomId;
+                int extensionMinutes;
+                TimeOnly scheduleEnd;
+                await using (var reader = await attendance.ExecuteReaderAsync(cancellationToken))
+                {
+                    if (!await reader.ReadAsync(cancellationToken))
+                    {
+                        await transaction.RollbackAsync(cancellationToken);
+                        return FacultyClassExtensionResult.NoActiveClass;
+                    }
+
+                    attendanceId = reader.GetInt64(0);
+                    scheduleId = reader.GetInt64(1);
+                    classroomId = reader.GetInt64(2);
+                    extensionMinutes = reader.GetInt32(3);
+                    scheduleEnd = TimeOnly.FromTimeSpan(reader.GetTimeSpan(4));
+                }
+
+                if (extensionMinutes != 0)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return FacultyClassExtensionResult.AlreadyExtended;
+                }
+
+                if (scheduleEnd > TimeOnly.MaxValue.AddMinutes(-30))
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return FacultyClassExtensionResult.InvalidWindow;
+                }
+
+                var extendedEnd = scheduleEnd.AddMinutes(30);
+                await using (var conflict = connection.CreateCommand())
+                {
+                    conflict.Transaction = transaction;
+                    conflict.CommandText = """
+                        SELECT id
+                        FROM class_schedules
+                        WHERE id <> @schedule AND schedule_date = @date
+                          AND (teacher_account_id = @teacher OR classroom_id = @classroom)
+                          AND start_time < @extendedEnd AND end_time > @scheduleEnd
+                        LIMIT 1
+                        FOR UPDATE;
+                        """;
+                    conflict.Parameters.Add("@schedule", MySqlDbType.Int64).Value = scheduleId;
+                    conflict.Parameters.Add("@date", MySqlDbType.Date).Value = schoolDate;
+                    conflict.Parameters.Add("@teacher", MySqlDbType.Int64).Value = teacherId.Value;
+                    conflict.Parameters.Add("@classroom", MySqlDbType.Int64).Value = classroomId;
+                    conflict.Parameters.Add("@extendedEnd", MySqlDbType.Time).Value = extendedEnd.ToTimeSpan();
+                    conflict.Parameters.Add("@scheduleEnd", MySqlDbType.Time).Value = scheduleEnd.ToTimeSpan();
+                    if (await conflict.ExecuteScalarAsync(cancellationToken) is not null)
+                    {
+                        await transaction.RollbackAsync(cancellationToken);
+                        return FacultyClassExtensionResult.ScheduleConflict;
+                    }
+                }
+
+                await using var extend = connection.CreateCommand();
+                extend.Transaction = transaction;
+                extend.CommandText = """
+                    UPDATE attendance_logs
+                    SET class_extension_minutes = 30
+                    WHERE id = @attendance AND status = 'Active' AND time_out_utc IS NULL
+                      AND class_extension_minutes = 0;
+                    """;
+                extend.Parameters.Add("@attendance", MySqlDbType.Int64).Value = attendanceId;
+                if (await extend.ExecuteNonQueryAsync(cancellationToken) != 1)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return FacultyClassExtensionResult.AlreadyExtended;
+                }
+
+                await transaction.CommitAsync(cancellationToken);
+                return FacultyClassExtensionResult.Extended;
+            }
+            catch
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                throw;
+            }
+        }
     }
 
     internal async Task<FacultyDeviceTargetResult> SetTargetAsync(
@@ -68,9 +198,13 @@ internal sealed class FacultyDeviceAcStore(IConfiguration configuration)
         await using var attendance = connection.CreateCommand();
         attendance.Transaction = transaction;
         attendance.CommandText = """
-            SELECT id FROM attendance_logs
-            WHERE teacher_account_id = @teacher AND classroom_id = @room
-              AND status = 'Active' AND time_out_utc IS NULL LIMIT 1 FOR UPDATE;
+            SELECT a.id FROM attendance_logs a
+            LEFT JOIN class_schedules s ON s.id = a.class_schedule_id
+            WHERE a.teacher_account_id = @teacher AND a.classroom_id = @room
+              AND a.status = 'Active' AND a.time_out_utc IS NULL
+              AND (a.class_schedule_id IS NULL OR
+                   (s.id IS NOT NULL AND (COALESCE(s.original_teacher_account_id, s.teacher_account_id) = s.teacher_account_id OR s.substitution_verified = TRUE)))
+            LIMIT 1 FOR UPDATE;
             """;
         attendance.Parameters.Add("@teacher", MySqlDbType.Int64).Value = teacherId.Value;
         attendance.Parameters.Add("@room", MySqlDbType.Int64).Value = roomId;

@@ -17,11 +17,13 @@ internal static class FacultyDeviceMenuRoutes
         MapChallenge(app, "/api/device/faculty/menu/ac/challenge", "faculty_menu_ac", isAuthorizedDevice);
         MapChallenge(app, "/api/device/faculty/menu/ac-v2/challenge", "faculty_menu_ac_v2", isAuthorizedDevice);
         MapChallenge(app, "/api/device/faculty/menu/ac-target/challenge", "faculty_menu_ac_target", isAuthorizedDevice);
+        MapChallenge(app, "/api/device/faculty/menu/extend/challenge", "faculty_menu_extend", isAuthorizedDevice);
         MapOperation(app, "/api/device/faculty/menu/login", "faculty_menu_login", isAuthorizedDevice);
         MapOperation(app, "/api/device/faculty/menu/schedule", "faculty_menu_schedule", isAuthorizedDevice);
         MapOperation(app, "/api/device/faculty/menu/ac", "faculty_menu_ac", isAuthorizedDevice);
         MapOperation(app, "/api/device/faculty/menu/ac-v2", "faculty_menu_ac_v2", isAuthorizedDevice);
         MapOperation(app, "/api/device/faculty/menu/ac-target", "faculty_menu_ac_target", isAuthorizedDevice);
+        MapOperation(app, "/api/device/faculty/menu/extend", "faculty_menu_extend", isAuthorizedDevice);
     }
 
     private static IResult? CheckAccess(WebApplication app, HttpContext context, IConfiguration configuration,
@@ -79,12 +81,14 @@ internal sealed class FacultyDeviceMenuProtocol(IConfiguration configuration, IO
         bool login = operation == "faculty_menu_login";
         bool ac = operation is "faculty_menu_ac" or "faculty_menu_ac_v2";
         bool target = operation == "faculty_menu_ac_target";
+        bool extend = operation == "faculty_menu_extend";
         int expected = request.Index / 100, desired = request.Index % 100;
-        if ((!login && !ac && !target && operation != "faculty_menu_schedule") ||
+        if ((!login && !ac && !target && !extend && operation != "faculty_menu_schedule") ||
             !EnrollmentMessageAuthentication.IsValidDeviceId(request.DeviceId) ||
             (target ? request.RoomId <= 0 || expected is < 16 or > 30 || desired is < 16 or > 30 ||
                       Math.Abs(expected - desired) != 1
-                    : request.RoomId != 0 || request.Index is < 0 or > 999 || ((login || ac) && request.Index != 0)) ||
+                    : request.RoomId != 0 || request.Index is < 0 or > 999 ||
+                      ((login || ac || extend) && request.Index != 0)) ||
             (login ? request.Value is not { Length: 6 } || !request.Value.All(char.IsAsciiDigit)
                    : !FacultyOtpProtocol.TryHex(request.Value, out _)) ||
             !FacultyOtpProtocol.TryHex(request.Challenge, out var challenge) ||
@@ -124,6 +128,23 @@ internal sealed class FacultyDeviceMenuProtocol(IConfiguration configuration, IO
                     FacultyDeviceTargetResult.BelowMinimum => "minimum\n",
                     FacultyDeviceTargetResult.StaleTarget => "stale\n",
                     _ => throw new InvalidOperationException("Validated AC target was rejected as invalid.")
+                };
+            }
+            else if (extend)
+            {
+                var now = SchoolClock.GetNow(schoolTime.Value);
+                var result = await new FacultyDeviceAcStore.FacultyDeviceClassExtensionStore(configuration).ExtendAsync(
+                    request.DeviceId!, request.Value!, secret, DateOnly.FromDateTime(now),
+                    TimeOnly.FromDateTime(now), cancellationToken);
+                content = result switch
+                {
+                    FacultyClassExtensionResult.Extended => "extended\n",
+                    FacultyClassExtensionResult.Denied => "denied\n",
+                    FacultyClassExtensionResult.NoActiveClass => "no_class\n",
+                    FacultyClassExtensionResult.AlreadyExtended => "already\n",
+                    FacultyClassExtensionResult.ScheduleConflict => "conflict\n",
+                    FacultyClassExtensionResult.InvalidWindow => "invalid\n",
+                    _ => throw new InvalidOperationException("Validated class extension was rejected as invalid.")
                 };
             }
             else if (ac)

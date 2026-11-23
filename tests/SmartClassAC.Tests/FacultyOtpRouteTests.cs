@@ -22,15 +22,28 @@ public sealed class FacultyOtpRouteTests
         builder.Logging.ClearProviders();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Services.AddSingleton<GsmSmsTransport>();
+        builder.Services.AddSingleton<AttendanceOtpService>(_ => throw new InvalidOperationException("Not needed for challenge route tests."));
         builder.Services.AddOptions();
         await using var app = builder.Build();
         app.MapFacultyOtpRoutes((context, _) => context.Request.Headers["X-Device-Api-Key"] == "test-key");
+        app.MapAttendanceOtpRoutes((context, _) => context.Request.Headers["X-Device-Api-Key"] == "test-key");
         app.MapFacultyDeviceMenuRoutes((context, _) => context.Request.Headers["X-Device-Api-Key"] == "test-key");
         app.MapAcIrRoutes((context, _) => context.Request.Headers["X-Device-Api-Key"] == "test-key");
+        app.MapFingerprintDeletionRoutes((context, _) => context.Request.Headers["X-Device-Api-Key"] == "test-key");
         await app.StartAsync();
         var address = Assert.Single(app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses);
         using var client = new HttpClient { BaseAddress = new Uri(address) };
         var paths = new[] { "request", "verify" };
+        foreach (var action in new[] { "operation", "claim", "finish" })
+        {
+            using var disabledDelete = await client.PostAsJsonAsync($"api/device/fingerprint/delete/{action}/challenge",
+                new EnrollmentRecoveryChallengeRequest("1000000001"));
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, disabledDelete.StatusCode);
+            Assert.True(disabledDelete.Headers.CacheControl?.NoStore);
+        }
+        using var disabledAttendance = await client.PostAsJsonAsync("api/device/attendance/otp/challenge", new FacultyOtpChallengeRequest("1000000001"));
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, disabledAttendance.StatusCode);
+        Assert.True(disabledAttendance.Headers.CacheControl?.NoStore);
         foreach (var path in paths)
         {
             using var disabledChallenge = await client.PostAsJsonAsync($"api/device/faculty/otp/{path}/challenge", new FacultyOtpChallengeRequest("1000000001"));
@@ -41,6 +54,13 @@ public sealed class FacultyOtpRouteTests
             Assert.True(disabled.Headers.CacheControl?.NoStore);
         }
         app.Configuration["FacultyOtp:EnableDeviceApi"] = "true";
+        app.Configuration["AttendanceOtp:EnableDeviceApi"] = "true";
+        app.Configuration["EnrollmentSecurity:EnableFingerprintDeletion"] = "true";
+        using var unauthorizedDelete = await client.PostAsJsonAsync("api/device/fingerprint/delete/claim/challenge",
+            new EnrollmentRecoveryChallengeRequest("1000000001"));
+        Assert.Equal(environment == "Development" ? HttpStatusCode.Unauthorized : HttpStatusCode.UpgradeRequired, unauthorizedDelete.StatusCode);
+        using var unauthorizedAttendance = await client.PostAsJsonAsync("api/device/attendance/otp/challenge", new FacultyOtpChallengeRequest("1000000001"));
+        Assert.Equal(environment == "Development" ? HttpStatusCode.Unauthorized : HttpStatusCode.UpgradeRequired, unauthorizedAttendance.StatusCode);
         using var disabledIr = await client.PostAsJsonAsync("api/device/ac-ir/boot/challenge", new FacultyOtpChallengeRequest("1000000001"));
         Assert.Equal(HttpStatusCode.ServiceUnavailable, disabledIr.StatusCode);
         Assert.True(disabledIr.Headers.CacheControl?.NoStore);
@@ -58,5 +78,8 @@ public sealed class FacultyOtpRouteTests
         client.DefaultRequestHeaders.Add("X-Device-Api-Key", "test-key");
         using var invalid = await client.PostAsJsonAsync("api/device/faculty/otp/request/challenge", new FacultyOtpChallengeRequest("bad"));
         Assert.Equal(environment == "Development" ? HttpStatusCode.BadRequest : HttpStatusCode.UpgradeRequired, invalid.StatusCode);
+        using var invalidDelete = await client.PostAsJsonAsync("api/device/fingerprint/delete/operation/challenge",
+            new EnrollmentRecoveryChallengeRequest("bad"));
+        Assert.Equal(environment == "Development" ? HttpStatusCode.BadRequest : HttpStatusCode.UpgradeRequired, invalidDelete.StatusCode);
     }
 }

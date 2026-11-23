@@ -79,6 +79,34 @@ public sealed class AttendanceReportTests
         using var workbook = new XLWorkbook(new MemoryStream(AttendanceReport.Workbook(report)));
         Assert.Equal(0, workbook.Worksheet("Attendance").Cell(5, 2).GetValue<int>());
         Assert.Contains("Absent", workbook.Worksheet("Attendance").Cell(4, 1).GetString());
+        Assert.Contains("No attendance records match", workbook.Worksheet("Attendance").Cell(15, 1).GetString());
+    }
+
+    [Fact]
+    public void ExportsWrapLongContentAndSetLandscapePrintLayout()
+    {
+        var date = new DateOnly(2025, 1, 1);
+        var longName = new string('W', 160);
+        var report = new AttendanceReportData(new(date, date, 1, 2, ""),
+            [new(date, longName, "Room", "Subject", null, null, "Biometric", "Active")], longName, longName);
+        var html = AttendanceReport.Printable(report);
+        Assert.Contains("@page{size:A4 landscape", html);
+        Assert.Contains("overflow-wrap:anywhere", html);
+        Assert.Contains("thead{display:table-header-group}", html);
+        using var workbook = new XLWorkbook(new MemoryStream(AttendanceReport.Workbook(report)));
+        var sheet = workbook.Worksheet("Attendance");
+        Assert.Equal(longName, sheet.Cell(15, 2).GetString());
+        Assert.True(sheet.Cell(15, 2).Style.Alignment.WrapText);
+        Assert.True(sheet.Row(15).Height > sheet.Row(14).Height);
+        Assert.True(sheet.Column(1).Width < 20);
+        Assert.True(sheet.Cell(4, 1).IsMerged());
+        Assert.True(sheet.Row(4).Height > 20);
+        Assert.Equal(XLPageOrientation.Landscape, sheet.PageSetup.PageOrientation);
+        Assert.Equal(1, sheet.PageSetup.PagesWide);
+        Assert.Equal(0, sheet.PageSetup.PagesTall);
+        Assert.Single(sheet.PageSetup.PrintAreas);
+        Assert.Equal(14, sheet.PageSetup.FirstRowToRepeatAtTop);
+        Assert.Equal(14, sheet.PageSetup.LastRowToRepeatAtTop);
     }
 
     [Fact]

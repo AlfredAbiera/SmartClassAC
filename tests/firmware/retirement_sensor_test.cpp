@@ -13,6 +13,7 @@ struct Clock {
 struct Transport {
   std::deque<uint8_t> input;
   std::vector<uint8_t> request, commands;
+  std::vector<std::vector<uint8_t>> requests;
   uint16_t capacity = 300, count = 0;
   int badChecksumCommand = -1, rejectedCommand = -1, occupiedPage = -1;
   bool dropClearReply = false;
@@ -29,6 +30,7 @@ struct Transport {
   void respond() {
     uint8_t command = request[9];
     commands.push_back(command);
+    requests.push_back(request);
     std::vector<uint8_t> payload{0};
     if (command == rejectedCommand) payload[0] = 1;
     else if (command == 0x0f) {
@@ -83,5 +85,15 @@ int main() {
   Transport full; full.capacity = 2048;
   assert(clear(full) == EnrollmentSensor::Ok);
   assert(full.commands.size() == 12);
+  Transport single;
+  Clock clock;
+  EnrollmentSensor::CheckedSensor<Transport, Clock> sensor(single, clock);
+  assert(sensor.deleteModel(258) == EnrollmentSensor::Ok);
+  assert((std::vector<uint8_t>(single.requests[0].begin() + 9, single.requests[0].begin() + 14)
+      == std::vector<uint8_t>{0x0c, 1, 2, 0, 1}));
+  Transport badDelete; badDelete.badChecksumCommand = 0x0c;
+  Clock badClock;
+  EnrollmentSensor::CheckedSensor<Transport, Clock> badSensor(badDelete, badClock);
+  assert(badSensor.deleteModel(7) == EnrollmentSensor::ProtocolError);
   std::cout << "9 retirement sensor scenarios passed\n";
 }

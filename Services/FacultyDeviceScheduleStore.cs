@@ -32,6 +32,11 @@ internal sealed class FacultyDeviceScheduleStore
             SELECT subject_name, classroom_name, start_time, end_time
             FROM class_schedules
             WHERE teacher_account_id = @teacher AND schedule_date = @today
+              AND (COALESCE(original_teacher_account_id, teacher_account_id) = teacher_account_id OR substitution_verified = TRUE)
+              AND NOT EXISTS (
+                    SELECT 1 FROM class_schedules replacement
+                    WHERE replacement.replaces_schedule_id = class_schedules.id
+              )
             ORDER BY start_time, id;
             """;
         command.Parameters.Add("@teacher", MySqlDbType.Int64).Value = teacherId.Value;

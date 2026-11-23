@@ -90,7 +90,7 @@ internal sealed class FacultyOtpStore
 
         await using var teacher = connection.CreateCommand();
         teacher.Transaction = transaction;
-        teacher.CommandText = "SELECT id FROM user_accounts WHERE phone = @phone AND role = 'Teacher' AND is_active = TRUE FOR UPDATE;";
+        teacher.CommandText = "SELECT id FROM user_accounts WHERE phone = @phone AND role = 'Teacher' AND is_active = TRUE AND phone_verified = TRUE FOR UPDATE;";
         teacher.Parameters.Add("@phone", MySqlDbType.VarChar).Value = phone;
         var teacherId = await teacher.ExecuteScalarAsync(cancellationToken);
         if (teacherId is null)
@@ -167,7 +167,7 @@ internal sealed class FacultyOtpStore
         select.CommandText = """
             SELECT o.request_id, o.phone_key, o.code_tag, u.phone, u.role, u.is_active, u.id
             FROM faculty_otp_requests o JOIN user_accounts u ON u.id = o.teacher_id
-            WHERE o.device_id = @device AND o.delivery_accepted = 1
+            WHERE o.device_id = @device AND o.delivery_accepted = 1 AND u.phone_verified = TRUE
                 AND o.expires_utc > UTC_TIMESTAMP(6) AND o.failed_attempts < @maxAttempts FOR UPDATE;
             """;
         select.Parameters.Add("@device", MySqlDbType.Int64).Value = device.Value;
@@ -251,7 +251,7 @@ internal sealed class FacultyOtpStore
             INNER JOIN user_accounts u ON u.id = s.teacher_id
             WHERE d.device_id = @device AND d.is_active = TRUE AND d.paired_at IS NOT NULL
               AND s.paired_at = d.paired_at AND s.token_hash = @hash AND s.expires_utc > UTC_TIMESTAMP(6)
-              AND u.is_active = TRUE AND u.role = 'Teacher'
+              AND u.is_active = TRUE AND u.role = 'Teacher' AND u.phone_verified = TRUE
             FOR UPDATE;
             """;
         command.Parameters.Add("@device", MySqlDbType.VarChar).Value = deviceId;

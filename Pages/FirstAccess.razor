@@ -8,9 +8,9 @@
     <section class="first-access-card" aria-labelledby="first-access-title">
         <div class="first-access-icon" aria-hidden="true"><i class="fas fa-shield-halved"></i></div>
         <p class="first-access-eyebrow">SMARTCLASS AC · FIRST ACCESS</p>
-        <h1 id="first-access-title">Set the administrator recovery email</h1>
+        <h1 id="first-access-title">Set the administrator recovery mobile</h1>
         <p class="first-access-copy">
-            The default administrator account is ready. Add its registered email before signing in so account recovery can be handled securely.
+            The default administrator account is ready. Add its registered mobile number before signing in so password reset links can be sent by SMS.
         </p>
 
         @if (!string.IsNullOrWhiteSpace(message))
@@ -19,18 +19,21 @@
         }
 
         <form @onsubmit="SaveEmail">
-            <label for="admin-email">Administrator email</label>
+            <label for="admin-mobile">Administrator mobile number</label>
             <div class="first-access-input">
-                <i class="fas fa-envelope" aria-hidden="true"></i>
-                <input id="admin-email"
-                       type="email"
-                       autocomplete="email"
-                       placeholder="admin@school.edu"
-                       @bind="email"
+                <i class="fas fa-mobile-screen-button" aria-hidden="true"></i>
+                <input id="admin-mobile"
+                       type="tel"
+                       inputmode="numeric"
+                       autocomplete="tel"
+                       maxlength="11"
+                       pattern="09[0-9]{9}"
+                       placeholder="09xxxxxxxxx"
+                       @bind="phone"
                        required />
             </div>
             <button type="submit" disabled="@isSaving">
-                @(isSaving ? "Saving email…" : "Save and continue to login")
+                @(isSaving ? "Saving mobile…" : "Save and continue to login")
                 @if (!isSaving) { <i class="fas fa-arrow-right" aria-hidden="true"></i> }
             </button>
         </form>
@@ -40,7 +43,7 @@
 </main>
 
 @code {
-    private string email = string.Empty;
+    private string phone = string.Empty;
     private string message = string.Empty;
     private bool isSaving;
 
@@ -63,18 +66,18 @@
         message = string.Empty;
         try
         {
-            var result = await AuthService.CompleteInitialAdminSetupAsync(email);
+            var result = await AuthService.CompleteInitialAdminSetupAsync(phone);
             if (result.Succeeded)
             {
                 Navigation.NavigateTo("/login");
                 return;
             }
 
-            message = result.Error ?? "The administrator email could not be saved.";
+            message = result.Error ?? "The administrator mobile number could not be saved.";
         }
         catch
         {
-            message = "The administrator email could not be saved. Please try again.";
+            message = "The administrator mobile number could not be saved. Please try again.";
         }
         finally
         {

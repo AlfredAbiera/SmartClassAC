@@ -43,7 +43,7 @@ public sealed class BuzzerSettingsTests
     }
 
     [Fact]
-    public void RemindersRepeatFromLeadTimeAndStopAtEnd()
+    public void RemindersRepeatBeforeEndAndIncludeActualEndTime()
     {
         var end = new DateTime(2026, 1, 1, 12, 0, 0);
         var settings = new BuzzerSettings(true, 15, 5);
@@ -53,7 +53,10 @@ public sealed class BuzzerSettingsTests
         Assert.Null(BuzzerSettingsStore.ReminderId(1, end, end.AddMinutes(-15).AddSeconds(20), settings));
         Assert.Equal("1-20260101115000", BuzzerSettingsStore.ReminderId(1, end, end.AddMinutes(-10), settings));
         Assert.Equal("1-20260101115500", BuzzerSettingsStore.ReminderId(1, end, end.AddMinutes(-5), settings));
-        Assert.Null(BuzzerSettingsStore.ReminderId(1, end, end, settings));
+        Assert.Null(BuzzerSettingsStore.ReminderId(1, end, end.AddSeconds(-1), settings));
+        Assert.Equal("1-20260101120000", BuzzerSettingsStore.ReminderId(1, end, end, settings));
+        Assert.Equal("1-20260101120000", BuzzerSettingsStore.ReminderId(1, end, end.AddSeconds(19), settings));
+        Assert.Null(BuzzerSettingsStore.ReminderId(1, end, end.AddSeconds(20), settings));
         Assert.Null(BuzzerSettingsStore.ReminderId(1, end, end.AddMinutes(-5), settings with { Enabled = false }));
     }
 
@@ -63,6 +66,7 @@ public sealed class BuzzerSettingsTests
         var end = new DateTime(2026, 1, 1, 12, 0, 0);
         Assert.NotNull(BuzzerSettingsStore.ReminderId(1, end, end.AddMinutes(-5), new(true, 5, 10)));
         Assert.Null(BuzzerSettingsStore.ReminderId(1, end, end.AddMinutes(-1), new(true, 5, 10)));
+        Assert.NotNull(BuzzerSettingsStore.ReminderId(1, end, end, new(true, 5, 10)));
         Assert.Null(BuzzerSettingsStore.ReminderId(1, end, end.AddMinutes(-1), new(true, 0, 1)));
         Assert.Null(BuzzerSettingsStore.ReminderId(1, end, end.AddMinutes(-1), new(true, 1, 0)));
     }
@@ -87,7 +91,7 @@ public sealed class BuzzerSettingsTests
                 CREATE TABLE user_accounts (id BIGINT PRIMARY KEY, role VARCHAR(20), is_active BOOL);
                 CREATE TABLE biometric_devices (id BIGINT PRIMARY KEY, device_id VARCHAR(32), classroom_id BIGINT, is_active BOOL, paired_at DATETIME(6));
                 CREATE TABLE classrooms (id BIGINT, is_active BOOL);
-                CREATE TABLE attendance_logs (id BIGINT, classroom_id BIGINT, status VARCHAR(24), time_out_utc DATETIME NULL, class_schedule_id BIGINT);
+                CREATE TABLE attendance_logs (id BIGINT, classroom_id BIGINT, status VARCHAR(24), time_out_utc DATETIME NULL, class_schedule_id BIGINT, class_extension_minutes INT NOT NULL DEFAULT 0);
                 CREATE TABLE class_schedules (id BIGINT, classroom_id BIGINT, schedule_date DATE, start_time TIME, end_time TIME);
                 INSERT INTO classrooms VALUES (1, 1), (2, 1);
                 INSERT INTO user_accounts VALUES (1, 'Admin', 1), (2, 'Teacher', 1), (3, 'Admin', 0);
@@ -111,7 +115,7 @@ public sealed class BuzzerSettingsTests
             var end = now.AddMinutes(15);
             await using (var insert = new MySqlCommand("""
                 INSERT INTO class_schedules VALUES (1, 1, @date, @start, @end);
-                INSERT INTO attendance_logs VALUES (1, 1, 'Active', NULL, 1);
+                INSERT INTO attendance_logs VALUES (1, 1, 'Active', NULL, 1, 0);
                 """, connection))
             {
                 insert.Parameters.AddWithValue("@date", now.Date);
@@ -121,8 +125,14 @@ public sealed class BuzzerSettingsTests
             }
             Assert.NotNull((await store.GetReminderAsync("1000000001", now, default)).ReminderId);
             Assert.Null((await store.GetReminderAsync("1000000002", now, default)).ReminderId);
-            Assert.Null((await store.GetReminderAsync("1000000001", end, default)).ReminderId);
-            Assert.Null((await store.GetReminderAsync("1000000001", now.AddSeconds(20), default)).ReminderId);
+            Assert.Equal($"1-{end:yyyyMMddHHmmss}", (await store.GetReminderAsync("1000000001", end, default)).ReminderId);
+            Assert.Equal($"1-{end:yyyyMMddHHmmss}", (await store.GetReminderAsync("1000000001", end.AddSeconds(19), default)).ReminderId);
+            Assert.Null((await store.GetReminderAsync("1000000001", end.AddSeconds(20), default)).ReminderId);
+            await new MySqlCommand("UPDATE attendance_logs SET class_extension_minutes = 30", connection).ExecuteNonQueryAsync();
+            var extendedEnd = end.AddMinutes(30);
+            Assert.Equal($"1-{extendedEnd:yyyyMMddHHmmss}", (await store.GetReminderAsync("1000000001", extendedEnd, default)).ReminderId);
+            Assert.Null((await store.GetReminderAsync("1000000001", extendedEnd.AddSeconds(20), default)).ReminderId);
+            await new MySqlCommand("UPDATE attendance_logs SET class_extension_minutes = 0", connection).ExecuteNonQueryAsync();
             await new MySqlCommand("UPDATE attendance_logs SET status = 'Completed'", connection).ExecuteNonQueryAsync();
             Assert.Null((await store.GetReminderAsync("1000000001", now, default)).ReminderId);
             await new MySqlCommand("UPDATE attendance_logs SET status = 'Active'; UPDATE class_schedules SET classroom_id = 2", connection).ExecuteNonQueryAsync();

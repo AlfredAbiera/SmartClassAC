@@ -51,5 +51,34 @@ public sealed class ScheduleReportTests
         Assert.Contains("No schedules match the selected filters.", ScheduleReport.Printable(report));
         using var workbook = new XLWorkbook(new MemoryStream(ScheduleReport.Workbook(report)));
         Assert.Equal("Total schedules: 0", workbook.Worksheet("Schedules").Cell(4, 1).GetString());
+        Assert.Contains("No schedules match", workbook.Worksheet("Schedules").Cell(7, 1).GetString());
+    }
+
+    [Fact]
+    public void ExportsWrapLongContentAndSetLandscapePrintLayout()
+    {
+        var date = new DateOnly(2025, 1, 2);
+        var longSubject = new string('W', 160);
+        var schedule = new ScheduleDirectoryEntry(
+            1, 2, "Teacher", 2, "Teacher", 3, "Room", 4, "Semester",
+            "Regular", longSubject, date, new TimeOnly(8, 0), new TimeOnly(9, 30));
+        var report = new ScheduleReportData(new(date, date, null), "All teachers", [schedule]);
+        var html = ScheduleReport.Printable(report);
+        Assert.Contains("@page{size:A4 landscape", html);
+        Assert.Contains("overflow-wrap:anywhere", html);
+        Assert.Contains("thead{display:table-header-group}", html);
+        using var workbook = new XLWorkbook(new MemoryStream(ScheduleReport.Workbook(report)));
+        var sheet = workbook.Worksheet("Schedules");
+        Assert.Equal(longSubject, sheet.Cell(7, 5).GetString());
+        Assert.True(sheet.Cell(7, 5).Style.Alignment.WrapText);
+        Assert.True(sheet.Row(7).Height > sheet.Row(6).Height);
+        Assert.True(sheet.Column(5).Width < 40);
+        Assert.True(sheet.Cell(3, 1).IsMerged());
+        Assert.Equal(XLPageOrientation.Landscape, sheet.PageSetup.PageOrientation);
+        Assert.Equal(1, sheet.PageSetup.PagesWide);
+        Assert.Equal(0, sheet.PageSetup.PagesTall);
+        Assert.Single(sheet.PageSetup.PrintAreas);
+        Assert.Equal(6, sheet.PageSetup.FirstRowToRepeatAtTop);
+        Assert.Equal(6, sheet.PageSetup.LastRowToRepeatAtTop);
     }
 }

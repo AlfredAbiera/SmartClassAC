@@ -17,7 +17,7 @@ flowchart LR
     Portal --> DB[(MariaDB)]
     Portal --> Modem[Server GSM modem]
     Modem --> Phone[Mobile phone]
-    Portal --> SMTP[SMTP password recovery]
+    Portal --> Modem[SMS password recovery]
     Scanner --> Sensor[Fingerprint sensor]
     Scanner --> Buzzer[Buzzer]
     Scanner -->|Optional IR| AC[Physical AC]
@@ -32,12 +32,12 @@ flowchart TD
     Config --> Init[Initialize database and run migrations]
     Init -->|Success| First{First access required?}
     Init -->|Repeated failure| Degraded[Log error; portal may run degraded]
-    First -->|Yes| Setup[Administrator configures recovery email]
+    First -->|Yes| Setup[Administrator configures recovery mobile]
     First -->|No| Login[Sign in]
     Setup --> Login
     Login -->|Valid administrator credentials| Admin[Administrator dashboard]
     Login -->|Invalid| Denied[Reject; apply login rate limits]
-    Login -->|Forgot password| Reset[Email one-use expiring reset token]
+    Login -->|Forgot password| Reset[SMS one-use expiring reset link]
     Reset --> Login
 ```
 
@@ -168,6 +168,9 @@ flowchart TD
     OTP -->|Verified| Session[Short-lived Faculty session]
     Session --> Schedules[View today's schedules]
     Session --> Target[View or change permitted room target]
+    Session --> Extend[Request one +30-minute class extension]
+    Extend --> Check[Reject if teacher or room schedule overlaps extra time]
+    Check -->|Accepted| Buzzer[Extend buzzer and missing-time-out timing]
     Target --> Exit[Exit menu so scanning-screen IR polling can resume]
     Reminder[Server checks active class and reminder window] --> Poll[Scanner polls reminder or queued test]
     Poll --> Tone[Play five-second melody when claimed]

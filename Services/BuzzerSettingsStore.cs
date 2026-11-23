@@ -102,7 +102,13 @@ public sealed class BuzzerSettingsStore(IConfiguration configuration)
         if (!settings.Enabled || settings.LeadMinutes is < 1 or > 180 || settings.RepeatMinutes is < 1 or > 180)
             return null;
         var first = end.AddMinutes(-settings.LeadMinutes);
-        if (now < first || now >= end) return null;
+        if (now < first) return null;
+        if (now >= end)
+        {
+            return now < end.AddSeconds(20)
+                ? attendanceId.ToString(CultureInfo.InvariantCulture) + "-" + end.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture)
+                : null;
+        }
         var slot = (long)((now - first).TotalSeconds / (settings.RepeatMinutes * 60));
         var due = first.AddMinutes(slot * settings.RepeatMinutes);
         if ((now - due).TotalSeconds >= 20) return null;
@@ -127,13 +133,17 @@ public sealed class BuzzerSettingsStore(IConfiguration configuration)
         if (!settings.Enabled) return new(null);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT a.id, s.schedule_date, s.end_time
+            SELECT a.id, s.schedule_date,
+                   ADDTIME(s.end_time, SEC_TO_TIME(a.class_extension_minutes * 60))
             FROM biometric_devices d
             JOIN classrooms c ON c.id = d.classroom_id AND c.is_active = TRUE
             JOIN attendance_logs a ON a.classroom_id = c.id AND a.status = 'Active' AND a.time_out_utc IS NULL
             JOIN class_schedules s ON s.id = a.class_schedule_id AND s.classroom_id = c.id
             WHERE d.device_id = @device AND d.is_active = TRUE AND d.paired_at IS NOT NULL AND s.schedule_date = @date
-              AND @time >= s.start_time AND @time < s.end_time
+              AND @time >= s.start_time
+              AND @time < ADDTIME(
+                  ADDTIME(s.end_time, SEC_TO_TIME(a.class_extension_minutes * 60)),
+                  SEC_TO_TIME(20))
             ORDER BY s.end_time, a.id
             LIMIT 1;
             """;

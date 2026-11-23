@@ -12,7 +12,7 @@ enum class State : uint8_t {
   Uncertain = 1, Confirmed = 2, ReplacementPrepared = 3, ReplacementFenced = 4,
   RecoveryPrepared = 5, RecoveryFenced = 6
 };
-enum class Kind : uint8_t { NewEnrollment = 0, Replacement = 1, ReplacementAttempt = 2 };
+enum class Kind : uint8_t { NewEnrollment = 0, Replacement = 1, ReplacementAttempt = 2, Deletion = 3 };
 enum class ReadStatus : uint8_t { Empty, Valid, Error };
 enum class WriteResult : uint8_t { Confirmed, JournalError, AlreadyPending, SensorUncertain };
 
@@ -62,6 +62,9 @@ inline bool valid(const Record& record) {
        (record.kind == Kind::Replacement && !hasRecovery &&
         (record.state == State::Uncertain || record.state == State::Confirmed ||
          record.state == State::ReplacementPrepared || record.state == State::ReplacementFenced)) ||
+       (record.kind == Kind::Deletion && !hasRecovery &&
+        (record.state == State::Uncertain || record.state == State::Confirmed) &&
+        memcmp(record.preparation, record.operation, IdSize) == 0) ||
        (record.kind == Kind::ReplacementAttempt &&
         (record.state == State::Uncertain || record.state == State::RecoveryPrepared ||
          record.state == State::RecoveryFenced ||
@@ -70,7 +73,8 @@ inline bool valid(const Record& record) {
 }
 
 inline void encode(const Record& record, uint8_t* bytes) {
-  bytes[0] = 'S'; bytes[1] = 'C'; bytes[2] = record.kind == Kind::Replacement ? 2 : 1;
+  bytes[0] = 'S'; bytes[1] = 'C';
+  bytes[2] = record.kind == Kind::Replacement ? 2 : record.kind == Kind::Deletion ? 4 : 1;
   bytes[3] = static_cast<uint8_t>(record.state);
   bytes[4] = static_cast<uint8_t>(record.slot >> 8);
   bytes[5] = static_cast<uint8_t>(record.slot);
@@ -82,12 +86,12 @@ inline void encode(const Record& record, uint8_t* bytes) {
 }
 
 inline bool decode(const uint8_t* bytes, Record& record) {
-  if (bytes[0] != 'S' || bytes[1] != 'C' || (bytes[2] != 1 && bytes[2] != 2) || bytes[42] != 0) return false;
+  if (bytes[0] != 'S' || bytes[1] != 'C' || (bytes[2] != 1 && bytes[2] != 2 && bytes[2] != 4) || bytes[42] != 0) return false;
   uint32_t stored = 0;
   for (int i = 0; i < 4; ++i) stored = (stored << 8) | bytes[38 + i];
   if (stored != checksum(bytes, 38)) return false;
   record.state = static_cast<State>(bytes[3]);
-  record.kind = bytes[2] == 1 ? Kind::NewEnrollment : Kind::Replacement;
+  record.kind = bytes[2] == 1 ? Kind::NewEnrollment : bytes[2] == 2 ? Kind::Replacement : Kind::Deletion;
   memset(record.recoveryOperation, 0, IdSize);
   record.slot = (static_cast<uint16_t>(bytes[4]) << 8) | bytes[5];
   memcpy(record.preparation, bytes + 6, IdSize);

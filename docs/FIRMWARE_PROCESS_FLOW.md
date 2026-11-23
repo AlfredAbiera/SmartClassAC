@@ -114,6 +114,15 @@ for database prechecks, physical USB trust, failure recovery and new pairing.
    re-entry can reopen it. The server, not the sensor, determines attendance
    and schedule rules.
 
+If fingerprint matching fails, the teacher calls the admin to request a
+class-specific SMS code. From the ready screen, press `#`, select **Attendance
+OTP**, enter the six digits, and press `#`. The separate code for each time-in
+or time-out expires after five minutes and is restricted to that class and
+scanner. A successful response saves attendance and triggers a status refresh;
+if it says **Sync pending**, the regular status poll will retry. The device
+still requires the fingerprint sensor to pass its boot handshake. The updated
+sketch has not been built or tested on hardware.
+
 Sensor models do not synchronize automatically. Legacy mappings can be global
 and are unsafe to assume portable across scanners. New completion bindings
 restrict a mapping to its scanner, but do not replicate a model.
@@ -126,17 +135,22 @@ restrict a mapping to its scanner, but do not replicate a model.
 2. Enter the six-digit OTP. The scanner verifies the authenticated server
    response before granting menu access. The server limits requests and guesses;
    OTPs expire after five minutes and are single-use.
-3. The five-minute scanner-bound session provides today's schedule and room AC
-   information. On schedule, `*` and `#` navigate, `0` toggles detail, and
-   holding `0` returns. In AC info, `*` lowers and `#` raises the target by one
-   degree, `0` refreshes, and holding `0` returns.
+3. The five-minute scanner-bound session provides today's schedule, room AC
+   information and a one-time 30-minute class extension. On schedule, `*` and
+   `#` navigate, `0` toggles detail, and holding `0` returns. In AC info, `*`
+   lowers and `#` raises the target by one degree, `0` refreshes, and holding
+   `0` returns. **Extend +30 min** is accepted only for an active scheduled class
+   and is rejected if the teacher or classroom has another schedule overlapping
+   the extra 30 minutes.
 4. Saving a target is not a transmission or AC confirmation. Exit the Faculty
-   menu to return to scanning, where IR polling can resume.
+   menu to return to scanning, where IR polling can resume. The extension
+   changes only the active attendance end time; buzzer reminders and automatic
+   missing-time-out reconciliation use that extended end time.
 
-These features require the server OTP, menu and target flags as applicable,
-matching per-device key provisioning, and correct HTTPS or trusted Development
-configuration. If the result of a target request is uncertain, reopen AC info
-to refresh rather than blindly retrying.
+These features require the server OTP and menu flags, matching per-device key
+provisioning, and correct HTTPS or trusted Development configuration. AC target
+changes additionally require the target flag. If the result of a target request
+is uncertain, reopen AC info to refresh rather than blindly retrying.
 
 ## Relative IR synchronization
 
@@ -186,13 +200,21 @@ missed; the claim is not proof of audible output.
 ## Experimental fingerprint writes
 
 `ENROLLMENT_WRITES_ENABLED` defaults to `1` in source 1.6.61; inventory
-reporting is enabled by the same flag. `REPLACEMENT_WRITES_ENABLED` remains `0`.
+reporting is enabled by the same flag. `REPLACEMENT_WRITES_ENABLED` defaults to
+`1` in the current source, subject to independent portal gates.
 The server independently gates inventory, operation, claim, finish, recovery,
 and replacement endpoints. A preparation or consent does not alone authorize a
 sensor write. In an explicitly enabled deployment, the scanner checks the
 sensor slot and verified authorization, persists an uncertainty journal before
 the write, and requires a checked acknowledgment and authenticated completion
 before clearing it. Same-slot replacement has additional guards and flags.
+
+Individual deletion is separately opt-in with `FINGERPRINT_DELETION_ENABLED=1`
+and `EnrollmentSecurity:EnableFingerprintDeletion`. After admin confirmation,
+the scanner journals uncertainty before claiming, sends one checked delete
+command and checks the slot index before reporting completion. An uncertain
+journal is never automatically retried. The updated source has not been
+validated on physical hardware.
 
 Uncertain writes and lost responses can leave the journal, server guard and
 slot block held. Do not clear them manually or assume staged recovery endpoints

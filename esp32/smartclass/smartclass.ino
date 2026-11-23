@@ -33,6 +33,7 @@
 #include "replacement_write_claim.h"
 #include "replacement_write.h"
 #include "replacement_write_fence.h"
+#include "fingerprint_deletion.h"
 #include "scan_display_name.h"
 #include "scan_result_notice.h"
 #include "faculty_otp.h"
@@ -58,12 +59,17 @@ struct EnrollmentSensorAdapter;
 #ifndef REPLACEMENT_WRITES_ENABLED
 #define REPLACEMENT_WRITES_ENABLED 1
 #endif
+#ifndef FINGERPRINT_DELETION_ENABLED
+#define FINGERPRINT_DELETION_ENABLED 0
+#endif
 
 // ---------------------------------------------------------------------------
 // Firmware version — bump on EVERY sketch change (semver: MAJOR.MINOR.PATCH).
 // Also print/show via Serial boot banner, LCD splash, and STATUS command.
 // Changelog:
 //
+//   1.6.66 2026-11-23  Add opt-in guarded individual fingerprint deletion.
+//   1.6.65 2026-11-08  Add admin-approved attendance SMS code entry.
 //   1.6.64 2026-11-08  Add USB-only orphan retirement with verified sensor clear.
 //   1.6.63 2026-11-08  Add confirmed, guarded local-only unpairing.
 //   1.6.62 2026-11-08  Offer guarded pairing after a saved device ID is rejected.
@@ -83,7 +89,7 @@ struct EnrollmentSensorAdapter;
 //   1.6.48 2026-11-08  Authenticate Faculty login with server SMS OTP.
 //   1.6.47 2026-11-08  Remove boot SMS sending.
 // ---------------------------------------------------------------------------
-const char* FIRMWARE_VERSION = "1.6.64";
+const char* FIRMWARE_VERSION = "1.6.66";
 
 // USB Serial Monitor MUST match this baud (115200). Boxes/diamonds = wrong baud
 // or fingerprint TX wired to GPIO1/3 (USB UART) instead of FINGERPRINT_RX/TX.
@@ -187,6 +193,7 @@ enum DisplayState {
   STATE_MENU_ADMIN_PIN,
   STATE_MENU_FACULTY_ID,
   STATE_MENU_FACULTY_PIN,
+  STATE_MENU_ATTENDANCE_OTP,
   STATE_MENU_ADMIN,
   STATE_MENU_FACULTY,
   STATE_MENU_FACULTY_SCHEDULE,
@@ -387,8 +394,9 @@ char facultyIdBuf[MENU_ENTRY_MAX + 1];
 char facultySession[65] = "";
 FacultyMenu::Schedule facultySchedule{};
 FacultyMenu::AcInfo facultyAcInfo{};
-enum class FacultyMenuRequestKind : uint8_t { Login, Schedule, Ac, Target };
+enum class FacultyMenuRequestKind : uint8_t { Login, Schedule, Ac, Target, Extend };
 FacultyMenu::TargetResult facultyTargetResult = FacultyMenu::TargetResult::Denied;
+FacultyMenu::ExtensionResult facultyExtensionResult = FacultyMenu::ExtensionResult::Denied;
 bool facultyScheduleDetails = false;
 uint8_t menuIndex = 0;
 unsigned long menuActivityAt = 0;
@@ -442,13 +450,14 @@ void menuBackspace();
 void submitAdminPin();
 void submitFacultyId();
 void submitFacultyPin();
-bool requestFacultyOtp(bool issuing, const char* value, FacultyOtp::Result& result);
+bool requestFacultyOtp(bool issuing, const char* value, FacultyOtp::Result& result, bool attendance = false);
 bool requestFacultyMenu(FacultyMenuRequestKind kind, const char* value, unsigned index, FacultyMenu::Result& result);
 void loadFacultySchedule(unsigned index);
 void renderFacultySchedule();
 void loadFacultyAc();
 void renderFacultyAc();
 void adjustFacultyAc(int delta);
+void extendFacultyClass();
 bool postFacultyOtpJson(const char* path, const String& body, String& response, int& code, uint16_t timeoutMs);
 void runBackgroundPoll(void*);
 void scheduleBackgroundPoll(BackgroundPoll::Kind kind, bool restore = false);
@@ -1019,6 +1028,60 @@ bool discoverReplacementOperation(EnrollmentJournal::Record& operation) {
   return ReplacementOperation::fetch(adapter, operation);
 }
 
+#if FINGERPRINT_DELETION_ENABLED
+struct FingerprintDeletionAdapter {
+  uint8_t key[EnrollmentAuth::KeySize] = {};
+  ~FingerprintDeletionAdapter() { mbedtls_platform_zeroize(key, sizeof(key)); }
+
+  bool getChallenge(const char* action, uint8_t* challenge) {
+    if (!isDevicePaired() || !loadEnrollKey(key, sizeof(key))) return false;
+    String response;
+    int httpCode = -1;
+    String route = String("/api/device/fingerprint/delete/") + action + "/challenge";
+    String payload = String("{\"deviceId\":\"") + deviceId + "\"}";
+    if (!httpPostJson(route, payload, response, httpCode, false) || httpCode != 200) return false;
+    String text = extractJsonString(response, "challenge");
+    return EnrollmentRecovery::decodeHex(text.c_str(), text.length(), challenge, EnrollmentAuth::ChallengeSize);
+  }
+
+  bool makeNonce(char* nonce) {
+    return EnrollmentRecovery::makeClientNonce(fillHardwareRandom, nonce, EnrollmentRecovery::NonceHexLength + 1);
+  }
+
+  bool sign(const char* action, const uint8_t* challenge, const uint8_t* body, size_t length, uint8_t* tag) {
+    String purpose = String("delete_") + action;
+    return EnrollmentAuth::computeTag(key, sizeof(key), false, deviceId, purpose.c_str(),
+        challenge, EnrollmentAuth::ChallengeSize, body, length, tag);
+  }
+
+  bool exchange(const char* action, const char* id, uint16_t slot, const char* nonce,
+                const uint8_t* challenge, const uint8_t* tag, uint8_t* body, size_t bodySize,
+                size_t& bodyLength, uint8_t* responseTag) {
+    char challengeText[EnrollmentAuth::ChallengeSize * 2 + 1], tagText[EnrollmentAuth::TagSize * 2 + 1];
+    EnrollmentAuth::toHex(challenge, EnrollmentAuth::ChallengeSize, challengeText);
+    EnrollmentAuth::toHex(tag, EnrollmentAuth::TagSize, tagText);
+    String payload = String("{\"deviceId\":\"") + deviceId + "\",\"id\":\"" + (id ? id : "") +
+        "\",\"slot\":" + String(slot) + ",\"challenge\":\"" + challengeText +
+        "\",\"clientNonce\":\"" + nonce + "\",\"tag\":\"" + tagText + "\"}";
+    String response;
+    int httpCode = -1;
+    String route = String("/api/device/fingerprint/delete/") + action;
+    if (!httpPostJson(route, payload, response, httpCode, false) || httpCode != 200) return false;
+    String escapedBody = extractJsonString(response, "body");
+    String tagHex = extractJsonString(response, "tag");
+    return EnrollmentRecovery::decodeJsonBody(escapedBody.c_str(), escapedBody.length(),
+               reinterpret_cast<char*>(body), bodySize, bodyLength) &&
+           EnrollmentRecovery::decodeHex(tagHex.c_str(), tagHex.length(), responseTag, EnrollmentAuth::TagSize);
+  }
+
+  bool verify(const char* action, const uint8_t* challenge, const uint8_t* body, size_t length, const uint8_t* tag) {
+    String purpose = String("delete_") + action;
+    return EnrollmentAuth::verifyTag(key, sizeof(key), true, deviceId, purpose.c_str(),
+        challenge, EnrollmentAuth::ChallengeSize, body, length, tag, EnrollmentAuth::TagSize);
+  }
+};
+#endif
+
 struct ReplacementAttemptAdapter : ReplacementIntentAdapter {
   const char* challengePath;
   const char* path;
@@ -1368,6 +1431,41 @@ EnrollmentNotice::Message runReplacementOnce() {
 }
 #endif
 
+#if FINGERPRINT_DELETION_ENABLED
+EnrollmentNotice::Message runFingerprintDeletionOnce() {
+  EnrollmentJournalStorage storage;
+  FingerprintDeletionAdapter adapter;
+  EnrollmentJournal::Record operation{};
+  if (!FingerprintDeletion::discover(adapter, operation)) return {"Delete failed", "Check portal"};
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Delete slot ");
+  lcd.print(operation.slot);
+  lcd.setCursor(0, 1);
+  lcd.print("# Yes  * Cancel");
+  unsigned long started = millis();
+  bool confirmed = false;
+  while (millis() - started < 30000UL) {
+    char key = keypad.getKey();
+    if (key == '#') { confirmed = true; break; }
+    if (key == '*') break;
+    delay(10);
+  }
+  if (!confirmed) return {"Delete canceled", "No delete done"};
+  EnrollmentSerialTransport transport;
+  EnrollmentClock clock;
+  EnrollmentSensor::CheckedSensor<EnrollmentSerialTransport, EnrollmentClock> sensor(transport, clock);
+  switch (FingerprintDeletion::runOnce(storage, sensor, adapter, operation)) {
+    case FingerprintDeletion::Result::Completed: return {"Delete complete", "Slot cleared"};
+    case FingerprintDeletion::Result::Refused: return {"Slot not ready", "Contact admin"};
+    case FingerprintDeletion::Result::Held: return {"Delete held", "Contact admin"};
+    case FingerprintDeletion::Result::Uncertain: return {"Delete uncertain", "Contact admin"};
+    case FingerprintDeletion::Result::CompletionPending: return {"Finish pending", "Contact admin"};
+  }
+  return {"Delete held", "Contact admin"};
+}
+#endif
+
 EnrollmentNotice::Message runEnrollmentFromServer() {
   EnrollmentJournalStorage storage;
   EnrollmentJournal::Record pending{};
@@ -1377,6 +1475,18 @@ EnrollmentNotice::Message runEnrollmentFromServer() {
     return {"Journal error", "Contact admin"};
   }
   if (journalStatus == EnrollmentJournal::ReadStatus::Valid) {
+    if (pending.kind == EnrollmentJournal::Kind::Deletion) {
+#if FINGERPRINT_DELETION_ENABLED
+      if (pending.state == EnrollmentJournal::State::Confirmed) {
+        FingerprintDeletionAdapter adapter;
+        if (FingerprintDeletion::finish(storage, adapter) == FingerprintDeletion::Result::Completed)
+          return {"Delete complete", "Slot cleared"};
+        return {"Finish pending", "Contact admin"};
+      }
+#endif
+      Serial.println("Fingerprint deletion uncertain; keep the slot blocked and investigate.");
+      return {"Delete held", "Contact admin"};
+    }
     if (pending.kind == EnrollmentJournal::Kind::ReplacementAttempt) {
       if (pending.state == EnrollmentJournal::State::RecoveryFenced) {
         Serial.println("Recovery attempt fenced locally; recovery remains blocked.");
@@ -1948,6 +2058,7 @@ bool isKeypadMenuState(DisplayState state) {
          state == STATE_MENU_ADMIN_PIN ||
          state == STATE_MENU_FACULTY_ID ||
          state == STATE_MENU_FACULTY_PIN ||
+         state == STATE_MENU_ATTENDANCE_OTP ||
          state == STATE_MENU_ADMIN ||
          state == STATE_MENU_FACULTY ||
          state == STATE_MENU_FACULTY_SCHEDULE ||
@@ -2001,17 +2112,14 @@ bool isPickerMenu(DisplayState state) {
 
 uint8_t menuItemCount(DisplayState state) {
   if (state == STATE_MENU_ROLE) {
-    return 2;
+    return 3;
   }
   if (state == STATE_MENU_ADMIN) {
-#if ENROLLMENT_WRITES_ENABLED && REPLACEMENT_WRITES_ENABLED
-    return 7;
-#else
-    return 6;
-#endif
+    return 6 + (ENROLLMENT_WRITES_ENABLED && REPLACEMENT_WRITES_ENABLED ? 1 : 0) +
+        (ENROLLMENT_WRITES_ENABLED && FINGERPRINT_DELETION_ENABLED ? 1 : 0);
   }
   if (state == STATE_MENU_FACULTY) {
-    return 2;
+    return 3;
   }
   if (state == STATE_MENU_ROOMS) {
     return roomOptionCount + (roomOptionHasCurrent ? 1 : 0);
@@ -2021,7 +2129,7 @@ uint8_t menuItemCount(DisplayState state) {
 
 const char* menuItemLabel(DisplayState state, uint8_t index) {
   if (state == STATE_MENU_ROLE) {
-    return index == 0 ? "Admin" : "Faculty";
+    return index == 0 ? "Admin" : index == 1 ? "Faculty" : "Attendance OTP";
   }
   if (state == STATE_MENU_ADMIN) {
     if (index == 0) return "Assign room";
@@ -2030,17 +2138,19 @@ const char* menuItemLabel(DisplayState state, uint8_t index) {
     if (index == 3) return "Room status";
 #if ENROLLMENT_WRITES_ENABLED && REPLACEMENT_WRITES_ENABLED
     if (index == 5) return "Replace finger";
-    if (index == 6) return "Unpair device";
-#else
-    if (index == 5) return "Unpair device";
 #endif
+#if ENROLLMENT_WRITES_ENABLED && FINGERPRINT_DELETION_ENABLED
+    if (index == 5 + (REPLACEMENT_WRITES_ENABLED ? 1 : 0)) return "Delete finger";
+#endif
+    if (index == menuItemCount(state) - 1) return "Unpair device";
     return "Pair device";
   }
   if (state == STATE_MENU_ROOMS) {
     return index < roomOptionCount ? roomOptionLabels[index] : "Unassign";
   }
   if (index == 0) return "My schedule";
-  return "AC info";
+  if (index == 1) return "AC info";
+  return "Extend +30 min";
 }
 
 void renderPickerTitle() {
@@ -2087,6 +2197,10 @@ void renderMenu() {
       break;
     case STATE_MENU_FACULTY_PIN:
       printLcdRow(0, "SMS code:");
+      renderEntryLine();
+      break;
+    case STATE_MENU_ATTENDANCE_OTP:
+      printLcdRow(0, "Attendance code:");
       renderEntryLine();
       break;
     case STATE_MENU_FACULTY_SCHEDULE:
@@ -2146,6 +2260,23 @@ void startReplacement() {
   EnrollmentNotice::Message notice = status == EnrollmentJournal::ReadStatus::Empty
       ? runReplacementOnce() : runEnrollmentFromServer();
   waitForEnrollmentFingerRemoval = true;
+  showMenuNotice(notice.line0, notice.line1, STATE_SCANNING, true, true, ENROLLMENT_NOTICE_MS);
+}
+#endif
+
+#if ENROLLMENT_WRITES_ENABLED && FINGERPRINT_DELETION_ENABLED
+void startFingerprintDeletion() {
+  clearKeypadEntry();
+  memset(adminPinSession, 0, sizeof(adminPinSession));
+  currentDisplayState = STATE_ENROLL;
+  lcd.clear();
+  printLcdRow(0, "Checking delete");
+  printLcdRow(1, "Please wait");
+  EnrollmentJournalStorage storage;
+  EnrollmentJournal::Record pending{};
+  auto status = storage.read(pending);
+  EnrollmentNotice::Message notice = status == EnrollmentJournal::ReadStatus::Empty
+      ? runFingerprintDeletionOnce() : runEnrollmentFromServer();
   showMenuNotice(notice.line0, notice.line1, STATE_SCANNING, true, true, ENROLLMENT_NOTICE_MS);
 }
 #endif
@@ -2336,9 +2467,11 @@ void selectHighlightedItem() {
     clearKeypadEntry();
     if (menuIndex == 0) {
       currentDisplayState = STATE_MENU_ADMIN_PIN;
-    } else {
+    } else if (menuIndex == 1) {
       memset(facultyIdBuf, 0, sizeof(facultyIdBuf));
       currentDisplayState = STATE_MENU_FACULTY_ID;
+    } else {
+      currentDisplayState = STATE_MENU_ATTENDANCE_OTP;
     }
     renderMenu();
     return;
@@ -2363,6 +2496,10 @@ void selectHighlightedItem() {
     } else if (menuIndex == 5) {
       startReplacement();
 #endif
+#if ENROLLMENT_WRITES_ENABLED && FINGERPRINT_DELETION_ENABLED
+    } else if (menuIndex == 5 + (REPLACEMENT_WRITES_ENABLED ? 1 : 0)) {
+      startFingerprintDeletion();
+#endif
     } else {
       if (!isDevicePaired()) {
         showMenuNotice("Not paired", "No ID to clear", STATE_MENU_ADMIN, false, false);
@@ -2377,8 +2514,10 @@ void selectHighlightedItem() {
 
   if (menuIndex == 0) {
     loadFacultySchedule(0);
-  } else {
+  } else if (menuIndex == 1) {
     loadFacultyAc();
+  } else {
+    extendFacultyClass();
   }
 }
 
@@ -2647,11 +2786,12 @@ bool postFacultyOtpJson(const char* path, const String& body, String& response, 
   return code > 0 && response.length() <= 512;
 }
 
-bool requestFacultyOtp(bool issuing, const char* value, FacultyOtp::Result& result) {
+bool requestFacultyOtp(bool issuing, const char* value, FacultyOtp::Result& result, bool attendance) {
   if (!isDevicePaired() || !FacultyOtp::validValue(value, issuing)) return false;
-  const char* operation = issuing ? "faculty_otp_request" : "faculty_otp_verify";
-  const char* challengePath = issuing ? "/api/device/faculty/otp/request/challenge" : "/api/device/faculty/otp/verify/challenge";
-  const char* requestPath = issuing ? "/api/device/faculty/otp/request" : "/api/device/faculty/otp/verify";
+  if (attendance && issuing) return false;
+  const char* operation = attendance ? "attendance_otp_verify" : issuing ? "faculty_otp_request" : "faculty_otp_verify";
+  const char* challengePath = attendance ? "/api/device/attendance/otp/challenge" : issuing ? "/api/device/faculty/otp/request/challenge" : "/api/device/faculty/otp/verify/challenge";
+  const char* requestPath = attendance ? "/api/device/attendance/otp/verify" : issuing ? "/api/device/faculty/otp/request" : "/api/device/faculty/otp/verify";
   String response;
   int code = -1;
   String challengePayload = String("{\"deviceId\":\"") + deviceId + "\"}";
@@ -2823,11 +2963,13 @@ bool requestFacultyMenu(FacultyMenuRequestKind kind, const char* value, unsigned
   bool login = kind == FacultyMenuRequestKind::Login;
   bool ac = kind == FacultyMenuRequestKind::Ac;
   bool target = kind == FacultyMenuRequestKind::Target;
+  bool extension = kind == FacultyMenuRequestKind::Extend;
   if (!isDevicePaired() || (login ? !FacultyOtp::validValue(value, false)
-      : !FacultyMenu::hexToken(value, strlen(value))) || (target ? index > 3030 || facultyAcInfo.room == 0 : index > 999)) return false;
-  const char* operation = login ? "faculty_menu_login" : ac ? "faculty_menu_ac_v2" : target ? "faculty_menu_ac_target" : "faculty_menu_schedule";
-  const char* challengePath = login ? "/api/device/faculty/menu/login/challenge" : ac ? "/api/device/faculty/menu/ac-v2/challenge" : target ? "/api/device/faculty/menu/ac-target/challenge" : "/api/device/faculty/menu/schedule/challenge";
-  const char* requestPath = login ? "/api/device/faculty/menu/login" : ac ? "/api/device/faculty/menu/ac-v2" : target ? "/api/device/faculty/menu/ac-target" : "/api/device/faculty/menu/schedule";
+      : !FacultyMenu::hexToken(value, strlen(value))) ||
+      (target ? index > 3030 || facultyAcInfo.room == 0 : index > 999 || ((login || ac || extension) && index != 0))) return false;
+  const char* operation = login ? "faculty_menu_login" : ac ? "faculty_menu_ac_v2" : target ? "faculty_menu_ac_target" : extension ? "faculty_menu_extend" : "faculty_menu_schedule";
+  const char* challengePath = login ? "/api/device/faculty/menu/login/challenge" : ac ? "/api/device/faculty/menu/ac-v2/challenge" : target ? "/api/device/faculty/menu/ac-target/challenge" : extension ? "/api/device/faculty/menu/extend/challenge" : "/api/device/faculty/menu/schedule/challenge";
+  const char* requestPath = login ? "/api/device/faculty/menu/login" : ac ? "/api/device/faculty/menu/ac-v2" : target ? "/api/device/faculty/menu/ac-target" : extension ? "/api/device/faculty/menu/extend" : "/api/device/faculty/menu/schedule";
   String response;
   int code = -1;
   String challengePayload = String("{\"deviceId\":\"") + deviceId + "\"}";
@@ -2876,6 +3018,7 @@ bool requestFacultyMenu(FacultyMenuRequestKind kind, const char* value, unsigned
       if (ok) {
         const uint8_t* body = reinterpret_cast<const uint8_t*>(responseBody);
         ok = target ? FacultyMenu::parseTarget(digestText, verify, body, responseLength, responseTag, sizeof(responseTag), facultyTargetResult)
+                : extension ? FacultyMenu::parseExtension(digestText, verify, body, responseLength, responseTag, sizeof(responseTag), facultyExtensionResult)
                 : ac ? FacultyMenu::parseAc(digestText, verify, body, responseLength, responseTag, sizeof(responseTag), result, facultyAcInfo)
                 : FacultyMenu::parse(login, index, digestText, verify, body, responseLength, responseTag, sizeof(responseTag),
                                      result, facultySession, facultySchedule);
@@ -2976,6 +3119,41 @@ void loadFacultyAc() {
   }
 }
 
+void extendFacultyClass() {
+  lcd.clear();
+  printLcdRow(0, "Checking +30 min");
+  printLcdRow(1, "Please wait");
+  FacultyMenu::Result ignored = FacultyMenu::Result::Denied;
+  bool ok = requestFacultyMenu(FacultyMenuRequestKind::Extend, facultySession, 0, ignored);
+  menuActivityAt = millis();
+  if (!ok) {
+    showMenuNotice("Request failed", "Try again later", STATE_MENU_FACULTY, false, false, 3000);
+    return;
+  }
+
+  switch (facultyExtensionResult) {
+    case FacultyMenu::ExtensionResult::Extended:
+      showMenuNotice("+30 min accepted", "Buzzer reminders on", STATE_MENU_FACULTY, false, false, 3000);
+      break;
+    case FacultyMenu::ExtensionResult::Conflict:
+      showMenuNotice("Extension denied", "Next class soon", STATE_MENU_FACULTY, false, false, 3000);
+      break;
+    case FacultyMenu::ExtensionResult::Already:
+      showMenuNotice("Already extended", "30 min max", STATE_MENU_FACULTY, false, false, 3000);
+      break;
+    case FacultyMenu::ExtensionResult::NoClass:
+      showMenuNotice("No active class", "Time in first", STATE_MENU_FACULTY, false, false, 3000);
+      break;
+    case FacultyMenu::ExtensionResult::InvalidWindow:
+      showMenuNotice("Cannot extend", "End of day", STATE_MENU_FACULTY, false, false, 3000);
+      break;
+    case FacultyMenu::ExtensionResult::Denied:
+      mbedtls_platform_zeroize(facultySession, sizeof(facultySession));
+      showMenuNotice("Session expired", "Please sign in", STATE_MENU_FACULTY_ID, true, true);
+      break;
+  }
+}
+
 void submitFacultyPin() {
   if (!FacultyOtp::validValue(entryBuf, false)) {
     showMenuNotice("Need 6 digits", "Then press #", STATE_MENU_FACULTY_PIN, false, false);
@@ -3000,6 +3178,27 @@ void submitFacultyPin() {
   menuIndex = 0;
   Serial.println("Keypad: faculty authenticated.");
   showMenuNotice("Faculty OK", "", STATE_MENU_FACULTY, false, true);
+}
+
+void submitAttendanceOtp() {
+  if (!FacultyOtp::validValue(entryBuf, false)) {
+    showMenuNotice("Need 6 digits", "Then press #", STATE_MENU_ATTENDANCE_OTP, false, false);
+    return;
+  }
+  lcd.clear();
+  printLcdRow(0, "Verifying code");
+  printLcdRow(1, "Please wait");
+  FacultyOtp::Result result = FacultyOtp::Result::Denied;
+  bool ok = requestFacultyOtp(false, entryBuf, result, true);
+  clearKeypadEntry();
+  if (!ok) {
+    showMenuNotice("Server unavailable", "Contact admin", STATE_SCANNING, true, true, 3000);
+  } else if (result != FacultyOtp::Result::Accepted) {
+    showMenuNotice("Code denied", "Contact admin", STATE_SCANNING, true, true, 3000);
+  } else {
+    bool synced = applyRoomStatusFromServer(false);
+    showMenuNotice("Attendance saved", synced ? "" : "Sync pending", STATE_SCANNING, true, true, 3000);
+  }
 }
 
 void handleMenuKey(char key) {
@@ -3075,6 +3274,12 @@ void handleMenuKey(char key) {
       } else if (key == '#') {
         submitFacultyPin();
       }
+      break;
+
+    case STATE_MENU_ATTENDANCE_OTP:
+      if (key >= '0' && key <= '9') menuAppendDigit(key);
+      else if (key == '*') menuBackspace();
+      else if (key == '#') submitAttendanceOtp();
       break;
 
     default:

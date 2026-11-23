@@ -57,8 +57,8 @@ builder.Services.Configure<DeviceApiOptions>(builder.Configuration.GetSection("D
 builder.Services.Configure<DemoDataOptions>(builder.Configuration.GetSection("DemoData"));
 builder.Services.AddSingleton<PasswordHasher>();
 builder.Services.AddSingleton<LoginAttemptLimiter>();
-builder.Services.AddSingleton<IPasswordResetEmailSender, SmtpPasswordResetEmailSender>();
-builder.Services.AddScoped<IUserAccountRepository, MariaDbUserAccountRepository>();
+builder.Services.AddScoped<MariaDbUserAccountRepository>();
+builder.Services.AddScoped<IUserAccountRepository>(services => services.GetRequiredService<MariaDbUserAccountRepository>());
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<DeviceFingerprintService>();
 builder.Services.AddScoped<GsmModemSettingsStore>();
@@ -66,6 +66,9 @@ builder.Services.AddScoped<BuzzerSettingsStore>();
 builder.Services.AddScoped<AcIrAdministration>();
 builder.Services.AddSingleton<GsmSmsTransport>();
 builder.Services.AddScoped<PortalMobileOtp>();
+builder.Services.AddScoped<ScheduleSubstitutionService>();
+builder.Services.AddScoped<AttendanceOtpService>();
+builder.Services.AddScoped<CsvImportService>();
 builder.Services.AddScoped<DemoDataSeeder>();
 builder.Services.AddScoped<DatabaseMigrationRunner>();
 // DatabaseInitializationService attempts to seed the default admin on startup.
@@ -291,7 +294,9 @@ app.MapPost("/api/device/fingerprint/enroll", async (
 });
 
 app.MapEnrollmentRecoveryRoutes(IsAuthorizedDevice);
+app.MapFingerprintDeletionRoutes(IsAuthorizedDevice);
 app.MapFacultyOtpRoutes(IsAuthorizedDevice);
+app.MapAttendanceOtpRoutes(IsAuthorizedDevice);
 app.MapFacultyDeviceMenuRoutes(IsAuthorizedDevice);
 app.MapAcIrRoutes(IsAuthorizedDevice);
 app.MapBuzzerRoutes(IsAuthorizedDevice);

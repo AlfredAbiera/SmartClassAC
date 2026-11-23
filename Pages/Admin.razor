@@ -17,7 +17,7 @@
 
 <div class="dashboard-page admin-dashboard">
     <aside class='dashboard-sidebar @(sidebarOpen ? "is-open" : string.Empty)'>
-        <a class="dashboard-brand" href="/"><span class="brand-mark"><i class="fas fa-snowflake"></i></span><span>SmartClass <strong>AC</strong></span></a>
+        <a class="dashboard-brand" href="/admin"><span class="brand-mark"><i class="fas fa-snowflake"></i></span><span>SmartClass <strong>AC</strong></span></a>
         <p class="workspace-label">ADMINISTRATOR WORKSPACE</p>
         <nav class="dashboard-nav" aria-label="Admin dashboard">
             <button class='@NavClass("overview")' @onclick='() => Navigate("overview")'><i class="fas fa-gauge-high"></i>Overview</button>
@@ -29,8 +29,8 @@
             <button class='@NavClass("attendance")' @onclick='() => Navigate("attendance")'><i class="fas fa-clipboard-check"></i>Attendance</button>
             <p class="nav-group-label">SYSTEM</p>
             <button class='@NavClass("devices")' @onclick='() => Navigate("devices")'><i class="fas fa-fingerprint"></i>Devices</button>
-            <button class='@NavClass("temperature")' @onclick='() => Navigate("temperature")'><i class="fas fa-temperature-half"></i>AC control</button>
-            <button class='@NavClass("settings")' @onclick='() => Navigate("settings")'><i class="fas fa-gear"></i>System settings</button>
+            <button class='@NavClass("temperature")' @onclick='() => Navigate("temperature")'><i class="fas fa-temperature-half"></i>Monitor</button>
+            <button class='@NavClass("settings")' @onclick='() => Navigate("settings")'><i class="fas fa-gear"></i>Settings</button>
         </nav>
         <button class="sidebar-logout" @onclick="Logout"><i class="fas fa-arrow-right-from-bracket"></i>Log out</button>
     </aside>
@@ -80,7 +80,7 @@
                                 <tr>
                                     <td><div class="table-person"><span class="table-avatar">@Initials(teacher.DisplayName)</span><div><strong>@teacher.DisplayName</strong></div></div></td>
                                     <td>@(teacher.EmployeeNumber ?? "—")</td>
-                                    <td>@(teacher.Phone ?? "—")</td>
+                                    <td>@(teacher.Phone ?? "—") @if (!teacher.PhoneVerified) { <small>Unverified</small> }</td>
                                     <td><span class='status-badge @(teacher.FingerprintTemplateCount > 0 ? "active" : "neutral")'>@teacher.FingerprintTemplateCount / 2</span></td>
                                     <td><span class='status-badge @(teacher.IsActive ? "active" : "neutral")'>@(teacher.IsActive ? "Active" : "Inactive")</span></td>
                                     <td>@ScheduleTodayFor(teacher.Id)</td>
@@ -98,7 +98,7 @@
                     </table></div>
                     <ListPager State="teacherPager" TotalCount="FilteredTeachers.Count" />
                 </article>
-                <div class="management-list-actions"><button class="primary-button" @onclick="OpenAddTeacher"><i class="fas fa-plus"></i>Add teacher</button></div>
+                <div class="management-list-actions"><button class="secondary-button" @onclick='() => OpenCsvImport("teachers")'><i class="fas fa-file-csv"></i>Import CSV</button><button class="primary-button" @onclick="OpenAddTeacher"><i class="fas fa-plus"></i>Add teacher</button></div>
             }
             else if (active == "semesters")
             {
@@ -137,7 +137,7 @@
                     </table></div>
                     <ListPager State="semesterPager" TotalCount="FilteredSemesters.Count" />
                 </article>
-                <div class="management-list-actions"><button class="primary-button" @onclick="OpenAddSemester"><i class="fas fa-plus"></i>Add semester</button></div>
+                <div class="management-list-actions"><button class="secondary-button" @onclick='() => OpenCsvImport("semesters")'><i class="fas fa-file-csv"></i>Import CSV</button><button class="primary-button" @onclick="OpenAddSemester"><i class="fas fa-plus"></i>Add semester</button></div>
                 @if (enrollSemesterId > 0)
                 {
                     var selected = semesters.FirstOrDefault(item => item.Id == enrollSemesterId);
@@ -299,14 +299,29 @@
                             @foreach (var schedule in PagedSchedules)
                             {
                                 <tr>
-                                    <td><strong>@schedule.TeacherDisplayName</strong></td>
+                                    <td><strong>@schedule.TeacherDisplayName</strong>
+                                        @if (schedule.TeacherAccountId != schedule.OriginalTeacherAccountId)
+                                        {
+                                            <small>@(schedule.SubstitutionVerified ? "Substitute" : "Unverified substitute") for @schedule.OriginalTeacherDisplayName</small>
+                                        }
+                                    </td>
                                     <td>@(schedule.SemesterName ?? "—")</td>
-                                    <td><span class='status-badge @(schedule.ScheduleKind == "Makeup" ? "pending" : "neutral")'>@schedule.ScheduleKind</span></td>
+                                    <td>
+                                        <span class='status-badge @(schedule.ScheduleKind == "Makeup" ? "pending" : "neutral")'>@schedule.ScheduleKind</span>
+                                        @if (schedule.ReplacesScheduleId is long replacedId)
+                                        {
+                                            <small>Replaces @MakeupOriginalLabel(replacedId)</small>
+                                        }
+                                        else if (schedules.Any(item => item.ReplacesScheduleId == schedule.Id))
+                                        {
+                                            <small>Occurrence replaced</small>
+                                        }
+                                    </td>
                                     <td>@schedule.ClassroomName</td>
                                     <td>@schedule.SubjectName</td>
                                     <td>@schedule.ScheduleDate.ToString("MMM d, yyyy")</td>
                                     <td>@schedule.StartTime.ToString("HH:mm") – @schedule.EndTime.ToString("HH:mm")</td>
-                                    <td class="table-actions"><div class="table-action-group"><button type="button" class="table-action" title="Move" aria-label="Move schedule" @onclick='() => OpenMoveSchedule(schedule)'><i class="fas fa-calendar-day"></i></button><button type="button" class="table-action danger" title="Delete" aria-label="Delete schedule" @onclick='() => OpenDelete("schedule", schedule.Id, $"{schedule.SubjectName} · {schedule.ClassroomName} · {schedule.ScheduleDate:MMM d, yyyy} {schedule.StartTime:HH\\:mm}")'><i class="fas fa-trash"></i></button></div></td>
+                                    <td class="table-actions"><div class="table-action-group"><button type="button" class="table-action" title="Attendance SMS code" aria-label="Attendance SMS code" @onclick="() => OpenAttendanceOtp(schedule)"><i class="fas fa-mobile-screen"></i></button><button type="button" class="table-action" title="Manage substitute" aria-label="Manage substitute" @onclick="() => OpenSubstitution(schedule)"><i class="fas fa-user-tag"></i></button><button type="button" class="table-action" title="Move" aria-label="Move schedule" @onclick='() => OpenMoveSchedule(schedule)'><i class="fas fa-calendar-day"></i></button><button type="button" class="table-action danger" title="Delete" aria-label="Delete schedule" @onclick='() => OpenDelete("schedule", schedule.Id, $"{schedule.SubjectName} · {schedule.ClassroomName} · {schedule.ScheduleDate:MMM d, yyyy} {schedule.StartTime:HH\\:mm}")'><i class="fas fa-trash"></i></button></div></td>
                                 </tr>
                             }
                         </tbody>
@@ -319,6 +334,7 @@
                         <button type="button" class="primary-button" @onclick="ClearScheduleClassroomFilter">Show all schedules</button>
                         <button type="button" class="primary-button" @onclick='() => Navigate("classrooms")'>Back to classrooms</button>
                     }
+                    <button class="secondary-button" @onclick='() => OpenCsvImport("schedules")'><i class="fas fa-file-csv"></i>Import CSV</button>
                     <button class="primary-button" @onclick="OpenAddSchedule"><i class="fas fa-plus"></i>Add schedule</button>
                 </div>
                 <article class="panel">
@@ -342,7 +358,7 @@
                 <div class="page-intro list-intro">
                     <span>Temperature targets are saved in the portal. IR transmission does not verify AC reception or the physical setpoint. Restart the scanner and reconcile after an uncertain command.</span>
                     <div class="management-filters">
-                        <select class="intro-filter" @bind="acRoomFilterId" @bind:after="ResetAcRoomPage" aria-label="Filter AC control by classroom">
+                        <select class="intro-filter" @bind="acRoomFilterId" @bind:after="ResetAcRoomPage" aria-label="Filter monitor by classroom">
                             <option value="">All classrooms</option>
                             @foreach (var room in classrooms.OrderBy(item => item.Name)) { <option value="@room.Id">@room.Name</option> }
                         </select>
@@ -351,12 +367,11 @@
                 <article class="panel">
                     <div class="panel-heading"><div><span class="eyebrow">ROOM STATUS</span><h3>All classrooms</h3></div></div>
                     <div class="data-table-wrap"><table class="data-table">
-                        <thead><tr><th>Classroom</th><th>Device</th><th>Target</th><th>IR synchronization</th><th>AC status</th><th>Actions</th></tr></thead>
+                        <thead><tr><th>Classroom</th><th>Device</th><th>Target</th><th>IR synchronization</th><th>AC status</th></tr></thead>
                         <tbody>
-                            @if (FilteredAcRooms.Count == 0) { <tr><td colspan="6">@(classrooms.Count == 0 ? "Add a classroom before sending AC commands." : "No classrooms match this filter.")</td></tr> }
+                            @if (FilteredAcRooms.Count == 0) { <tr><td colspan="5">@(classrooms.Count == 0 ? "Add a classroom before sending AC commands." : "No classrooms match this filter.")</td></tr> }
                             @foreach (var room in PagedAcRooms)
                             {
-                                var acOn = AcIsOn(room.AcStatus);
                                 var ir = irSnapshots.FirstOrDefault(item => item.ClassroomId == room.Id);
                                 <tr>
                                     <td><strong>@room.Name</strong></td>
@@ -375,11 +390,6 @@
                                         @if (ir?.ProtocolVersion == 2) { <span> Attendance power requested @(ir.DesiredPower ? "ON" : "OFF"); assumed @(ir.AssumedPower is null ? "unknown" : ir.AssumedPower.Value ? "ON" : "OFF")@(ir.AssumedPower != ir.DesiredPower ? " (pending)" : ""); not verified.</span> }
                                     </td>
                                     <td><span class='status-badge @AcStatusBadge(room.AcStatus)'>@AcStatusLabel(room.AcStatus)</span></td>
-                                    <td class="table-actions">
-                                        <div class="table-action-group">
-                                            <button type="button" class='table-action @(acOn ? "danger" : string.Empty)' title="@(acOn ? "Turn AC off" : "Turn AC on")" aria-label="@(acOn ? $"Turn off AC for {room.Name}" : $"Turn on AC for {room.Name}")" @onclick='() => RemoteAc(room.Id, !acOn)'><i class='fas @(acOn ? "fa-toggle-off" : "fa-toggle-on")'></i></button>
-                                        </div>
-                                    </td>
                                 </tr>
                             }
                         </tbody>
@@ -473,7 +483,7 @@
                     <details class="panel settings-panel settings-collapsible">
                         <summary class="settings-panel-summary"><span><span class="eyebrow">SCHEDULE REMINDERS</span><strong>Buzzer settings</strong></span></summary>
                         <div class="settings-panel-body">
-                            <p class="form-help">A five-second melody is played on supported scanners while a teacher has an active attendance session in the assigned room. Reminders require a connected scanner and stop when the schedule ends.</p>
+                            <p class="form-help">A five-second melody plays on supported scanners before class ends at the configured reminder times, and again at the actual scheduled end. The timeout reminder also follows an accepted 30-minute class extension.</p>
                             <div class="form-stack">
                                 <label><span><input type="checkbox" @bind="buzzerEnabled" disabled="@(!buzzerLoaded)" /> Enable reminders</span></label>
                                 <label>First reminder before end (minutes)<input type="number" min="1" max="180" @bind="buzzerLeadMinutes" disabled="@(!buzzerLoaded)" /></label>
@@ -482,25 +492,6 @@
                             <p class="form-help">Changes take effect on connected scanners on their next reminder check. Missed reminders are not replayed after an outage.</p>
                         </div>
                         <div class="dialog-actions"><button type="button" class="primary-button" @onclick="SaveBuzzerSettings" disabled="@(!buzzerLoaded || buzzerSaving)">Save buzzer settings</button></div>
-                    </details>
-                    <details class="panel settings-panel settings-collapsible">
-                        <summary class="settings-panel-summary"><span><span class="eyebrow">DEVICE TEST</span><strong>Test buzzer</strong></span></summary>
-                        <div class="settings-panel-body">
-                            <p class="form-help">Play a five-second melody on one active, paired device with firmware 1.6.56 or newer, even when scheduled reminders are disabled. The request expires after 30 seconds; hearing the sound is the only confirmation. Older firmware uses three short tones.</p>
-                            <div class="form-stack">
-                                <label>Device<select @bind="buzzerTestDeviceId" disabled="@buzzerTestSending">
-                                    <option value="0">Select a device</option>
-                                    @foreach (var device in biometricDevices.Where(item => item.IsActive && item.IsPaired).OrderBy(item => item.DisplayName))
-                                    {
-                                        <option value="@device.Id">@device.DisplayName — @(device.ClassroomName ?? "Unassigned")</option>
-                                    }
-                                </select></label>
-                            </div>
-                            <AutoDismiss Active="@(!string.IsNullOrEmpty(buzzerTestStatus) && !buzzerTestSending)" Version="@buzzerTestStatusVersion" Dismissed="DismissBuzzerTestStatus">
-                                <p class="form-help" role="status">@buzzerTestStatus</p>
-                            </AutoDismiss>
-                        </div>
-                        <div class="dialog-actions"><button type="button" class="primary-button" @onclick="SendBuzzerTest" disabled="@(buzzerTestSending || buzzerTestDeviceId == 0)">Test buzzer</button></div>
                     </details>
                     <details class="panel settings-panel settings-collapsible">
                         <summary class="settings-panel-summary"><span><span class="eyebrow">ADMIN CREDENTIALS</span><strong>Change admin password</strong></span></summary>
@@ -581,6 +572,10 @@
                     <label>Employee number<input @bind="newTeacherEmployeeNumber" placeholder="e.g. EMP-1042" /></label>
                     <label>Mobile number<input @bind="newTeacherPhone" maxlength="11" inputmode="numeric" pattern="09[0-9]{9}" placeholder="09xxxxxxxxx" autocomplete="tel" /><small class="form-help">Required. Format: 09xxxxxxxxx</small></label>
                 </div>
+                @if (editingTeacherId != 0 && !originalTeacherPhoneVerified)
+                {
+                    <p class="form-help">This imported number is unverified. Saving sends a verification code; SMS attendance and faculty login remain unavailable until verified.</p>
+                }
                 <div class="dialog-actions">
                     <button class="secondary-button" disabled="@teacherOtpBusy" @onclick="ClearTeacherForm">Cancel</button>
                     <button class="primary-button" disabled="@teacherOtpBusy" @onclick="SaveTeacher">@(editingTeacherId == 0 ? "Continue" : "Update teacher")</button>
@@ -684,15 +679,37 @@
             <h2>Add schedule</h2>
             <div class="form-grid">
                 <label>Semester<select @bind="scheduleSemesterId" @bind:after="RefreshSchedulePreview"><option value="0">Select a semester</option>@foreach (var semester in semesters.Where(item => item.IsActive)) { <option value="@semester.Id">@semester.Name</option> }</select></label>
-                <label>Kind<select @bind="scheduleKind"><option value="Regular">Regular</option><option value="Makeup">Makeup</option></select></label>
+                <label>Kind<select @bind="scheduleKind" @bind:after="OnScheduleKindChanged"><option value="Regular">Regular</option><option value="Makeup">Makeup</option></select></label>
+                @if (scheduleKind == ScheduleKinds.Makeup)
+                {
+                    <label class="form-grid-wide">Original class to replace
+                        <select @bind="scheduleReplacesId" @bind:after="OnScheduleReplacementChanged">
+                            <option value="0">Select an upcoming class occurrence</option>
+                            @foreach (var original in MakeupReplacementCandidates)
+                            {
+                                <option value="@original.Id">@MakeupOriginalLabel(original.Id)</option>
+                            }
+                        </select>
+                    </label>
+                }
                 <label>Teacher<select @bind="scheduleTeacherId"><option value="0">Select a teacher</option>@foreach (var teacher in TeachersForSelectedSemester) { <option value="@teacher.Id">@teacher.DisplayName</option> }</select></label>
                 <label>Classroom<select @bind="scheduleClassroomId"><option value="0">Select a classroom</option>@foreach (var room in classrooms) { <option value="@room.Id">@room.Name</option> }</select></label>
                 <label>Subject<input @bind="scheduleSubject" placeholder="Physics" /></label>
-                <label>Start date<input type="date" @bind="scheduleDate" @bind:after="RefreshSchedulePreview" /></label>
+                @if (scheduleKind == ScheduleKinds.Makeup)
+                {
+                    <label>Makeup date<input type="date" value="@(scheduleReplacesId == 0 ? string.Empty : scheduleDate.ToString("yyyy-MM-dd"))" readonly /></label>
+                }
+                else
+                {
+                    <label>Start date<input type="date" @bind="scheduleDate" @bind:after="RefreshSchedulePreview" /></label>
+                }
                 <label>Start time<input type="time" @bind="scheduleStartTime" /></label>
                 <label>End time<input type="time" @bind="scheduleEndTime" /></label>
-                <label>Repeat<select @bind="scheduleRecurrence" @bind:after="OnScheduleRecurrenceChanged">@foreach (var pattern in ScheduleRecurrence.Patterns) { <option value="@pattern.Value">@pattern.Label</option> }</select></label>
-                <label>Until<input value="@(SelectedScheduleSemester is null ? "Select a semester" : SelectedScheduleSemester.EndDate.ToString("MMM d, yyyy") + " (semester end)")" readonly /></label>
+                @if (scheduleKind != ScheduleKinds.Makeup)
+                {
+                    <label>Repeat<select @bind="scheduleRecurrence" @bind:after="OnScheduleRecurrenceChanged">@foreach (var pattern in ScheduleRecurrence.Patterns) { <option value="@pattern.Value">@pattern.Label</option> }</select></label>
+                    <label>Until<input value="@(SelectedScheduleSemester is null ? "Select a semester" : SelectedScheduleSemester.EndDate.ToString("MMM d, yyyy") + " (semester end)")" readonly /></label>
+                }
             </div>
             @if (scheduleRecurrence == ScheduleRecurrence.Custom)
             {
@@ -704,16 +721,119 @@
                 </div>
             }
             <p class="form-help schedule-preview">@SchedulePreviewText</p>
-            @if (scheduleKind == ScheduleKinds.Makeup && scheduleRecurrence != ScheduleRecurrence.None)
+            @if (scheduleKind == ScheduleKinds.Makeup && MakeupReplacementCandidates.Count == 0)
             {
-                <p class="form-help schedule-preview-warn">Makeup classes are usually one-off. Repeating will create a makeup session on every matching day.</p>
+                <p class="form-help schedule-preview-warn">There are no unreplaced regular class occurrences in the next 7 days.</p>
             }
             <AutoDismiss Active="@(!string.IsNullOrEmpty(scheduleError))" Version="@scheduleErrorVersion" Dismissed="DismissScheduleError">
                 <p class="schedule-error" role="alert">@scheduleError</p>
             </AutoDismiss>
             <div class="dialog-actions">
                 <button class="secondary-button" @onclick="CloseScheduleModal">Cancel</button>
-                <button class="primary-button" disabled="@(!teachers.Any(teacher => teacher.IsActive) || classrooms.Count == 0 || scheduleSemesterId == 0 || SchedulePreviewCount == 0)" @onclick="SaveSchedule">@(SchedulePreviewCount <= 1 ? "Save schedule" : $"Save {SchedulePreviewCount} schedules")</button>
+                <button class="primary-button" disabled="@(!teachers.Any(teacher => teacher.IsActive) || classrooms.Count == 0 || scheduleSemesterId == 0 || SchedulePreviewCount == 0 || (scheduleKind == ScheduleKinds.Makeup && scheduleReplacesId == 0))" @onclick="SaveSchedule">@(SchedulePreviewCount <= 1 ? "Save schedule" : $"Save {SchedulePreviewCount} schedules")</button>
+            </div>
+        </section>
+    </div>
+}
+
+@if (csvImportKind is not null)
+{
+    <div class="modal-backdrop">
+        <section class="dialog-card form-dialog" role="dialog" aria-modal="true" aria-labelledby="csv-import-title">
+            <h2 id="csv-import-title">Import @csvImportKind CSV</h2>
+            <p class="form-help">UTF-8 CSV, up to 1 MB and 1,000 data rows. Valid rows are saved; invalid and duplicate rows are reported. Import teachers and semesters before schedules; classrooms must already exist.</p>
+            @if (csvImportKind == "teachers")
+            {
+                <p class="form-help">Imported mobile numbers are unverified. Edit each teacher and verify the number by SMS before using SMS authentication.</p>
+                <a download="teachers-template.csv" href="data:text/csv;charset=utf-8,name%2Cemployee_number%2Cphone%0A">Download teachers template</a>
+            }
+            else if (csvImportKind == "semesters")
+            {
+                <a download="semesters-template.csv" href="data:text/csv;charset=utf-8,name%2Cstart_date%2Cend_date%2Cactive%0A">Download semesters template</a>
+            }
+            else
+            {
+                <p class="form-help">Schedules use employee number, semester name and classroom name. Teachers are enrolled automatically. Dates use YYYY-MM-DD and times use HH:mm (24-hour). Optional recurrence values and makeup rules are in the README.</p>
+                <a download="schedules-template.csv" href="data:text/csv;charset=utf-8,employee_number%2Csemester%2Cclassroom%2Csubject%2Cdate%2Cstart_time%2Cend_time%2Crecurrence%2Cweekdays%2Ckind%2Creplaces_schedule_id%0A">Download schedules template</a>
+            }
+            <label>CSV file<InputFile OnChange="SelectCsvFile" accept=".csv,text/csv" disabled="@csvImportBusy" /></label>
+            @if (!string.IsNullOrEmpty(csvImportFileName)) { <p class="form-help">Selected: @csvImportFileName</p> }
+            @if (!string.IsNullOrEmpty(csvImportError)) { <p class="schedule-error" role="alert">@csvImportError</p> }
+            @if (csvImportResult is not null)
+            {
+                <p class="form-help" role="status">Imported @csvImportResult.ImportedRows row(s), created @csvImportResult.CreatedRecords record(s), skipped @csvImportResult.SkippedRows row(s) and @csvImportResult.SkippedOccurrences conflicting occurrence(s).</p>
+                @if (csvImportResult.Errors.Count > 0) { <ul>@foreach (var error in csvImportResult.Errors) { <li>@error</li> }</ul> }
+            }
+            <div class="dialog-actions">
+                <button type="button" class="secondary-button" disabled="@csvImportBusy" @onclick="CloseCsvImport">Close</button>
+                <button type="button" class="primary-button" disabled="@(csvImportBusy || csvImportContent is null)" @onclick="ImportCsv">Import</button>
+            </div>
+        </section>
+    </div>
+}
+
+@if (attendanceOtpTarget is not null)
+{
+    <div class="modal-backdrop">
+        <section class="dialog-card form-dialog" role="dialog" aria-modal="true" aria-labelledby="attendance-otp-title">
+            <h2 id="attendance-otp-title">Attendance SMS code</h2>
+            <p class="form-help">@attendanceOtpTarget.TeacherDisplayName · @attendanceOtpTarget.SubjectName · @attendanceOtpTarget.ClassroomName · @attendanceOtpTarget.ScheduleDate.ToString("MMM d, yyyy") · @attendanceOtpTarget.StartTime.ToString("HH:mm")</p>
+            <p class="form-help">After confirming the teacher's request, send a code to their registered mobile number. It works only on this classroom's paired scanner and expires after five minutes. Time-out needs a separate code.</p>
+            <label>Attendance action
+                <select @bind="attendanceOtpAction" disabled="@attendanceOtpBusy">
+                    <option value="in">Time in</option>
+                    <option value="out">Time out</option>
+                </select>
+            </label>
+            @if (!string.IsNullOrEmpty(attendanceOtpMessage)) { <p class="form-help" role="status">@attendanceOtpMessage</p> }
+            @if (!string.IsNullOrEmpty(attendanceOtpError)) { <p class="schedule-error" role="alert">@attendanceOtpError</p> }
+            <div class="dialog-actions">
+                <button type="button" class="secondary-button" disabled="@attendanceOtpBusy" @onclick="CloseAttendanceOtp">Close</button>
+                <button type="button" class="primary-button" disabled="@attendanceOtpBusy" @onclick="SendAttendanceOtp">Send SMS code</button>
+            </div>
+        </section>
+    </div>
+}
+
+@if (substitutionTarget is not null)
+{
+    <div class="modal-backdrop">
+        <section class="dialog-card form-dialog" role="dialog" aria-modal="true" aria-labelledby="substitution-title">
+            <span class="eyebrow">ONE CLASS ONLY</span>
+            <h2 id="substitution-title">Manage substitute</h2>
+            <p class="form-help">@substitutionTarget.SubjectName · @substitutionTarget.ClassroomName · @substitutionTarget.ScheduleDate.ToString("MMM d, yyyy") · @substitutionTarget.StartTime.ToString("HH:mm")–@substitutionTarget.EndTime.ToString("HH:mm")</p>
+            <p class="form-help">Original teacher: @substitutionTarget.OriginalTeacherDisplayName. The original teacher is not automatically marked absent.</p>
+            @if (substitutionTarget.TeacherAccountId != substitutionTarget.OriginalTeacherAccountId)
+            {
+                <p class="form-help">Current substitute: @substitutionTarget.TeacherDisplayName @(substitutionTarget.SubstitutionVerified ? "(SMS verified)" : "(not SMS verified; no class access)").</p>
+                <button type="button" class="secondary-button" disabled="@substitutionBusy" @onclick="RemoveSubstitution">Remove substitute and restore original teacher</button>
+            }
+            <label>Substitute teacher
+                <select @bind="substitutionTeacherId" disabled="@(substitutionBusy || substitutionOtpSent)">
+                    <option value="0">Select a teacher</option>
+                    @foreach (var teacher in teachers.Where(t => t.IsActive && t.Id != substitutionTarget.OriginalTeacherAccountId && (t.Id != substitutionTarget.TeacherAccountId || !substitutionTarget.SubstitutionVerified) && teacherSemesters.Any(e => e.SemesterId == substitutionTarget.SemesterId && e.TeacherAccountId == t.Id)))
+                    {
+                        <option value="@teacher.Id">@teacher.DisplayName</option>
+                    }
+                </select>
+            </label>
+            @if (substitutionOtpSent)
+            {
+                <p class="form-help">Ask the substitute for the code sent to their registered mobile number. It expires after five minutes.</p>
+                <label>SMS code<input @bind="substitutionCode" inputmode="numeric" maxlength="6" autocomplete="one-time-code" /></label>
+            }
+            @if (!string.IsNullOrEmpty(substitutionError)) { <p class="schedule-error" role="alert">@substitutionError</p> }
+            <div class="dialog-actions">
+                <button type="button" class="secondary-button" disabled="@substitutionBusy" @onclick="CloseSubstitution">Cancel</button>
+                @if (substitutionOtpSent)
+                {
+                    <button type="button" class="secondary-button" disabled="@substitutionBusy" @onclick="ResetSubstitutionOtp">Change teacher</button>
+                    <button type="button" class="primary-button" disabled="@substitutionBusy" @onclick="ConfirmSubstitution">Confirm substitute</button>
+                }
+                else
+                {
+                    <button type="button" class="primary-button" disabled="@(substitutionBusy || substitutionTeacherId == 0)" @onclick="SendSubstitutionOtp">Send SMS code</button>
+                }
             </div>
         </section>
     </div>
@@ -770,19 +890,69 @@
                             <strong>@fingerprint.FingerPosition</strong>
                             <span>Slot @fingerprint.Slot · @(fingerprint.DeviceId ?? "Legacy, not scanner-bound")</span>
                             @if (fingerprint.IsBlocked) { <span class="status-badge rejected">Blocked</span> }
+                            @if (fingerprint.DeletionState is not null) { <span class="status-badge pending">Deletion: @fingerprint.DeletionState</span> }
                         </div>
-                        @if (FingerprintReplacementAvailability.IsEnabled(Configuration) && fingerprintTeacher.IsActive && !fingerprint.IsBlocked &&
-                             biometricDevices.FirstOrDefault(device => device.IsEnrollmentScanner && device.DeviceId == fingerprint.DeviceId) is { } replacementScanner)
-                        {
-                            <button type="button" class="secondary-button" disabled="@preparingEnrollment" @onclick="() => SelectReplacement(fingerprint, replacementScanner)">Replace</button>
-                        }
+                        <div class="fingerprint-actions">
+                            @if (!fingerprint.IsBlocked)
+                            {
+                                <button type="button" class="secondary-button" disabled="@preparingEnrollment" @onclick="() => SelectFingerprintLabel(fingerprint)">Edit label</button>
+                            }
+                            @if (FingerprintReplacementAvailability.IsEnabled(Configuration) && fingerprintTeacher.IsActive && !fingerprint.IsBlocked &&
+                                 biometricDevices.FirstOrDefault(device => device.IsEnrollmentScanner && device.DeviceId == fingerprint.DeviceId) is { } replacementScanner)
+                            {
+                                <button type="button" class="secondary-button" disabled="@preparingEnrollment" @onclick="() => SelectReplacement(fingerprint, replacementScanner)">Replace</button>
+                            }
+                            @if (fingerprint.DeletionState == "Pending")
+                            {
+                                <button type="button" class="secondary-button" disabled="@preparingEnrollment" @onclick="() => CancelFingerprintDeletion(fingerprint)">Cancel deletion</button>
+                            }
+                            else if (!fingerprint.IsBlocked && fingerprint.DeviceId is not null &&
+                                     Configuration.GetValue<bool>("EnrollmentSecurity:EnableFingerprintDeletion"))
+                            {
+                                <button type="button" class="danger-outline-button" disabled="@preparingEnrollment" @onclick="() => SelectFingerprintDeletion(fingerprint)">Delete</button>
+                            }
+                        </div>
                     </div>
                 }
                 @if (!FingerprintReplacementAvailability.IsEnabled(Configuration))
                 {
                     <p class="fingerprint-hint">Replacement is unavailable; do not overwrite an occupied slot.</p>
                 }
+                @if (!Configuration.GetValue<bool>("EnrollmentSecurity:EnableFingerprintDeletion"))
+                {
+                    <p class="fingerprint-hint">Individual sensor deletion is disabled. See the fingerprint deletion setup in the README.</p>
+                }
             </div>
+            @if (fingerprintDeletionSelection is { } deletionSelection)
+            {
+                <div class="fingerprint-confirm fingerprint-warning">
+                    <h3>Delete this fingerprint?</h3>
+                    <p><strong>@fingerprintTeacher.DisplayName · @deletionSelection.FingerPosition · scanner @deletionSelection.DeviceId · slot @deletionSelection.Slot</strong></p>
+                    <p>The slot is blocked immediately. On that scanner, select Admin → Delete finger and confirm the same slot. The mapping is removed only after the scanner confirms deletion. An interruption may leave the slot and scanner held for investigation.</p>
+                    <label class="fingerprint-check"><input type="checkbox" @bind="fingerprintDeletionConfirmed" /><span>I confirm this teacher, finger, scanner and slot.</span></label>
+                    <div class="fingerprint-actions">
+                        <button type="button" class="secondary-button" disabled="@preparingEnrollment" @onclick="() => fingerprintDeletionSelection = null">Cancel</button>
+                        <button type="button" class="danger-button" disabled="@(!fingerprintDeletionConfirmed || preparingEnrollment)" @onclick="RequestFingerprintDeletion">Request deletion</button>
+                    </div>
+                </div>
+            }
+            @if (fingerprintLabelSelection is { } labelSelection)
+            {
+                <div class="fingerprint-confirm">
+                    <h3>Edit finger label</h3>
+                    <p><strong>@fingerprintTeacher.DisplayName · @labelSelection.FingerPosition · slot @labelSelection.Slot</strong></p>
+                    <p>This changes the label only. It does not rescan or change the fingerprint stored on the sensor.</p>
+                    <label>Correct finger
+                        <select @bind="fingerprintLabel">
+                            @foreach (var finger in FingerprintSlots.All) { <option value="@finger">@finger</option> }
+                        </select>
+                    </label>
+                    <div class="fingerprint-actions">
+                        <button type="button" class="secondary-button" disabled="@preparingEnrollment" @onclick="() => fingerprintLabelSelection = null">Cancel</button>
+                        <button type="button" class="primary-button" disabled="@preparingEnrollment" @onclick="SaveFingerprintLabel">Save label</button>
+                    </div>
+                </div>
+            }
             @if (replacementSelection is { } replacement && replacementDevice is { } scanner)
             {
                 <div class="fingerprint-confirm fingerprint-warning">
@@ -949,28 +1119,36 @@
     }
 
     private string active = "overview", newTeacherName = string.Empty, newTeacherEmployeeNumber = string.Empty, newTeacherUsername = string.Empty, newTeacherEmail = string.Empty, newTeacherPhone = string.Empty, teacherRegistrationOtp = string.Empty, classroomName = string.Empty, scheduleSubject = string.Empty, scheduleKind = ScheduleKinds.Regular, scheduleRecurrence = ScheduleRecurrence.None, semesterName = string.Empty, adminCurrentPassword = string.Empty, adminNewPassword = string.Empty, resetConfirmation = string.Empty, clearFingerprintsConfirmation = string.Empty, adminDevicePin = string.Empty, deleteConfirmation = string.Empty, teacherFilter = "active", semesterFilter = "all", classroomFilter = "all", scheduleFilter = "all", teacherSearch = string.Empty, semesterSearch = string.Empty, classroomSearch = string.Empty, scheduleSearch = string.Empty, attendanceSearch = string.Empty, attendanceCategory = string.Empty;
-    private string messageValue = string.Empty, scheduleErrorValue = string.Empty, buzzerTestStatusValue = string.Empty, gsmTestStatusValue = string.Empty;
-    private long messageVersion, scheduleErrorVersion, buzzerTestStatusVersion, gsmTestStatusVersion;
+    private string messageValue = string.Empty, scheduleErrorValue = string.Empty, gsmTestStatusValue = string.Empty;
+    private long messageVersion, scheduleErrorVersion, gsmTestStatusVersion;
     private string message { get => messageValue; set { messageValue = value; messageVersion++; } }
     private string scheduleError { get => scheduleErrorValue; set { scheduleErrorValue = value; scheduleErrorVersion++; } }
-    private string buzzerTestStatus { get => buzzerTestStatusValue; set { buzzerTestStatusValue = value; buzzerTestStatusVersion++; } }
     private string gsmTestStatus { get => gsmTestStatusValue; set { gsmTestStatusValue = value; gsmTestStatusVersion++; } }
     private void DismissMessage(long version) { if (version == messageVersion) message = string.Empty; }
     private void DismissScheduleError(long version) { if (version == scheduleErrorVersion) scheduleError = string.Empty; }
-    private void DismissBuzzerTestStatus(long version) { if (version == buzzerTestStatusVersion) buzzerTestStatus = string.Empty; }
     private void DismissGsmTestStatus(long version) { if (version == gsmTestStatusVersion) gsmTestStatus = string.Empty; }
     private bool hasAdminDevicePin, sidebarOpen, isLoading, resetOpen, clearFingerprintsOpen, teacherModalOpen, teacherOtpStep, classroomModalOpen, deviceModalOpen, scheduleModalOpen, moveScheduleModalOpen, semesterModalOpen;
     private bool teacherOtpBusy;
+    private string? csvImportKind, csvImportContent, csvImportFileName;
+    private string csvImportError = string.Empty;
+    private bool csvImportBusy;
+    private CsvImportResult? csvImportResult;
     private string teacherFormError = string.Empty;
     private string originalTeacherPhone = string.Empty;
+    private bool originalTeacherPhoneVerified = true;
     private bool deviceIsActive = true, deviceFingerprintEnrollmentEnabled = true, deviceAttendanceScanEnabled = true;
     private long editingTeacherId, editingClassroomId, editingDeviceId, editingSemesterId, scheduleTeacherId, scheduleClassroomId, scheduleSemesterId, enrollSemesterId, enrollTeacherId, deleteTargetId;
+    private long scheduleReplacesId;
     private long? deviceClassroomId, acRoomFilterId;
     private long? scheduleClassroomFilterId;
     private string? scheduleClassroomFilterName;
     private string? deleteTargetType, deleteTargetName;
     private int classroomTargetTemperature = 22, classroomMinimumTemperature = 16, fingerprintTemplateCount;
     private TeacherDirectoryEntry? fingerprintTeacher;
+    private TeacherFingerprint? fingerprintLabelSelection;
+    private string fingerprintLabel = string.Empty;
+    private TeacherFingerprint? fingerprintDeletionSelection;
+    private bool fingerprintDeletionConfirmed;
     private TeacherFingerprint? replacementSelection;
     private BiometricDeviceEntry? replacementDevice;
     private bool replacementConfirmed;
@@ -990,6 +1168,13 @@
     private DateTime scheduleDate = DateTime.Today, moveScheduleDate = DateTime.Today, scheduleFilterDate = DateTime.Today, semesterStartDate = DateTime.Today, semesterEndDate = DateTime.Today.AddMonths(4);
     private TimeOnly scheduleStartTime = new(8, 0), scheduleEndTime = new(9, 30), moveScheduleStartTime = new(8, 0), moveScheduleEndTime = new(9, 30);
     private ScheduleDirectoryEntry? moveScheduleTarget;
+    private ScheduleDirectoryEntry? substitutionTarget;
+    private ScheduleDirectoryEntry? attendanceOtpTarget;
+    private string attendanceOtpAction = "in", attendanceOtpError = string.Empty, attendanceOtpMessage = string.Empty;
+    private bool attendanceOtpBusy;
+    private long substitutionTeacherId;
+    private bool substitutionOtpSent, substitutionBusy;
+    private string substitutionCode = string.Empty, substitutionError = string.Empty;
     private readonly HashSet<DayOfWeek> scheduleCustomDays = new();
     private static readonly (DayOfWeek Day, string Label)[] ScheduleWeekdayChoices =
     {
@@ -1026,14 +1211,12 @@
     private string gsmPort = string.Empty;
     private bool buzzerEnabled, buzzerLoaded, buzzerSaving;
     private int buzzerLeadMinutes = 15, buzzerRepeatMinutes = 5;
-    private long buzzerTestDeviceId;
-    private bool buzzerTestSending;
     private int gsmBaudRate = 9600;
     private IReadOnlyList<string> gsmPorts = Array.Empty<string>();
     private string gsmTestPhone = string.Empty, gsmTestRecipient = string.Empty;
     private GsmModemSettings? gsmTestConfirmation;
     private bool gsmTestPreparing, gsmTestSending;
-    private string Title => active switch { "teachers" => "Teachers", "semesters" => "Semesters", "classrooms" => "Classrooms", "devices" => "Devices", "schedules" => "Schedules", "temperature" => "AC control", "attendance" => "Attendance logs", "settings" => "System settings", _ => "Dashboard" };
+    private string Title => active switch { "teachers" => "Teachers", "semesters" => "Semesters", "classrooms" => "Classrooms", "devices" => "Devices", "schedules" => "Schedules", "temperature" => "Monitor", "attendance" => "Attendance logs", "settings" => "Settings", _ => "Dashboard" };
     private string NavClass(string section) => $"sc-nav-item {(active == section ? "active" : string.Empty)}";
     private IEnumerable<TeacherDirectoryEntry> TeachersForSelectedSemester =>
         (scheduleSemesterId <= 0
@@ -1041,6 +1224,35 @@
             : teachers.Where(teacher => teacherSemesters.Any(item => item.SemesterId == scheduleSemesterId && item.TeacherAccountId == teacher.Id)))
         .Where(teacher => teacher.IsActive);
     private SemesterEntry? SelectedScheduleSemester => semesters.FirstOrDefault(item => item.Id == scheduleSemesterId);
+    private IReadOnlyList<ScheduleDirectoryEntry> MakeupReplacementCandidates
+    {
+        get
+        {
+            var today = Today;
+            var now = TimeOnly.FromDateTime(SchoolClock.GetNow(SchoolTime.Value));
+            return schedules.Where(schedule =>
+                    schedule.ScheduleKind == ScheduleKinds.Regular &&
+                    schedule.ReplacesScheduleId is null &&
+                    schedule.SemesterId is long semesterId &&
+                    semesters.Any(semester => semester.Id == semesterId && semester.IsActive) &&
+                    schedule.ScheduleDate >= today &&
+                    schedule.ScheduleDate <= today.AddDays(7) &&
+                    (schedule.ScheduleDate > today || schedule.StartTime > now) &&
+                    !schedules.Any(makeup => makeup.ReplacesScheduleId == schedule.Id))
+                .OrderBy(schedule => schedule.ScheduleDate)
+                .ThenBy(schedule => schedule.StartTime)
+                .ToList();
+        }
+    }
+
+    private string MakeupOriginalLabel(long scheduleId)
+    {
+        var schedule = schedules.FirstOrDefault(item => item.Id == scheduleId);
+        return schedule is null
+            ? $"schedule {scheduleId}"
+            : $"{schedule.ScheduleDate:MMM d} {schedule.StartTime:HH\\:mm} · {schedule.SubjectName} · {schedule.TeacherDisplayName} · {schedule.ClassroomName}";
+    }
+
     private SemesterEntry? MoveScheduleSemester =>
         moveScheduleTarget?.SemesterId is long semesterId
             ? semesters.FirstOrDefault(item => item.Id == semesterId)
@@ -1049,6 +1261,14 @@
     {
         get
         {
+            if (scheduleKind == ScheduleKinds.Makeup)
+            {
+                var original = schedules.FirstOrDefault(item => item.Id == scheduleReplacesId);
+                return original is not null && original.SemesterId == scheduleSemesterId
+                    ? new[] { original.ScheduleDate }
+                    : Array.Empty<DateOnly>();
+            }
+
             var semester = SelectedScheduleSemester;
             if (semester is null)
             {
@@ -1064,6 +1284,13 @@
     {
         get
         {
+            if (scheduleKind == ScheduleKinds.Makeup)
+            {
+                return scheduleReplacesId == 0
+                    ? "Select the original class occurrence. The makeup replaces it once; later original occurrences remain scheduled."
+                    : $"Creates one temporary replacement for {MakeupOriginalLabel(scheduleReplacesId)}. The original schedule resumes on its next occurrence.";
+            }
+
             var semester = SelectedScheduleSemester;
             if (semester is null)
             {
@@ -1407,8 +1634,6 @@
     private async Task LoadBuzzerSettings()
     {
         buzzerLoaded = false;
-        buzzerTestDeviceId = 0;
-        buzzerTestStatus = string.Empty;
         try
         {
             if ((await AuthService.GetCurrentUserAsync())?.Role != UserRole.Admin)
@@ -1428,32 +1653,6 @@
             Logger.LogError(exception, "Could not load buzzer settings.");
             Toast("Could not load buzzer settings. Check the database and migration 040.");
         }
-    }
-
-    private async Task SendBuzzerTest()
-    {
-        if (buzzerTestSending || buzzerTestDeviceId == 0) return;
-        buzzerTestSending = true;
-        buzzerTestStatus = string.Empty;
-        try
-        {
-            var user = await AuthService.GetCurrentUserAsync();
-            if (user?.Role != UserRole.Admin)
-            {
-                buzzerTestStatus = "Administrator access is required.";
-                return;
-            }
-            var result = await BuzzerSettings.QueueTestAsync(buzzerTestDeviceId, user.Id);
-            buzzerTestStatus = result.Succeeded
-                ? "Test queued for up to 30 seconds. Listen at the device; delivery and sound are not confirmed."
-                : result.Error ?? "Could not queue the buzzer test.";
-        }
-        catch (MySqlConnector.MySqlException exception)
-        {
-            Logger.LogError(exception, "Could not queue buzzer test.");
-            buzzerTestStatus = "Could not queue the test. Check the database and migration 041.";
-        }
-        finally { buzzerTestSending = false; }
     }
 
     private async Task SaveBuzzerSettings()
@@ -1678,6 +1877,78 @@
         teacherModalOpen = true;
     }
 
+    private void OpenCsvImport(string kind)
+    {
+        csvImportKind = kind;
+        csvImportContent = csvImportFileName = null;
+        csvImportError = string.Empty;
+        csvImportResult = null;
+    }
+
+    private void CloseCsvImport()
+    {
+        if (csvImportBusy) return;
+        csvImportKind = csvImportContent = csvImportFileName = null;
+        csvImportResult = null;
+        csvImportError = string.Empty;
+    }
+
+    private async Task SelectCsvFile(InputFileChangeEventArgs args)
+    {
+        if (csvImportBusy) return;
+        csvImportContent = csvImportFileName = null;
+        csvImportResult = null;
+        csvImportError = string.Empty;
+        csvImportBusy = true;
+        try
+        {
+            var file = args.File;
+            if (!string.Equals(Path.GetExtension(file.Name), ".csv", StringComparison.OrdinalIgnoreCase) || file.Size > CsvImportService.MaximumBytes)
+            {
+                csvImportError = "Choose a CSV file no larger than 1 MB.";
+                return;
+            }
+            await using var stream = file.OpenReadStream(CsvImportService.MaximumBytes);
+            using var reader = new StreamReader(stream, new System.Text.UTF8Encoding(false, true), false);
+            csvImportContent = await reader.ReadToEndAsync();
+            csvImportFileName = file.Name;
+        }
+        catch (System.Text.DecoderFallbackException)
+        {
+            csvImportError = "The file must use UTF-8 encoding.";
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Could not read the CSV file.");
+            csvImportError = "Could not read the file. Select it again.";
+        }
+        finally { csvImportBusy = false; }
+    }
+
+    private async Task ImportCsv()
+    {
+        if (csvImportBusy || csvImportKind is null || csvImportContent is null) return;
+        csvImportBusy = true;
+        csvImportError = string.Empty;
+        csvImportResult = null;
+        try
+        {
+            var result = await AuthService.ImportCsvAsync(csvImportKind, csvImportContent);
+            csvImportContent = null;
+            if (result.Error is not null) csvImportError = result.Error;
+            else csvImportResult = result;
+            await ReloadAsync();
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "CSV import stopped.");
+            csvImportContent = null;
+            csvImportError = "Import stopped unexpectedly. Some rows may have been saved; review the list before retrying.";
+            await ReloadAsync();
+        }
+        finally { csvImportBusy = false; }
+    }
+
     private void DismissTeacherForm()
     {
         if (!teacherOtpBusy) ClearTeacherForm();
@@ -1695,7 +1966,7 @@
         teacherFormError = string.Empty;
         var validation = wasCreate ? TeacherAccountValidation.ValidateCreate(create) : TeacherAccountValidation.ValidateUpdate(update);
         if (!validation.Succeeded) { teacherFormError = validation.Error ?? "Check the teacher details."; return; }
-        if (!teacherOtpStep && (wasCreate || !string.Equals(newTeacherPhone.Trim(), originalTeacherPhone, StringComparison.Ordinal)))
+        if (!teacherOtpStep && (wasCreate || !originalTeacherPhoneVerified || !string.Equals(newTeacherPhone.Trim(), originalTeacherPhone, StringComparison.Ordinal)))
         {
             teacherOtpBusy = true;
             try
@@ -1753,6 +2024,7 @@
         newTeacherEmail = profile.Email ?? string.Empty;
         newTeacherPhone = profile.Phone ?? string.Empty;
         originalTeacherPhone = newTeacherPhone;
+        originalTeacherPhoneVerified = teachers.FirstOrDefault(teacher => teacher.Id == accountId)?.PhoneVerified ?? false;
         teacherOtpStep = false;
         teacherRegistrationOtp = string.Empty;
         teacherFormError = string.Empty;
@@ -1768,6 +2040,7 @@
         teacherModalOpen = false;
         teacherFormError = string.Empty;
         originalTeacherPhone = string.Empty;
+        originalTeacherPhoneVerified = true;
     }
 
     private void OpenAddClassroom()
@@ -1939,6 +2212,7 @@
         scheduleTeacherId = scheduleClassroomId = 0;
         scheduleSubject = string.Empty;
         scheduleKind = ScheduleKinds.Regular;
+        scheduleReplacesId = 0;
         scheduleRecurrence = ScheduleRecurrence.None;
         scheduleCustomDays.Clear();
         scheduleDate = DateTime.Today;
@@ -1958,12 +2232,39 @@
         scheduleTeacherId = scheduleClassroomId = 0;
         scheduleSubject = string.Empty;
         scheduleKind = ScheduleKinds.Regular;
+        scheduleReplacesId = 0;
         scheduleRecurrence = ScheduleRecurrence.None;
         scheduleCustomDays.Clear();
         scheduleModalOpen = false;
     }
 
     private void RefreshSchedulePreview() => StateHasChanged();
+
+    private void OnScheduleKindChanged()
+    {
+        scheduleReplacesId = 0;
+        if (scheduleKind == ScheduleKinds.Makeup)
+        {
+            scheduleRecurrence = ScheduleRecurrence.None;
+            scheduleCustomDays.Clear();
+        }
+
+        StateHasChanged();
+    }
+
+    private void OnScheduleReplacementChanged()
+    {
+        var original = schedules.FirstOrDefault(item => item.Id == scheduleReplacesId);
+        if (original is null) return;
+        scheduleDate = original.ScheduleDate.ToDateTime(TimeOnly.MinValue);
+        scheduleTeacherId = original.TeacherAccountId;
+        scheduleClassroomId = original.ClassroomId;
+        scheduleSubject = original.SubjectName;
+        scheduleStartTime = original.StartTime;
+        scheduleEndTime = original.EndTime;
+        scheduleSemesterId = original.SemesterId ?? 0;
+        RefreshSchedulePreview();
+    }
 
     private void OnScheduleRecurrenceChanged()
     {
@@ -2036,7 +2337,8 @@
             scheduleStartTime,
             scheduleEndTime,
             scheduleRecurrence,
-            scheduleRecurrence == ScheduleRecurrence.Custom ? scheduleCustomDays.ToList() : null));
+            scheduleRecurrence == ScheduleRecurrence.Custom ? scheduleCustomDays.ToList() : null,
+            scheduleKind == ScheduleKinds.Makeup ? scheduleReplacesId : null));
         if (!result.Succeeded) { scheduleError = result.Error ?? "Schedule could not be saved."; return; }
         CloseScheduleModal();
         await ReloadAsync();
@@ -2050,6 +2352,122 @@
         moveScheduleStartTime = schedule.StartTime;
         moveScheduleEndTime = schedule.EndTime;
         moveScheduleModalOpen = true;
+    }
+
+    private void OpenSubstitution(ScheduleDirectoryEntry schedule)
+    {
+        substitutionTarget = schedule;
+        substitutionTeacherId = 0;
+        ResetSubstitutionOtp();
+    }
+
+    private void OpenAttendanceOtp(ScheduleDirectoryEntry schedule)
+    {
+        attendanceOtpTarget = schedule;
+        attendanceOtpAction = "in";
+        attendanceOtpError = attendanceOtpMessage = string.Empty;
+    }
+
+    private void CloseAttendanceOtp()
+    {
+        if (!attendanceOtpBusy) attendanceOtpTarget = null;
+    }
+
+    private async Task SendAttendanceOtp()
+    {
+        if (attendanceOtpBusy || attendanceOtpTarget is null) return;
+        attendanceOtpBusy = true;
+        attendanceOtpError = attendanceOtpMessage = string.Empty;
+        try
+        {
+            var result = await AuthService.RequestAttendanceOtpAsync(attendanceOtpTarget.Id, attendanceOtpAction);
+            if (!result.Succeeded) attendanceOtpError = result.Error ?? "Could not send the attendance code.";
+            else attendanceOtpMessage = "SMS accepted. The teacher can enter the code on the classroom scanner.";
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Could not send attendance verification.");
+            attendanceOtpError = "Could not send verification. Check the modem and portal logs.";
+        }
+        finally { attendanceOtpBusy = false; }
+    }
+
+    private void CloseSubstitution()
+    {
+        if (!substitutionBusy) substitutionTarget = null;
+    }
+
+    private void ResetSubstitutionOtp()
+    {
+        substitutionOtpSent = false;
+        substitutionCode = string.Empty;
+        substitutionError = string.Empty;
+    }
+
+    private async Task SendSubstitutionOtp()
+    {
+        if (substitutionBusy || substitutionTarget is null || substitutionTeacherId <= 0) return;
+        substitutionBusy = true;
+        substitutionError = string.Empty;
+        try
+        {
+            var result = await AuthService.RequestSubstitutionOtpAsync(substitutionTarget.Id, substitutionTeacherId);
+            if (!result.Succeeded) { substitutionError = result.Error ?? "Could not send the code."; return; }
+            substitutionOtpSent = true;
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Could not request substitution verification.");
+            substitutionError = "Could not request verification. Check the modem and configuration.";
+        }
+        finally { substitutionBusy = false; }
+    }
+
+    private async Task ConfirmSubstitution()
+    {
+        if (substitutionBusy || substitutionTarget is null) return;
+        if (!MobileVerificationCodes.IsValid(substitutionCode))
+        {
+            substitutionError = MobileVerificationCodes.RequirementMessage;
+            return;
+        }
+        substitutionBusy = true;
+        substitutionError = string.Empty;
+        try
+        {
+            var result = await AuthService.ConfirmSubstitutionAsync(substitutionTarget.Id, substitutionTeacherId, substitutionCode);
+            if (!result.Succeeded) { substitutionError = result.Error ?? "Substitution could not be saved."; return; }
+            substitutionTarget = null;
+            await ReloadAsync();
+            Toast("Substitute confirmed for this class.");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Could not confirm substitution.");
+            substitutionError = "Substitution could not be saved. Check the portal logs.";
+        }
+        finally { substitutionBusy = false; }
+    }
+
+    private async Task RemoveSubstitution()
+    {
+        if (substitutionBusy || substitutionTarget is null) return;
+        substitutionBusy = true;
+        substitutionError = string.Empty;
+        try
+        {
+            var result = await AuthService.RemoveSubstitutionAsync(substitutionTarget.Id);
+            if (!result.Succeeded) { substitutionError = result.Error ?? "Substitution could not be removed."; return; }
+            substitutionTarget = null;
+            await ReloadAsync();
+            Toast("Substitution removed; the original teacher was restored.");
+        }
+        catch (Exception exception)
+        {
+            Logger.LogError(exception, "Could not remove substitution.");
+            substitutionError = "Substitution could not be removed. Check the portal logs.";
+        }
+        finally { substitutionBusy = false; }
     }
 
     private void CloseMoveScheduleModal()
@@ -2146,24 +2564,6 @@
         Toast("Teacher unenrolled.");
     }
 
-    private async Task RemoteAc(long classroomId, bool turnOn)
-    {
-        var room = classrooms.FirstOrDefault(item => item.Id == classroomId);
-        if (room is null)
-        {
-            Toast("Classroom was not found.");
-            return;
-        }
-
-        var eventType = turnOn ? "RemoteOn" : "RemoteOff";
-        var result = await AuthService.SetTemperatureAsync(new SetTemperatureRequest(classroomId, room.TargetTemperature, eventType));
-        if (!result.Succeeded) { Toast(result.Error ?? "Temperature command could not be saved."); return; }
-        await ReloadAsync();
-        Toast(turnOn
-            ? "Remote AC on queued — the room scanner applies it within about 30 seconds."
-            : "Remote AC off queued — the room scanner applies it within about 30 seconds.");
-    }
-
     private async Task SaveAdminSettings()
     {
         var result = await AuthService.UpdateAdministratorPasswordAsync(adminCurrentPassword, adminNewPassword);
@@ -2212,6 +2612,9 @@
             authorizationConfirmed = false;
             authorizationAllowOccupied = false;
             replacementSelection = null;
+            fingerprintLabelSelection = null;
+            fingerprintDeletionSelection = null;
+            fingerprintDeletionConfirmed = false;
             replacementDevice = null;
             replacementConfirmed = false;
         }
@@ -2229,15 +2632,98 @@
         authorizationPreparationId = null;
         authorizationConfirmed = false;
         replacementSelection = null;
+        fingerprintLabelSelection = null;
+        fingerprintDeletionSelection = null;
+        fingerprintDeletionConfirmed = false;
         replacementDevice = null;
         replacementConfirmed = false;
     }
 
     private void SelectReplacement(TeacherFingerprint fingerprint, BiometricDeviceEntry scanner)
     {
+        fingerprintLabelSelection = null;
+        fingerprintDeletionSelection = null;
         replacementSelection = fingerprint;
         replacementDevice = scanner;
         replacementConfirmed = false;
+    }
+
+    private void SelectFingerprintLabel(TeacherFingerprint fingerprint)
+    {
+        replacementSelection = null;
+        replacementDevice = null;
+        fingerprintDeletionSelection = null;
+        fingerprintLabelSelection = fingerprint;
+        fingerprintLabel = fingerprint.FingerPosition;
+    }
+
+    private void SelectFingerprintDeletion(TeacherFingerprint fingerprint)
+    {
+        replacementSelection = null;
+        replacementDevice = null;
+        fingerprintLabelSelection = null;
+        fingerprintDeletionSelection = fingerprint;
+        fingerprintDeletionConfirmed = false;
+    }
+
+    private async Task RequestFingerprintDeletion()
+    {
+        if (preparingEnrollment || !fingerprintDeletionConfirmed || fingerprintTeacher is null ||
+            fingerprintDeletionSelection?.DeviceId is not string deviceId) return;
+        preparingEnrollment = true;
+        try
+        {
+            var result = await AuthService.RequestFingerprintDeletionAsync(fingerprintTeacher.Id, fingerprintDeletionSelection.Slot,
+                fingerprintDeletionSelection.FingerPosition, deviceId);
+            if (!result.Succeeded) { Toast(result.Error ?? "Could not request fingerprint deletion."); return; }
+            await OpenTeacherFingerprints(fingerprintTeacher);
+            Toast("Deletion requested. Confirm the slot on the bound scanner.");
+        }
+        catch (Exception exception) when (exception is MySqlConnector.MySqlException or InvalidOperationException or System.Security.Cryptography.CryptographicException)
+        {
+            Logger.LogError(exception, "Could not request fingerprint deletion.");
+            Toast("Could not request fingerprint deletion. Check the database and scanner key configuration.");
+        }
+        finally { preparingEnrollment = false; }
+    }
+
+    private async Task CancelFingerprintDeletion(TeacherFingerprint fingerprint)
+    {
+        if (preparingEnrollment || fingerprintTeacher is null || fingerprint.DeletionRequestId is not string requestId) return;
+        preparingEnrollment = true;
+        try
+        {
+            var result = await AuthService.CancelFingerprintDeletionAsync(fingerprintTeacher.Id, fingerprint.Slot, requestId);
+            if (!result.Succeeded) { Toast(result.Error ?? "Could not cancel fingerprint deletion."); return; }
+            await OpenTeacherFingerprints(fingerprintTeacher);
+            Toast("Deletion canceled before scanner claim. If the scanner shows a held journal, investigate it before reuse.");
+        }
+        catch (MySqlConnector.MySqlException exception)
+        {
+            Logger.LogError(exception, "Could not cancel fingerprint deletion.");
+            Toast("Could not cancel fingerprint deletion. Check the database.");
+        }
+        finally { preparingEnrollment = false; }
+    }
+
+    private async Task SaveFingerprintLabel()
+    {
+        if (preparingEnrollment || fingerprintTeacher is null || fingerprintLabelSelection is null) return;
+        preparingEnrollment = true;
+        try
+        {
+            var result = await AuthService.RenameTeacherFingerprintAsync(fingerprintTeacher.Id,
+                fingerprintLabelSelection.Slot, fingerprintLabelSelection.FingerPosition, fingerprintLabel);
+            if (!result.Succeeded) { Toast(result.Error ?? "Could not update the fingerprint label."); return; }
+            await OpenTeacherFingerprints(fingerprintTeacher);
+            Toast("Fingerprint label updated. The sensor fingerprint was not changed.");
+        }
+        catch (MySqlConnector.MySqlException exception)
+        {
+            Logger.LogError(exception, "Could not update fingerprint label.");
+            Toast("Could not update the fingerprint label. Check the database.");
+        }
+        finally { preparingEnrollment = false; }
     }
 
     private async Task PrepareReplacement()

@@ -17,7 +17,7 @@ flowchart LR
     Scanner[ESP32 scanner] -->|Device API| Portal
     Portal --> DB[(MariaDB)]
     Portal -->|Faculty and mobile-verification OTP; test SMS| Modem[Server-connected GSM modem]
-    Portal -->|Password recovery| SMTP[SMTP server]
+    Portal -->|Password recovery| Modem
     Scanner --> Sensor[Fingerprint sensor]
     Scanner -->|Optional IR| AC[Physical AC]
     Scanner --> Buzzer[Buzzer]
@@ -38,39 +38,73 @@ responses. These mechanisms do not themselves encrypt network traffic.
    initializes the administrator and optional development demo data, and retries
    failures. After repeated database failures it logs an error and the portal can
    start in a degraded state. `schema_versions` tracks applied migrations.
-3. If first-access setup is required, the administrator completes the recovery
-   email setup before signing in. The login endpoint verifies the password and
+3. If first-access setup is required, the administrator registers a recovery
+   mobile number before signing in. The login endpoint verifies the password and
    creates a role-bearing authentication cookie. Admin and Teacher pages
-   require their respective roles. Password recovery uses a one-use expiring
-   token and configured SMTP delivery.
+   require their respective roles. Password recovery sends a one-use expiring
+   reset link by SMS through the configured GSM modem.
 4. The attendance reconciliation service runs approximately once per minute;
    attendance reads and scan workflows also invoke reconciliation where needed.
 
 ## Administrator workflow
 
 The Admin sidebar exposes Overview; Management (Teachers, Semesters, Classrooms,
-Schedules, Attendance); and System (Devices, AC control, System settings).
+Schedules, Attendance); and System (Devices, Monitor, Settings).
 
 ### Prepare people, rooms, and schedules
 
 1. Create teachers with their identity, required mobile number and account
-   details; active status controls eligibility. Registration requires a real
-   SMS code sent to the proposed number. Admin or teacher mobile changes require
-   another SMS code; unchanged numbers do not. This uses a separate portal OTP
+   details; active status controls eligibility. Manual registration requires a
+   real SMS code sent to the proposed number. Admin or teacher mobile changes
+   and verification of imported numbers require another SMS code. This uses a separate portal OTP
    lifecycle from the Faculty device OTP and requires the configured GSM modem
    and `FacultyOtp:Secret`. Failed or uncertain delivery cannot authorize a save.
 2. Create and activate a date-ranged semester, edit its name or dates when
    needed, then enroll teachers in it.
 3. Create classrooms with a name, target temperature and the teacher's minimum
    permitted temperature.
-4. Create Regular or Makeup schedules for an eligible teacher, semester and
-   classroom. Recurrence expands into individual dated rows through the
-   semester end; conflicting dates are skipped and reported. Individual
-   schedules can be moved or deleted subject to validation and active-session
-   restrictions. Makeup schedules are preferred when applicable schedules
-   overlap.
+4. Create Regular schedules for an eligible teacher, semester and classroom.
+   Recurrence expands into individual dated rows through the semester end;
+   conflicting dates are skipped and reported. A one-off Makeup selects an
+   unreplaced regular occurrence within the next 7 days and may use a different
+   teacher, room, subject and time. It suppresses only that original occurrence;
+   the original schedule resumes on its next date. Delete a makeup replacement
+   before moving either linked schedule.
 5. Before retiring a classroom, resolve its current and future schedules.
    Device assignment is managed separately.
+
+Teachers, semesters and schedules also offer separate CSV imports. The
+dashboard supplies templates; import teachers and semesters first and create
+classrooms before schedules. Valid rows are saved, invalid or duplicate rows
+are reported, and successful schedules automatically enroll their teachers.
+Imported teacher numbers remain unverified until the admin edits and verifies
+each one. They cannot be used for faculty or attendance OTP, substitute
+approval or missing-time-out reminders before verification; fingerprint
+attendance remains available. See the [README CSV import guide](../README.md#csv-import)
+for headers, recurrence, limits, and migration `049`.
+
+On an individual schedule, an admin can request an SMS verification code for a
+different active teacher enrolled in that semester. The admin enters the code
+received by the substitute; confirmation applies only to that occurrence and
+rejects overlapping classes. The verified substitute can scan their own enrolled
+fingerprint or use a separate admin-approved attendance SMS code to record
+attendance and activate the AC. The original teacher stays
+identified on the schedule and is not automatically marked absent. Before
+attendance or class end, the admin may remove the substitution or confirm
+another substitute; a substituted class cannot be moved until restored.
+Migration `047` leaves legacy substitutions unverified: end any active legacy
+sessions before deployment, then verify or remove the assignments. It does not
+reset physical AC state.
+
+For fingerprint failure, the admin selects **Attendance SMS code** on the
+specific schedule and chooses time-in or time-out. The teacher enters the code
+sent to their registered phone on the assigned scanner's **Attendance OTP**
+screen. The code expires after five minutes, allows five guesses, and is
+single-use. Time-out requires a new approval and code. New requests replace
+pending codes for that scanner; uncertain delivery never activates a code.
+The existing time window, substitution, device, and missing-time-out rules are
+rechecked. Migration `048` and `AttendanceOtp:EnableDeviceApi` are required;
+the flag is disabled by default. See the README for deployment prerequisites.
 
 ### Register and pair scanners
 
@@ -80,7 +114,7 @@ Schedules, Attendance); and System (Devices, AC control, System settings).
 2. Configure its active state, room, status polling interval, attendance scan
    and enrollment permissions. Assignment, deactivation and certain changes
    can be blocked by an active class or unresolved protected operation.
-3. Set the six-digit **device admin PIN** in System settings and generate a
+3. Set the six-digit **device admin PIN** in Settings and generate a
    one-time pairing code in Devices. The PIN is distinct from the pairing code.
 4. On the scanner choose Admin, enter the PIN and pairing code; the server
    validates them and the scanner persists its issued device ID. Pairing
@@ -118,9 +152,18 @@ some recovery and fencing components are staged and not an end-to-end
 automatic recovery. See the [main README's detailed enrollment section](../README.md#device-fingerprint-api)
 before enabling any experimental flags.
 
-### AC control and attendance
+For individual deletion, **Teachers → Manage fingerprints → Delete** reserves
+the bound scanner and blocks the exact slot. The admin confirms the same slot
+on the scanner; a one-use claim and authenticated completion remove the
+mapping only after the scanner reports a checked deletion. This experimental
+flow requires migration `050`, the deletion portal flag and an opt-in scanner
+build. A claimed or uncertain operation remains blocked for investigation;
+see the [README](../README.md#device-fingerprint-api) before enabling it.
 
-An admin can view and change classroom targets and request AC on/off state.
+### Monitor and attendance
+
+An admin can view classroom targets and AC status in Monitor; the page does not
+provide manual AC on/off controls.
 The portal's state is a desired/recorded state, not independent evidence that
 the physical AC changed. Teacher target changes are restricted to an active
 class and the classroom minimum.
@@ -152,21 +195,16 @@ range for one teacher or all teachers as Excel or print/save-as-PDF.
 
 ### GSM, buzzer, and system settings
 
-- **System settings → GSM settings:** select and save the server's serial modem
+- **Settings → GSM settings:** select and save the server's serial modem
   port and baud rate. A confirmed test SMS is a real send and may incur charges.
   Modem acceptance is not proof of handset delivery; an uncertain send should
   not be blindly retried.
-- **System settings → Buzzer settings:** configure the global enable flag, lead
+- **Settings → Buzzer settings:** configure the global enable flag, lead
   and repeat intervals (1–180 minutes). Defaults introduced by migration 040 are enabled,
   15 minutes before end and every 5 minutes. Only an active attendance session
   in the assigned room qualifies, strictly before scheduled end. A reminder has
   a 20-second delivery window and is not replayed after an outage.
-- **Test buzzer:** from System settings, queue one request for an active paired
-  scanner, independently of reminder enablement. It expires after 30 seconds, can be claimed at most
-  once, and is invalidated by re-pairing. Queueing or claiming does not prove a
-  sound played. Firmware 1.6.56+ plays the five-second melody; older compatible
-  firmware uses short tones.
-- **Other System settings:** includes the device admin PIN and administrative reset
+- **Other Settings:** includes the device admin PIN and administrative reset
   controls. Reset is destructive and protected operations may prevent it.
 
 ## Teacher workflow
@@ -200,6 +238,11 @@ flowchart TD
 Attendance status is `Active` or `Completed`; outcomes include `OnTime`,
 `Late`, `Absent`, and `MissingTimeOut`. The default late and missing-time-out
 grace periods are each 15 minutes, configurable through `SchoolTime`.
+An eligible fingerprint scan may start attendance and request AC from exactly
+15 minutes before class, including across midnight; it is recorded as on time.
+The scheduled end, buzzer timing, and missing-time-out deadline do not move.
+If an ongoing class and an early upcoming class both match, the ongoing class
+is selected first. Early re-entry uses the same attendance window.
 An early logout excludes the ending class's own remaining window when deciding
 whether to turn off; another active or in-window class keeps it on. Re-entry
 reopens attendance even when the room is already Cooling. Reconciliation clears

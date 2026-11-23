@@ -34,6 +34,57 @@ public sealed class GsmSmsTransportTests
         Assert.Equal("SmartClassAC modem test message.\u001a", serial.Writes[^1]);
     }
 
+    [Fact]
+    public async Task AttendanceReminderSmsExplainsAutomaticMissingTimeOut()
+    {
+        var serial = new FakeSerial();
+        var result = await new GsmSmsTransport(_ => serial)
+            .SendAttendanceReminderAsync(Settings, "09123456789");
+
+        Assert.Equal(GsmSmsResult.Accepted, result);
+        Assert.Equal(
+            "Attendance reminder: your class has ended. No time-out was recorded, so you were marked Missing time-out. Contact your administrator if this is incorrect.\u001a",
+            serial.Writes[^1]);
+    }
+
+    [Fact]
+    public async Task SubstitutionOtpIdentifiesTheClassDateAndRequestsAgreement()
+    {
+        var serial = new FakeSerial();
+        var result = await new GsmSmsTransport(_ => serial).SendSubstitutionOtpAsync(
+            Settings, "09123456789", "123456", new DateOnly(2026, 11, 24), new TimeOnly(9, 30));
+
+        Assert.Equal(GsmSmsResult.Accepted, result);
+        Assert.Equal("SmartClassAC substitute request for 2026-11-24 at 09:30. Give the admin this code only if you agree: 123456.\u001a", serial.Writes[^1]);
+    }
+
+    [Theory]
+    [InlineData(true, "time-in")]
+    [InlineData(false, "time-out")]
+    public async Task AttendanceOtpIdentifiesActionAndClassTime(bool timeIn, string action)
+    {
+        var serial = new FakeSerial();
+        var result = await new GsmSmsTransport(_ => serial).SendAttendanceOtpAsync(
+            Settings, "09123456789", "123456", new DateOnly(2026, 11, 24), new TimeOnly(9, 30), timeIn);
+        Assert.Equal(GsmSmsResult.Accepted, result);
+        Assert.Contains($"{action} for 2026-11-24 at 09:30", serial.Writes[^1]);
+        Assert.Contains("123456", serial.Writes[^1]);
+    }
+
+    [Fact]
+    public async Task PasswordResetSmsIncludesOneUseResetLinkAndExpiry()
+    {
+        var serial = new FakeSerial();
+        var resetUrl = "https://school.example/reset-password?token=secure-token";
+        var result = await new GsmSmsTransport(_ => serial)
+            .SendPasswordResetAsync(Settings, "09123456789", resetUrl);
+
+        Assert.Equal(GsmSmsResult.Accepted, result);
+        Assert.Equal(
+            $"Reset your SmartClassAC password: {resetUrl} This link expires in 15 minutes and can be used once.\u001a",
+            serial.Writes[^1]);
+    }
+
     [Theory]
     [InlineData("0912345678\r")]
     [InlineData("09١٢٣٤٥٦٧٨٩")]

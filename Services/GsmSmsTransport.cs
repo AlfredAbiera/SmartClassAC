@@ -43,9 +43,50 @@ internal sealed class GsmSmsTransport
         return await SendMessageAsync(settings, phone, "Your SmartClassAC verification code is " + code + ".", cancellationToken);
     }
 
+    public Task<GsmSmsResult> SendSubstitutionOtpAsync(
+        GsmModemSettings? settings, string phone, string code, DateOnly date, TimeOnly start,
+        CancellationToken cancellationToken = default)
+    {
+        if (!MobileVerificationCodes.IsValid(code))
+            return Task.FromResult(GsmSmsResult.InvalidInput);
+        var message = $"SmartClassAC substitute request for {date:yyyy-MM-dd} at {start:HH\\:mm}. " +
+            $"Give the admin this code only if you agree: {code}.";
+        return SendMessageAsync(settings, phone, message, cancellationToken);
+    }
+
+    public Task<GsmSmsResult> SendAttendanceOtpAsync(
+        GsmModemSettings? settings, string phone, string code, DateOnly date, TimeOnly start, bool timeIn,
+        CancellationToken cancellationToken = default)
+    {
+        if (!MobileVerificationCodes.IsValid(code))
+            return Task.FromResult(GsmSmsResult.InvalidInput);
+        var action = timeIn ? "time-in" : "time-out";
+        var message = $"SmartClassAC {action} for {date:yyyy-MM-dd} at {start:HH\\:mm}. " +
+            $"Enter code {code} on your classroom scanner within 5 minutes.";
+        return SendMessageAsync(settings, phone, message, cancellationToken);
+    }
+
     public Task<GsmSmsResult> SendTestAsync(
         GsmModemSettings? settings, string phone, CancellationToken cancellationToken = default) =>
         SendMessageAsync(settings, phone, "SmartClassAC modem test message.", cancellationToken);
+
+    public Task<GsmSmsResult> SendAttendanceReminderAsync(
+        GsmModemSettings? settings, string phone, CancellationToken cancellationToken = default) =>
+        SendMessageAsync(settings, phone,
+            "Attendance reminder: your class has ended. No time-out was recorded, so you were marked Missing time-out. Contact your administrator if this is incorrect.",
+            cancellationToken);
+
+    public Task<GsmSmsResult> SendPasswordResetAsync(
+        GsmModemSettings? settings, string phone, string resetUrl, CancellationToken cancellationToken = default)
+    {
+        if (!Uri.TryCreate(resetUrl, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("http" or "https") ||
+            resetUrl.Any(char.IsControl))
+            return Task.FromResult(GsmSmsResult.InvalidInput);
+
+        var message = $"Reset your SmartClassAC password: {resetUrl} This link expires in 15 minutes and can be used once.";
+        return SendMessageAsync(settings, phone, message, cancellationToken);
+    }
 
     internal static bool IsAsciiMobile(string? phone) =>
         phone is { Length: 11 } && phone.StartsWith("09", StringComparison.Ordinal) && phone.All(char.IsAsciiDigit);

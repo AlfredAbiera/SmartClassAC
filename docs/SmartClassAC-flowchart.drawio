@@ -290,7 +290,7 @@
         <mxCell id="secF" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#8cbcf4;fontStyle=1;align=left;spacingLeft=12;fontColor=#1c2940;" value="F. Admin remote AC (parallel path)" vertex="1">
           <mxGeometry height="32" width="360" x="980" y="2550" as="geometry" />
         </mxCell>
-        <mxCell id="f1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#2378e6;" value="Admin → AC control&#xa;toggle per room" vertex="1">
+        <mxCell id="f1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf5ff;strokeColor=#2378e6;" value="Admin → Monitor&#xa;view room status" vertex="1">
           <mxGeometry height="55" width="220" x="1050" y="2620" as="geometry" />
         </mxCell>
         <mxCell id="f2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2378e6;align=left;spacingLeft=8;" value="On → RemoteOn (status Remote)&#xa;Off → RemoteOff (status Off)&#xa;write temperature log" vertex="1">

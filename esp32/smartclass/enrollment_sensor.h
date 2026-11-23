@@ -83,6 +83,13 @@ class CheckedSensor {
     return command(cmd, sizeof(cmd), reply, sizeof(reply));
   }
 
+  uint8_t deleteModel(uint16_t slot) {
+    if (slot == 0) return ProtocolError;
+    const uint8_t cmd[] = {0x0c, static_cast<uint8_t>(slot >> 8), static_cast<uint8_t>(slot), 0x00, 0x01};
+    uint8_t reply[1];
+    return command(cmd, sizeof(cmd), reply, sizeof(reply));
+  }
+
   uint8_t emptyDatabase() {
     const uint8_t cmd[] = {0x0d};
     uint8_t reply[1];

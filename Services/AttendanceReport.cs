@@ -134,9 +134,10 @@ internal static class AttendanceReport
             sheet.Cell(n, 7).Value = row.Verification;
             sheet.Cell(n, 8).Value = RowLabel(row);
         }
-        sheet.Row(1).Style.Font.Bold = true;
-        sheet.Row(14).Style.Font.Bold = true;
-        sheet.Columns(1, 8).AdjustToContents();
+        if (report.Rows.Count == 0)
+            sheet.Cell(15, 1).Value = "No attendance records match the selected filters.";
+        ReportFormatting.FormatWorkbook(sheet, 14, report.Rows.Count,
+            [14, 24, 18, 28, 20, 20, 16, 19], 1, 2, 3, 4);
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
         return stream.ToArray();
@@ -147,12 +148,9 @@ internal static class AttendanceReport
         static string E(string value) => WebUtility.HtmlEncode(value);
         var html = new StringBuilder("""
             <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Attendance report</title>
-            <link rel="stylesheet" href="/css/site.css"><link rel="stylesheet" href="/css/dashboard.css">
-            <style>body{font:14px Arial,sans-serif;margin:2rem;color:#111}table{border-collapse:collapse;width:100%;margin-top:1rem}
-            th,td{border:1px solid #bbb;padding:6px;text-align:left}th{background:#eee}h1{font-size:22px}
-            .summary{display:flex;flex-wrap:wrap;gap:1rem}.report-print-button{border:0}@media print{button{display:none}body{margin:0}thead{display:table-header-group}tr{break-inside:avoid}}</style>
-            </head><body><button type="button" class="primary-button report-print-button" onclick="window.print()">Print / save as PDF</button><h1>Attendance report</h1>
             """);
+        html.Append(ReportFormatting.PrintStyles);
+        html.Append("""</head><body><button type="button" class="report-print-button" onclick="window.print()">Print / save as PDF</button><h1>Attendance report</h1>""");
         html.Append("<p>Class dates: ").Append(report.Filter.From.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))
             .Append(" to ").Append(report.Filter.To.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)).Append("</p>")
             .Append("<p>").Append(E(FilterDescription(report))).Append("</p>")
@@ -160,7 +158,7 @@ internal static class AttendanceReport
             .Append("<div class=\"summary\"><strong>Total: ").Append(report.Rows.Count).Append("</strong>");
         foreach (var category in Outcomes)
             html.Append("<span>").Append(E(Label(category))).Append(": ").Append(report.Rows.Count(row => row.Outcome == category)).Append("</span>");
-        html.Append("</div><table><thead><tr><th>Class date</th><th>Teacher</th><th>Classroom</th><th>Subject</th><th>Time in</th><th>Time out</th><th>Verification</th><th>Outcome</th></tr></thead><tbody>");
+        html.Append("</div><table><colgroup><col style=\"width:10%\"><col style=\"width:14%\"><col style=\"width:10%\"><col style=\"width:15%\"><col style=\"width:14%\"><col style=\"width:14%\"><col style=\"width:10%\"><col style=\"width:13%\"></colgroup><thead><tr><th>Class date</th><th>Teacher</th><th>Classroom</th><th>Subject</th><th>Time in</th><th>Time out</th><th>Verification</th><th>Outcome</th></tr></thead><tbody>");
         foreach (var row in report.Rows)
         {
             string[] cells = [row.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), row.Teacher, row.Classroom,

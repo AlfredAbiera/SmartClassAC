@@ -9,9 +9,11 @@ internal sealed class PortalMobileOtp(IConfiguration configuration, GsmSmsTransp
     private string ConnectionString => configuration.GetConnectionString("SmartClassMariaDb")
         ?? throw new InvalidOperationException("Set ConnectionStrings:SmartClassMariaDb for mobile verification.");
 
-    internal async Task<OperationResult> IssueAsync(long actorId, string purpose, long targetId, string phone)
+    internal async Task<OperationResult> IssueAsync(long actorId, string purpose, long targetId, string phone,
+        string? binding = null, DateOnly? substitutionDate = null, TimeOnly? substitutionStart = null)
     {
-        if (actorId <= 0 || !ValidPurpose(purpose, targetId) || !GsmSmsTransport.IsAsciiMobile(phone))
+        if (actorId <= 0 || !ValidPurpose(purpose, targetId, binding) || !GsmSmsTransport.IsAsciiMobile(phone) ||
+            purpose is "substitute" or "attendance_in" or "attendance_out" && (substitutionDate is null || substitutionStart is null))
             return OperationResult.Failure("Enter a valid mobile number.");
         var secret = FacultyOtpProtocol.ReadKey(configuration["FacultyOtp:Secret"], "FacultyOtp:Secret");
         try
@@ -46,9 +48,12 @@ internal sealed class PortalMobileOtp(IConfiguration configuration, GsmSmsTransp
             {
                 await using var target = connection.CreateCommand();
                 target.Transaction = transaction;
-                target.CommandText = "SELECT id FROM user_accounts WHERE id = @id AND role = 'Teacher' AND is_active = TRUE FOR UPDATE;";
+                target.CommandText = purpose is "substitute" or "attendance_in" or "attendance_out"
+                    ? "SELECT id FROM class_schedules WHERE id = @id FOR UPDATE;"
+                    : "SELECT id FROM user_accounts WHERE id = @id AND role = 'Teacher' AND is_active = TRUE FOR UPDATE;";
                 target.Parameters.Add("@id", MySqlDbType.Int64).Value = targetId;
-                if (await target.ExecuteScalarAsync() is null) return OperationResult.Failure("Teacher account unavailable.");
+                if (await target.ExecuteScalarAsync() is null)
+                    return OperationResult.Failure(purpose == "substitute" ? "The schedule is no longer available." : "Teacher account unavailable.");
             }
             await using var invalidate = connection.CreateCommand();
             invalidate.Transaction = transaction;
@@ -79,14 +84,21 @@ internal sealed class PortalMobileOtp(IConfiguration configuration, GsmSmsTransp
             insert.Parameters.Add("@target", MySqlDbType.Int64).Value = targetId;
             insert.Parameters.Add("@request", MySqlDbType.Binary, 16).Value = requestId.ToByteArray();
             insert.Parameters.Add("@phone", MySqlDbType.Binary, 32).Value = phoneKey;
-            insert.Parameters.Add("@code", MySqlDbType.Binary, 32).Value = CodeTag(secret, requestId, code);
+            insert.Parameters.Add("@code", MySqlDbType.Binary, 32).Value = CodeTag(secret, requestId, code, binding);
             await insert.ExecuteNonQueryAsync();
             await transaction.CommitAsync();
             var accepted = false;
             GsmSmsResult result = GsmSmsResult.Unavailable;
             try
             {
-                result = await transport.SendOtpAsync(await new GsmModemSettingsStore(configuration).GetAsync(), phone, code);
+                var settings = await new GsmModemSettingsStore(configuration).GetAsync();
+                result = purpose switch
+                {
+                    "substitute" => await transport.SendSubstitutionOtpAsync(settings, phone, code, substitutionDate!.Value, substitutionStart!.Value),
+                    "attendance_in" or "attendance_out" => await transport.SendAttendanceOtpAsync(settings, phone, code,
+                        substitutionDate!.Value, substitutionStart!.Value, purpose == "attendance_in"),
+                    _ => await transport.SendOtpAsync(settings, phone, code)
+                };
                 accepted = result == GsmSmsResult.Accepted;
             }
             finally
@@ -112,12 +124,15 @@ internal sealed class PortalMobileOtp(IConfiguration configuration, GsmSmsTransp
         finally { CryptographicOperations.ZeroMemory(secret); }
     }
 
-    private static bool ValidPurpose(string purpose, long targetId) =>
-        purpose == "create" && targetId == 0 || purpose is "admin" or "self" && targetId > 0;
+    private static bool ValidPurpose(string purpose, long targetId, string? binding) =>
+        purpose is "substitute" or "attendance_in" or "attendance_out"
+            ? targetId > 0 && !string.IsNullOrEmpty(binding)
+            : binding is null && (purpose == "create" && targetId == 0 || purpose is "admin" or "self" && targetId > 0);
 
     private static byte[] Tag(byte[] secret, string value) =>
         HMACSHA256.HashData(secret, Encoding.UTF8.GetBytes("SmartClassAC:portal-mobile:v1:" + value));
-    private static byte[] CodeTag(byte[] secret, Guid id, string code) => Tag(secret, "code:" + id.ToString("N") + ":" + code);
+    private static byte[] CodeTag(byte[] secret, Guid id, string code, string? binding) =>
+        Tag(secret, "code:" + id.ToString("N") + ":" + code + (binding is null ? "" : ":" + binding));
 
     private static async Task<bool> IncrementAsync(MySqlConnection connection, MySqlTransaction transaction, byte[] key, int limit)
     {
@@ -137,9 +152,9 @@ internal sealed class PortalMobileOtp(IConfiguration configuration, GsmSmsTransp
 
     internal static async Task<bool> ConsumeAsync(MySqlConnection connection, MySqlTransaction transaction,
         IConfiguration configuration, long actorId, string purpose, long targetId, string phone, string? code,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string? binding = null)
     {
-        if (actorId <= 0 || !ValidPurpose(purpose, targetId) || !GsmSmsTransport.IsAsciiMobile(phone) ||
+        if (actorId <= 0 || !ValidPurpose(purpose, targetId, binding) || !GsmSmsTransport.IsAsciiMobile(phone) ||
             !MobileVerificationCodes.IsValid(code)) return false;
         var secret = FacultyOtpProtocol.ReadKey(configuration["FacultyOtp:Secret"], "FacultyOtp:Secret");
         try
@@ -169,7 +184,7 @@ internal sealed class PortalMobileOtp(IConfiguration configuration, GsmSmsTransp
                 expected = reader.GetFieldValue<byte[]>(2);
             }
             bool valid = CryptographicOperations.FixedTimeEquals(phoneKey, Tag(secret, "phone:" + phone)) &&
-                CryptographicOperations.FixedTimeEquals(expected, CodeTag(secret, new Guid(request), code));
+                CryptographicOperations.FixedTimeEquals(expected, CodeTag(secret, new Guid(request), code, binding));
             await using var update = connection.CreateCommand();
             update.Transaction = transaction;
             update.CommandText = valid

@@ -12,7 +12,6 @@ public sealed class AuthService : IAuthService
     private readonly PasswordHasher _passwordHasher;
     private readonly DefaultAdminOptions _defaultAdmin;
     private readonly PasswordResetOptions _passwordReset;
-    private readonly IPasswordResetEmailSender _passwordResetEmailSender;
     private readonly LoginAttemptLimiter _loginAttemptLimiter;
     private readonly SchoolTimeOptions _schoolTime;
     private readonly IConfiguration? _configuration;
@@ -24,7 +23,6 @@ public sealed class AuthService : IAuthService
         PasswordHasher passwordHasher,
         IOptions<DefaultAdminOptions> defaultAdmin,
         IOptions<PasswordResetOptions> passwordReset,
-        IPasswordResetEmailSender passwordResetEmailSender,
         LoginAttemptLimiter loginAttemptLimiter,
         IOptions<SchoolTimeOptions> schoolTime,
         IConfiguration? configuration = null,
@@ -34,7 +32,6 @@ public sealed class AuthService : IAuthService
         _passwordHasher = passwordHasher;
         _defaultAdmin = defaultAdmin.Value;
         _passwordReset = passwordReset.Value;
-        _passwordResetEmailSender = passwordResetEmailSender;
         _loginAttemptLimiter = loginAttemptLimiter;
         _schoolTime = schoolTime.Value;
         _configuration = configuration;
@@ -97,11 +94,11 @@ public sealed class AuthService : IAuthService
     public Task<AuthenticatedUser?> GetCurrentUserAsync() => Task.FromResult(_currentUser);
     public Task<bool> IsInitialAdminSetupRequiredAsync() => _accounts.IsInitialAdminSetupRequiredAsync();
 
-    public async Task<OperationResult> RequestPasswordResetAsync(string email)
+    public async Task<OperationResult> RequestPasswordResetAsync(string phone)
     {
-        if (!new EmailAddressAttribute().IsValid(email))
+        if (!MobilePhones.IsValid(phone))
         {
-            return OperationResult.Failure("Enter the registered email address for your account.");
+            return OperationResult.Failure(MobilePhones.RequirementMessage);
         }
 
         if (!Uri.TryCreate(_passwordReset.PublicBaseUrl, UriKind.Absolute, out var publicBaseUrl) ||
@@ -110,26 +107,28 @@ public sealed class AuthService : IAuthService
             return OperationResult.Failure("Password reset is not configured. Set PasswordReset:PublicBaseUrl in User Secrets.");
         }
 
-        var delivery = await _accounts.CreatePasswordResetAsync(email.Trim(), DateTimeOffset.UtcNow.AddMinutes(15));
+        var delivery = await _accounts.CreatePasswordResetAsync(MobilePhones.Normalize(phone), DateTimeOffset.UtcNow.AddMinutes(15));
         if (delivery is null)
         {
-            return OperationResult.Failure("No active account is registered with that email address.");
+            return OperationResult.Success();
         }
 
         var resetUrl = $"{publicBaseUrl.ToString().TrimEnd('/')}/reset-password?token={Uri.EscapeDataString(delivery.RawToken)}";
-        try
+        if (_services is null)
         {
-            await _passwordResetEmailSender.SendAsync(delivery.Email, resetUrl);
-            return OperationResult.Success();
+            return OperationResult.Failure("SMS recovery service is unavailable.");
         }
-        catch (InvalidOperationException exception)
+
+        var settings = await _services.GetRequiredService<GsmModemSettingsStore>().GetAsync();
+        var result = await _services.GetRequiredService<GsmSmsTransport>()
+            .SendPasswordResetAsync(settings, delivery.Phone, resetUrl);
+        return result switch
         {
-            return OperationResult.Failure(exception.Message);
-        }
-        catch
-        {
-            return OperationResult.Failure("The reset email could not be sent. Check the SMTP settings and try again.");
-        }
+            GsmSmsResult.Accepted => OperationResult.Success(),
+            GsmSmsResult.DeliveryUnknown => OperationResult.Failure("SMS delivery is uncertain. Check the phone before requesting another reset link."),
+            GsmSmsResult.NotConfigured => OperationResult.Failure("SMS recovery is not configured. Contact the system administrator."),
+            _ => OperationResult.Failure("The reset link could not be sent by SMS. Check the modem and try again.")
+        };
     }
 
     public async Task<OperationResult> ResetPasswordAsync(string token, string newPassword, string confirmPassword)
@@ -154,16 +153,16 @@ public sealed class AuthService : IAuthService
             : OperationResult.Failure("This reset link is invalid, expired, or has already been used.");
     }
 
-    public async Task<OperationResult> CompleteInitialAdminSetupAsync(string email)
+    public async Task<OperationResult> CompleteInitialAdminSetupAsync(string phone)
     {
-        if (!new EmailAddressAttribute().IsValid(email))
+        if (!MobilePhones.IsValid(phone))
         {
-            return OperationResult.Failure("Enter a valid administrator email address.");
+            return OperationResult.Failure(MobilePhones.RequirementMessage);
         }
 
-        return await _accounts.SetInitialAdminEmailAsync(email.Trim())
+        return await _accounts.SetInitialAdminPhoneAsync(MobilePhones.Normalize(phone))
             ? OperationResult.Success()
-            : OperationResult.Failure("Initial administrator setup has already been completed.");
+            : OperationResult.Failure("The administrator mobile number could not be saved. It may already be registered.");
     }
 
     public async Task<OperationResult> UpdateAdministratorPasswordAsync(string currentPassword, string newPassword)
@@ -197,6 +196,40 @@ public sealed class AuthService : IAuthService
         return await _services.GetRequiredService<PortalMobileOtp>().IssueAsync(actor.Id, purpose, teacherId ?? 0, MobilePhones.Normalize(phone));
     }
 
+    public async Task<OperationResult> RequestSubstitutionOtpAsync(long scheduleId, long substituteId)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return authorization;
+        if (_services is null) throw new InvalidOperationException("Substitution service is unavailable.");
+        return await _services.GetRequiredService<ScheduleSubstitutionService>().RequestAsync(_currentUser!.Id, scheduleId, substituteId);
+    }
+
+    public async Task<OperationResult> RequestAttendanceOtpAsync(long scheduleId, string action)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return authorization;
+        if (_services is null) throw new InvalidOperationException("Attendance verification service is unavailable.");
+        if (_configuration?.GetValue<bool>("AttendanceOtp:EnableDeviceApi") != true)
+            return OperationResult.Failure("Attendance OTP is disabled. Configure the scanner API before requesting a code.");
+        return await _services.GetRequiredService<AttendanceOtpService>().RequestAsync(_currentUser!.Id, scheduleId, action);
+    }
+
+    public async Task<OperationResult> ConfirmSubstitutionAsync(long scheduleId, long substituteId, string code)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return authorization;
+        if (_services is null) throw new InvalidOperationException("Substitution service is unavailable.");
+        return await _services.GetRequiredService<ScheduleSubstitutionService>().ConfirmAsync(_currentUser!.Id, scheduleId, substituteId, code);
+    }
+
+    public async Task<OperationResult> RemoveSubstitutionAsync(long scheduleId)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return authorization;
+        if (_services is null) throw new InvalidOperationException("Substitution service is unavailable.");
+        return await _services.GetRequiredService<ScheduleSubstitutionService>().RemoveAsync(_currentUser!.Id, scheduleId);
+    }
+
     public async Task<OperationResult> CreateTeacherAsync(CreateTeacherRequest request)
     {
         var authorization = RequireAdmin();
@@ -220,6 +253,28 @@ public sealed class AuthService : IAuthService
         };
 
         return await _accounts.CreateTeacherAsync(cleanRequest, _passwordHasher.Hash(request.Password));
+    }
+
+    public async Task<OperationResult> CreateImportedTeacherAsync(string name, string employeeNumber, string phone)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return authorization;
+        var request = new CreateTeacherRequest(name.Trim(), $"teacher-{Guid.NewGuid():N}", employeeNumber.Trim(),
+            null, phone.Trim(), $"A{Guid.NewGuid():N}a1");
+        var validation = TeacherAccountValidation.ValidateCreate(request);
+        if (!validation.Succeeded) return validation;
+        if (!GsmSmsTransport.IsAsciiMobile(request.Phone)) return OperationResult.Failure(MobilePhones.RequirementMessage);
+        if (_accounts is not MariaDbUserAccountRepository repository)
+            throw new InvalidOperationException("CSV teacher import requires the MariaDB repository.");
+        return await repository.CreateImportedTeacherAsync(request, _passwordHasher.Hash(request.Password));
+    }
+
+    public async Task<CsvImportResult> ImportCsvAsync(string kind, string csv)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return CsvImportResult.Failure(authorization.Error ?? "Administrator access required.");
+        if (_services is null) throw new InvalidOperationException("CSV import service is unavailable.");
+        return await _services.GetRequiredService<CsvImportService>().ImportAsync(kind, csv);
     }
 
     public async Task<OperationResult> UpdateAdminTeacherAsync(UpdateAdminTeacherRequest request)
@@ -340,7 +395,13 @@ public sealed class AuthService : IAuthService
             : OperationResult.Failure(result.Error ?? "Schedule could not be saved.");
     }
 
-    public async Task<CreateSchedulesResult> CreateSchedulesAsync(CreateScheduleRequest request)
+    public Task<CreateSchedulesResult> CreateSchedulesAsync(CreateScheduleRequest request)
+        => CreateSchedulesCoreAsync(request, false);
+
+    public Task<CreateSchedulesResult> CreateImportedSchedulesAsync(CreateScheduleRequest request)
+        => CreateSchedulesCoreAsync(request, true);
+
+    private async Task<CreateSchedulesResult> CreateSchedulesCoreAsync(CreateScheduleRequest request, bool autoEnroll)
     {
         var authorization = RequireAdmin();
         if (authorization is not null)
@@ -363,6 +424,11 @@ public sealed class AuthService : IAuthService
             return CreateSchedulesResult.Failure("Schedule kind must be Regular or Makeup.");
         }
 
+        if ((request.ScheduleKind == ScheduleKinds.Makeup) != (request.ReplacesScheduleId is > 0))
+        {
+            return CreateSchedulesResult.Failure("Makeup schedules must select one original class occurrence to replace.");
+        }
+
         if (string.IsNullOrWhiteSpace(request.SubjectName) || request.SubjectName.Trim().Length > 160)
         {
             return CreateSchedulesResult.Failure("Enter a class subject of 160 characters or fewer.");
@@ -376,14 +442,22 @@ public sealed class AuthService : IAuthService
         var pattern = string.IsNullOrWhiteSpace(request.RecurrencePattern)
             ? ScheduleRecurrence.None
             : request.RecurrencePattern.Trim();
+        if (request.ScheduleKind == ScheduleKinds.Makeup && pattern != ScheduleRecurrence.None)
+        {
+            return CreateSchedulesResult.Failure("A makeup replacement is a single class occurrence and cannot repeat.");
+        }
 
-        return await _accounts.CreateSchedulesAsync(request with
+        var clean = request with
         {
             SubjectName = request.SubjectName.Trim(),
             ScheduleKind = request.ScheduleKind.Trim(),
             RecurrencePattern = pattern,
             CustomWeekdays = pattern == ScheduleRecurrence.Custom ? request.CustomWeekdays : null
-        });
+        };
+        if (!autoEnroll) return await _accounts.CreateSchedulesAsync(clean);
+        if (_accounts is not MariaDbUserAccountRepository repository)
+            throw new InvalidOperationException("CSV schedule import requires the MariaDB repository.");
+        return await repository.CreateImportedSchedulesAsync(clean);
     }
 
     public async Task<OperationResult> MoveScheduleAsync(MoveScheduleRequest request)
@@ -789,6 +863,34 @@ public sealed class AuthService : IAuthService
         if (teacherId <= 0)
             throw new ArgumentOutOfRangeException(nameof(teacherId));
         return await _accounts.GetTeacherFingerprintsAsync(teacherId);
+    }
+
+    public async Task<OperationResult> RenameTeacherFingerprintAsync(long teacherId, long slot, string currentFinger, string newFinger)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return authorization;
+        if (teacherId <= 0 || slot <= 0 || slot > ushort.MaxValue ||
+            !FingerprintSlots.IsValid(currentFinger) || !FingerprintSlots.IsValid(newFinger))
+            return OperationResult.Failure("Select a valid teacher, fingerprint and finger label.");
+        return await _accounts.RenameTeacherFingerprintAsync(teacherId, slot, currentFinger, newFinger);
+    }
+
+    public async Task<OperationResult> RequestFingerprintDeletionAsync(long teacherId, long slot, string fingerPosition, string deviceId)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return authorization;
+        if (_configuration is null) throw new InvalidOperationException("Fingerprint deletion configuration is unavailable.");
+        return await new FingerprintDeletionService(_configuration).RequestAsync(_currentUser!.Id, teacherId, slot, fingerPosition, deviceId);
+    }
+
+    public async Task<OperationResult> CancelFingerprintDeletionAsync(long teacherId, long slot, string requestId)
+    {
+        var authorization = RequireAdmin();
+        if (authorization is not null) return authorization;
+        if (teacherId <= 0 || slot is <= 0 or > ushort.MaxValue || !Guid.TryParseExact(requestId, "D", out var id) || id == Guid.Empty)
+            return OperationResult.Failure("Select a valid teacher and fingerprint slot.");
+        if (_configuration is null) throw new InvalidOperationException("Fingerprint deletion configuration is unavailable.");
+        return await new FingerprintDeletionService(_configuration).CancelAsync(teacherId, slot, id);
     }
 
     public async Task<IReadOnlyList<FingerprintEnrollmentPreparation>> GetFingerprintEnrollmentPreparationsAsync()

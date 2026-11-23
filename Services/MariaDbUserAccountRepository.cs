@@ -86,6 +86,95 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         }
     }
 
+    public async Task<IReadOnlyList<MissingTimeOutNotification>> ClaimMissingTimeOutNotificationsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            await using (var expireClaims = connection.CreateCommand())
+            {
+                expireClaims.Transaction = transaction;
+                expireClaims.CommandText = """
+                    UPDATE attendance_logs
+                    SET missing_time_out_sms_status = 'Unknown'
+                    WHERE missing_time_out_sms_status = 'Sending'
+                      AND missing_time_out_sms_attempted_utc <= DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 10 MINUTE);
+                    """;
+                await expireClaims.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using var find = connection.CreateCommand();
+            find.Transaction = transaction;
+            find.CommandText = """
+                SELECT a.id, CASE WHEN teacher.phone_verified THEN teacher.phone ELSE NULL END
+                FROM attendance_logs a
+                INNER JOIN user_accounts teacher ON teacher.id = a.teacher_account_id
+                INNER JOIN class_schedules schedule ON schedule.id = a.class_schedule_id
+                WHERE a.outcome = 'MissingTimeOut'
+                  AND a.missing_time_out_sms_status IN ('Pending', 'Failed')
+                  AND (a.missing_time_out_sms_attempted_utc IS NULL
+                       OR a.missing_time_out_sms_attempted_utc <= DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 30 MINUTE))
+                ORDER BY a.id
+                LIMIT 50
+                FOR UPDATE;
+                """;
+
+            var notifications = new List<MissingTimeOutNotification>();
+            await using (var reader = await find.ExecuteReaderAsync(cancellationToken))
+            {
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    notifications.Add(new MissingTimeOutNotification(
+                        reader.GetInt64(0),
+                        reader.IsDBNull(1) ? null : reader.GetString(1)));
+                }
+            }
+
+            foreach (var notification in notifications)
+            {
+                await using var claim = connection.CreateCommand();
+                claim.Transaction = transaction;
+                claim.CommandText = """
+                    UPDATE attendance_logs
+                    SET missing_time_out_sms_status = 'Sending',
+                        missing_time_out_sms_attempted_utc = UTC_TIMESTAMP(6)
+                    WHERE id = @id AND outcome = 'MissingTimeOut'
+                      AND missing_time_out_sms_status IN ('Pending', 'Failed');
+                    """;
+                claim.Parameters.Add("@id", MySqlDbType.Int64).Value = notification.AttendanceId;
+                await claim.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return notifications;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    public async Task CompleteMissingTimeOutNotificationAsync(
+        long attendanceId, string status, CancellationToken cancellationToken = default)
+    {
+        if (attendanceId <= 0 || status is not ("Sent" or "Failed" or "Unknown" or "Skipped"))
+            throw new ArgumentOutOfRangeException(nameof(status), "Invalid missing-time-out SMS status.");
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE attendance_logs
+            SET missing_time_out_sms_status = @status
+            WHERE id = @id AND missing_time_out_sms_status = 'Sending';
+            """;
+        command.Parameters.Add("@status", MySqlDbType.VarChar).Value = status;
+        command.Parameters.Add("@id", MySqlDbType.Int64).Value = attendanceId;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private static IEnumerable<string> SplitSqlStatements(string sql)
     {
         var statements = new List<string>();
@@ -165,16 +254,16 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT EXISTS(SELECT 1 FROM user_accounts WHERE is_default_admin = TRUE AND email IS NULL) AS required;";
+        command.CommandText = "SELECT EXISTS(SELECT 1 FROM user_accounts WHERE is_default_admin = TRUE AND (phone IS NULL OR phone = '')) AS required;";
         return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken) ?? 0L) != 0;
     }
 
-    public async Task<bool> SetInitialAdminEmailAsync(string email, CancellationToken cancellationToken = default)
+    public async Task<bool> SetInitialAdminPhoneAsync(string phone, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = "UPDATE user_accounts SET email = @email WHERE is_default_admin = TRUE AND email IS NULL;";
-        command.Parameters.Add("@email", MySqlDbType.VarChar).Value = email;
+        command.CommandText = "UPDATE user_accounts SET phone = @phone WHERE is_default_admin = TRUE AND (phone IS NULL OR phone = '');";
+        command.Parameters.Add("@phone", MySqlDbType.VarChar).Value = phone;
         try
         {
             return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
@@ -198,6 +287,12 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
     }
 
     public async Task<OperationResult> CreateTeacherAsync(CreateTeacherRequest request, string passwordHash, CancellationToken cancellationToken = default)
+        => await CreateTeacherCoreAsync(request, passwordHash, true, cancellationToken);
+
+    internal async Task<OperationResult> CreateImportedTeacherAsync(CreateTeacherRequest request, string passwordHash, CancellationToken cancellationToken = default)
+        => await CreateTeacherCoreAsync(request, passwordHash, false, cancellationToken);
+
+    private async Task<OperationResult> CreateTeacherCoreAsync(CreateTeacherRequest request, string passwordHash, bool phoneVerified, CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -212,8 +307,8 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             await using var account = connection.CreateCommand();
             account.Transaction = transaction;
             account.CommandText = @"
-                INSERT INTO user_accounts (username, display_name, employee_number, device_pin, email, phone, password_hash, role)
-                VALUES (@username, @displayName, @employeeNumber, @devicePin, @email, @phone, @passwordHash, 'Teacher');";
+                INSERT INTO user_accounts (username, display_name, employee_number, device_pin, email, phone, password_hash, role, phone_verified)
+                VALUES (@username, @displayName, @employeeNumber, @devicePin, @email, @phone, @passwordHash, 'Teacher', @verified);";
             account.Parameters.Add("@username", MySqlDbType.VarChar).Value = request.Username;
             account.Parameters.Add("@displayName", MySqlDbType.VarChar).Value = request.DisplayName;
             account.Parameters.Add("@employeeNumber", MySqlDbType.VarChar).Value = request.EmployeeNumber;
@@ -221,6 +316,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             account.Parameters.AddWithValue("@email", (object?)request.Email ?? DBNull.Value);
             account.Parameters.Add("@phone", MySqlDbType.VarChar).Value = request.Phone;
             account.Parameters.Add("@passwordHash", MySqlDbType.VarChar).Value = passwordHash;
+            account.Parameters.Add("@verified", MySqlDbType.Bool).Value = phoneVerified;
             await account.ExecuteNonQueryAsync(cancellationToken);
             var teacherId = account.LastInsertedId;
             if (teacherId <= 0)
@@ -256,11 +352,17 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         {
             await using var existingPhone = connection.CreateCommand();
             existingPhone.Transaction = transaction;
-            existingPhone.CommandText = "SELECT COALESCE(phone, '') FROM user_accounts WHERE id=@id AND role='Teacher' AND is_active=TRUE FOR UPDATE;";
+            existingPhone.CommandText = "SELECT COALESCE(phone, ''), phone_verified FROM user_accounts WHERE id=@id AND role='Teacher' AND is_active=TRUE FOR UPDATE;";
             existingPhone.Parameters.Add("@id", MySqlDbType.Int64).Value = request.AccountId;
-            var oldPhone = await existingPhone.ExecuteScalarAsync(cancellationToken) as string;
-            if (oldPhone is null) return OperationResult.Failure("The teacher account was not found.");
-            if (!string.Equals(oldPhone, request.Phone, StringComparison.Ordinal) &&
+            string oldPhone;
+            bool phoneVerified;
+            await using (var reader = await existingPhone.ExecuteReaderAsync(cancellationToken))
+            {
+                if (!await reader.ReadAsync(cancellationToken)) return OperationResult.Failure("The teacher account was not found.");
+                oldPhone = reader.GetString(0);
+                phoneVerified = reader.GetBoolean(1);
+            }
+            if ((!phoneVerified || !string.Equals(oldPhone, request.Phone, StringComparison.Ordinal)) &&
                 !await PortalMobileOtp.ConsumeAsync(connection, transaction, _configuration, request.VerificationActorId,
                     "admin", request.AccountId, request.Phone, request.MobileOtp, cancellationToken))
             {
@@ -290,14 +392,14 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             {
                 command.CommandText = @"
                     UPDATE user_accounts
-                    SET display_name = @displayName, username = @username, employee_number = @employeeNumber, email = @email, phone = @phone
+                    SET display_name = @displayName, username = @username, employee_number = @employeeNumber, email = @email, phone = @phone, phone_verified = TRUE
                     WHERE id = @id AND role = 'Teacher' AND is_active = TRUE;";
             }
             else if (passwordHash is not null && devicePin is null)
             {
                 command.CommandText = @"
                     UPDATE user_accounts
-                    SET display_name = @displayName, username = @username, employee_number = @employeeNumber, email = @email, phone = @phone, password_hash = @passwordHash
+                    SET display_name = @displayName, username = @username, employee_number = @employeeNumber, email = @email, phone = @phone, phone_verified = TRUE, password_hash = @passwordHash
                     WHERE id = @id AND role = 'Teacher' AND is_active = TRUE;";
                 command.Parameters.Add("@passwordHash", MySqlDbType.VarChar).Value = passwordHash;
             }
@@ -305,7 +407,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             {
                 command.CommandText = @"
                     UPDATE user_accounts
-                    SET display_name = @displayName, username = @username, employee_number = @employeeNumber, email = @email, phone = @phone, device_pin = @devicePin
+                    SET display_name = @displayName, username = @username, employee_number = @employeeNumber, email = @email, phone = @phone, phone_verified = TRUE, device_pin = @devicePin
                     WHERE id = @id AND role = 'Teacher' AND is_active = TRUE;";
                 command.Parameters.Add("@devicePin", MySqlDbType.VarChar).Value = devicePin;
             }
@@ -313,7 +415,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             {
                 command.CommandText = @"
                     UPDATE user_accounts
-                    SET display_name = @displayName, username = @username, employee_number = @employeeNumber, email = @email, phone = @phone, device_pin = @devicePin, password_hash = @passwordHash
+                    SET display_name = @displayName, username = @username, employee_number = @employeeNumber, email = @email, phone = @phone, phone_verified = TRUE, device_pin = @devicePin, password_hash = @passwordHash
                     WHERE id = @id AND role = 'Teacher' AND is_active = TRUE;";
                 command.Parameters.Add("@devicePin", MySqlDbType.VarChar).Value = devicePin!;
                 command.Parameters.Add("@passwordHash", MySqlDbType.VarChar).Value = passwordHash!;
@@ -383,10 +485,10 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = @"
-            SELECT u.id, u.display_name, u.username, u.employee_number, u.email, u.phone, COUNT(f.id), u.is_active
+            SELECT u.id, u.display_name, u.username, u.employee_number, u.email, u.phone, COUNT(f.id), u.is_active, u.phone_verified
             FROM user_accounts u LEFT JOIN fingerprint_templates f ON f.user_account_id = u.id
             WHERE u.role = 'Teacher'
-            GROUP BY u.id, u.display_name, u.username, u.employee_number, u.email, u.phone, u.is_active
+            GROUP BY u.id, u.display_name, u.username, u.employee_number, u.email, u.phone, u.is_active, u.phone_verified
             ORDER BY u.is_active DESC, u.display_name;";
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
@@ -399,7 +501,8 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 reader.IsDBNull(4) ? null : reader.GetString(4),
                 reader.IsDBNull(5) ? null : reader.GetString(5),
                 Convert.ToInt32(reader.GetValue(6)),
-                reader.GetBoolean(7)));
+                reader.GetBoolean(7),
+                reader.GetBoolean(8)));
         }
         return items;
     }
@@ -625,11 +728,38 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             : OperationResult.Failure(result.Error ?? "Schedule could not be saved.");
     }
 
-    public async Task<CreateSchedulesResult> CreateSchedulesAsync(CreateScheduleRequest request, CancellationToken cancellationToken = default)
+    public Task<CreateSchedulesResult> CreateSchedulesAsync(CreateScheduleRequest request, CancellationToken cancellationToken = default)
+        => CreateSchedulesCoreAsync(request, false, cancellationToken);
+
+    internal Task<CreateSchedulesResult> CreateImportedSchedulesAsync(CreateScheduleRequest request, CancellationToken cancellationToken = default)
+        => CreateSchedulesCoreAsync(request, true, cancellationToken);
+
+    private async Task<CreateSchedulesResult> CreateSchedulesCoreAsync(CreateScheduleRequest request, bool autoEnroll, CancellationToken cancellationToken)
     {
         if (!ScheduleKinds.IsValid(request.ScheduleKind))
         {
             return CreateSchedulesResult.Failure("Schedule kind must be Regular or Makeup.");
+        }
+
+        var isMakeup = request.ScheduleKind == ScheduleKinds.Makeup;
+        if (isMakeup != (request.ReplacesScheduleId is > 0))
+        {
+            return CreateSchedulesResult.Failure("Select the original class occurrence that this makeup schedule replaces.");
+        }
+
+        if (isMakeup)
+        {
+            var today = SchoolClock.Today(_schoolTime);
+            if (request.ScheduleDate < today || request.ScheduleDate > today.AddDays(7))
+            {
+                return CreateSchedulesResult.Failure("A makeup schedule must replace a class occurrence within the next 7 days.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.RecurrencePattern) &&
+                request.RecurrencePattern != ScheduleRecurrence.None)
+            {
+                return CreateSchedulesResult.Failure("A makeup replacement is a single class occurrence and cannot repeat.");
+            }
         }
 
         if (request.SemesterId <= 0)
@@ -691,11 +821,67 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 }
             }
 
+            if (isMakeup)
+            {
+                await using var original = connection.CreateCommand();
+                original.Transaction = transaction;
+                original.CommandText = """
+                    SELECT schedule_date, schedule_kind, semester_id, start_time,
+                           EXISTS (SELECT 1 FROM attendance_logs attendance
+                                   WHERE attendance.class_schedule_id = schedule.id),
+                           EXISTS (SELECT 1 FROM class_schedules replacement
+                                   WHERE replacement.replaces_schedule_id = schedule.id)
+                    FROM class_schedules schedule
+                    WHERE schedule.id = @scheduleId
+                    FOR UPDATE;
+                    """;
+                original.Parameters.Add("@scheduleId", MySqlDbType.Int64).Value = request.ReplacesScheduleId!.Value;
+                await using var reader = await original.ExecuteReaderAsync(cancellationToken);
+                if (!await reader.ReadAsync(cancellationToken))
+                {
+                    await reader.DisposeAsync();
+                    await transaction.RollbackAsync(cancellationToken);
+                    return CreateSchedulesResult.Failure("The original schedule occurrence was not found.");
+                }
+
+                var originalDate = reader.GetFieldValue<DateOnly>(0);
+                var originalKind = reader.GetString(1);
+                var originalSemesterId = reader.IsDBNull(2) ? 0 : reader.GetInt64(2);
+                var originalStart = TimeOnly.FromTimeSpan(reader.GetTimeSpan(3));
+                var hasAttendance = reader.GetBoolean(4);
+                var alreadyReplaced = reader.GetBoolean(5);
+                await reader.DisposeAsync();
+
+                var now = SchoolClock.GetNow(_schoolTime);
+                if (originalKind != ScheduleKinds.Regular || originalDate != request.ScheduleDate ||
+                    originalSemesterId != request.SemesterId || hasAttendance || alreadyReplaced ||
+                    (originalDate == DateOnly.FromDateTime(now) && originalStart <= TimeOnly.FromDateTime(now)))
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return CreateSchedulesResult.Failure(
+                        "Choose an unreplaced, not-yet-started regular class on the selected date and semester.");
+                }
+            }
+
             var dates = ScheduleRecurrence.ExpandDates(request.ScheduleDate, semesterEnd, pattern, request.CustomWeekdays);
             if (dates.Count == 0)
             {
                 await transaction.RollbackAsync(cancellationToken);
                 return CreateSchedulesResult.Failure("No schedule dates fall between the start date and the semester end.");
+            }
+
+            if (autoEnroll)
+            {
+                await using var enroll = connection.CreateCommand();
+                enroll.Transaction = transaction;
+                enroll.CommandText = """
+                    INSERT INTO teacher_semesters (teacher_account_id, semester_id)
+                    SELECT id, @semesterId FROM user_accounts WHERE id=@teacherId AND role='Teacher' AND is_active=TRUE
+                    ON DUPLICATE KEY UPDATE teacher_account_id=VALUES(teacher_account_id);
+                    """;
+                enroll.Parameters.Add("@teacherId", MySqlDbType.Int64).Value = request.TeacherAccountId;
+                enroll.Parameters.Add("@semesterId", MySqlDbType.Int64).Value = request.SemesterId;
+                await enroll.ExecuteNonQueryAsync(cancellationToken);
             }
 
             await using (var enrolled = connection.CreateCommand())
@@ -746,6 +932,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                     SELECT EXISTS(
                         SELECT 1 FROM class_schedules
                         WHERE schedule_date = @date
+                          AND (@replacesScheduleId IS NULL OR id <> @replacesScheduleId)
                           AND (teacher_account_id = @teacherId OR classroom_id = @classroomId)
                           AND start_time < @endTime AND end_time > @startTime
                     );";
@@ -761,9 +948,9 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 create.CommandText = @"
                     INSERT INTO class_schedules (
                         teacher_account_id, original_teacher_account_id, classroom_id, classroom_name,
-                        semester_id, schedule_kind, subject_name, schedule_date, start_time, end_time)
+                        semester_id, schedule_kind, replaces_schedule_id, subject_name, schedule_date, start_time, end_time)
                     SELECT teacher.id, teacher.id, classroom.id, classroom.name,
-                           @semesterId, @scheduleKind, @subject, @date, @startTime, @endTime
+                           @semesterId, @scheduleKind, @replacesScheduleId, @subject, @date, @startTime, @endTime
                     FROM user_accounts teacher CROSS JOIN classrooms classroom
                     WHERE teacher.id = @teacherId AND teacher.role = 'Teacher' AND teacher.is_active = TRUE
                       AND classroom.id = @classroomId AND classroom.is_active = TRUE;";
@@ -789,6 +976,11 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
 
             await transaction.CommitAsync(cancellationToken);
             return CreateSchedulesResult.Success(created, skipped);
+        }
+        catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry && isMakeup)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return CreateSchedulesResult.Failure("This original class occurrence already has a makeup schedule.");
         }
         catch
         {
@@ -1035,7 +1227,8 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             {
                 load.Transaction = transaction;
                 load.CommandText = @"
-                    SELECT teacher_account_id, classroom_id, semester_id
+                    SELECT teacher_account_id, classroom_id, semester_id,
+                           COALESCE(original_teacher_account_id, teacher_account_id)
                     FROM class_schedules
                     WHERE id = @id
                     FOR UPDATE;";
@@ -1050,6 +1243,12 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 teacherId = reader.GetInt64(0);
                 classroomId = reader.GetInt64(1);
                 semesterId = reader.IsDBNull(2) ? null : reader.GetInt64(2);
+                if (teacherId != reader.GetInt64(3))
+                {
+                    await reader.DisposeAsync();
+                    await transaction.RollbackAsync(cancellationToken);
+                    return OperationResult.Failure("A substituted class cannot be moved. Remove the substitution before attendance is recorded and before the class ends.");
+                }
             }
 
             await using (var active = connection.CreateCommand())
@@ -1065,6 +1264,27 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 {
                     await transaction.RollbackAsync(cancellationToken);
                     return OperationResult.Failure("This schedule has an active class session and cannot be moved until it ends.");
+                }
+            }
+
+            await using (var replacement = connection.CreateCommand())
+            {
+                replacement.Transaction = transaction;
+                replacement.CommandText = """
+                    SELECT EXISTS(
+                        SELECT 1 FROM class_schedules schedule
+                        WHERE schedule.id = @id
+                          AND (schedule.replaces_schedule_id IS NOT NULL OR EXISTS(
+                                SELECT 1 FROM class_schedules makeup
+                                WHERE makeup.replaces_schedule_id = schedule.id
+                          ))
+                    );
+                    """;
+                replacement.Parameters.Add("@id", MySqlDbType.Int64).Value = request.ScheduleId;
+                if (Convert.ToInt64(await replacement.ExecuteScalarAsync(cancellationToken) ?? 0L) != 0)
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    return OperationResult.Failure("Delete this makeup replacement before moving either schedule.");
                 }
             }
 
@@ -1133,7 +1353,8 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                     UPDATE class_schedules
                     SET schedule_date = @date,
                         start_time = @startTime,
-                        end_time = @endTime
+                        end_time = @endTime,
+                        substitution_version = substitution_version + 1
                     WHERE id = @id;";
                 update.Parameters.Add("@id", MySqlDbType.Int64).Value = request.ScheduleId;
                 update.Parameters.Add("@date", MySqlDbType.Date).Value = request.ScheduleDate;
@@ -1167,24 +1388,24 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             : OperationResult.Failure("The schedule was not found.");
     }
 
-    public async Task<PasswordResetDelivery?> CreatePasswordResetAsync(string email, DateTimeOffset expiresUtc, CancellationToken cancellationToken = default)
+    public async Task<PasswordResetDelivery?> CreatePasswordResetAsync(string phone, DateTimeOffset expiresUtc, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
             long accountId;
-            string recipient;
+            string recipientPhone;
             await using (var find = connection.CreateCommand())
             {
                 find.Transaction = transaction;
                 find.CommandText = @"
-                    SELECT id, email
+                    SELECT id, phone
                     FROM user_accounts
-                    WHERE LOWER(email) = LOWER(@email) AND role = 'Admin' AND is_active = TRUE
+                    WHERE phone = @phone AND role = 'Admin' AND is_default_admin = TRUE AND is_active = TRUE
                     LIMIT 1
                     FOR UPDATE;";
-                find.Parameters.Add("@email", MySqlDbType.VarChar).Value = email;
+                find.Parameters.Add("@phone", MySqlDbType.VarChar).Value = phone;
                 await using var reader = await find.ExecuteReaderAsync(cancellationToken);
                 if (!await reader.ReadAsync(cancellationToken))
                 {
@@ -1193,7 +1414,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 }
 
                 accountId = reader.GetInt64(0);
-                recipient = reader.GetString(1);
+                recipientPhone = reader.GetString(1);
             }
 
             var rawToken = CreateSecureToken();
@@ -1223,7 +1444,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             }
 
             await transaction.CommitAsync(cancellationToken);
-            return new PasswordResetDelivery(recipient, rawToken);
+            return new PasswordResetDelivery(recipientPhone, rawToken);
         }
         catch
         {
@@ -1330,11 +1551,17 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using var existing = connection.CreateCommand();
         existing.Transaction = transaction;
-        existing.CommandText = "SELECT COALESCE(phone, '') FROM user_accounts WHERE id=@id AND role='Teacher' AND is_active=TRUE FOR UPDATE;";
+        existing.CommandText = "SELECT COALESCE(phone, ''), phone_verified FROM user_accounts WHERE id=@id AND role='Teacher' AND is_active=TRUE FOR UPDATE;";
         existing.Parameters.Add("@id", MySqlDbType.Int64).Value = accountId;
-        var oldPhone = await existing.ExecuteScalarAsync(cancellationToken) as string;
-        if (oldPhone is null) return OperationResult.Failure("Your teacher account was not found.");
-        if (!string.Equals(oldPhone, request.Phone, StringComparison.Ordinal) &&
+        string oldPhone;
+        bool phoneVerified;
+        await using (var reader = await existing.ExecuteReaderAsync(cancellationToken))
+        {
+            if (!await reader.ReadAsync(cancellationToken)) return OperationResult.Failure("Your teacher account was not found.");
+            oldPhone = reader.GetString(0);
+            phoneVerified = reader.GetBoolean(1);
+        }
+        if ((!phoneVerified || !string.Equals(oldPhone, request.Phone, StringComparison.Ordinal)) &&
             !await PortalMobileOtp.ConsumeAsync(connection, transaction, _configuration, accountId, "self", accountId,
                 request.Phone, request.MobileOtp, cancellationToken))
         {
@@ -1344,8 +1571,8 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = passwordHash is null
-            ? "UPDATE user_accounts SET display_name = @name, email = @email, phone = @phone, device_pin = @devicePin WHERE id = @id AND role = 'Teacher' AND is_active = TRUE;"
-            : "UPDATE user_accounts SET display_name = @name, email = @email, phone = @phone, device_pin = @devicePin, password_hash = @passwordHash WHERE id = @id AND role = 'Teacher' AND is_active = TRUE;";
+            ? "UPDATE user_accounts SET display_name = @name, email = @email, phone = @phone, phone_verified = TRUE, device_pin = @devicePin WHERE id = @id AND role = 'Teacher' AND is_active = TRUE;"
+            : "UPDATE user_accounts SET display_name = @name, email = @email, phone = @phone, phone_verified = TRUE, device_pin = @devicePin, password_hash = @passwordHash WHERE id = @id AND role = 'Teacher' AND is_active = TRUE;";
         command.Parameters.Add("@id", MySqlDbType.Int64).Value = accountId;
         command.Parameters.Add("@name", MySqlDbType.VarChar).Value = request.DisplayName;
         command.Parameters.AddWithValue("@email", (object?)request.Email ?? DBNull.Value);
@@ -1399,18 +1626,42 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
 
     public async Task<OperationResult> StartClassAsync(long teacherAccountId, long scheduleId, DateOnly schoolDate, TimeOnly schoolTime, CancellationToken cancellationToken = default, string verificationMethod = "Biometric / dashboard verification")
     {
-        var lateGraceSeconds = Math.Max(0, _schoolTime.LateGraceMinutes) * 60;
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            var result = await StartClassInTransactionAsync(connection, transaction, teacherAccountId, scheduleId,
+                schoolDate, schoolTime, verificationMethod, false, cancellationToken);
+            if (result.Succeeded) await transaction.CommitAsync(cancellationToken);
+            else await transaction.RollbackAsync(cancellationToken);
+            return result;
+        }
+        catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return OperationResult.Failure("This teacher already has an active class.");
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    internal async Task<OperationResult> StartClassInTransactionAsync(
+        MySqlConnection connection, MySqlTransaction transaction, long teacherAccountId, long scheduleId,
+        DateOnly schoolDate, TimeOnly schoolTime, string verificationMethod, bool approvedAttendanceOtp,
+        CancellationToken cancellationToken)
+    {
+            var lateGraceSeconds = Math.Max(0, _schoolTime.LateGraceMinutes) * 60;
             await using var start = connection.CreateCommand();
             start.Transaction = transaction;
             start.CommandText = @"
                 INSERT INTO attendance_logs (class_schedule_id, teacher_account_id, classroom_id, verification_method, outcome, time_in_utc)
                 SELECT schedule.id, schedule.teacher_account_id, schedule.classroom_id, @verificationMethod,
                        CASE
-                           WHEN @schoolTime > ADDTIME(schedule.start_time, SEC_TO_TIME(@lateGraceSeconds))
+                           WHEN TIMESTAMP(@schoolDate, @schoolTime) >
+                                ADDTIME(TIMESTAMP(schedule.schedule_date, schedule.start_time), SEC_TO_TIME(@lateGraceSeconds))
                                THEN 'Late'
                            ELSE 'OnTime'
                        END,
@@ -1421,11 +1672,17 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                     ON enrollment.semester_id = schedule.semester_id
                    AND enrollment.teacher_account_id = schedule.teacher_account_id
                 WHERE schedule.id = @scheduleId AND schedule.teacher_account_id = @teacherId
-                                    AND schedule.schedule_date = @schoolDate
-                                    AND @schoolTime >= schedule.start_time
-                                    AND @schoolTime < schedule.end_time
+                                    AND (COALESCE(schedule.original_teacher_account_id, schedule.teacher_account_id) = schedule.teacher_account_id
+                                         OR (schedule.substitution_verified = TRUE AND (@verificationMethod = 'Biometric / fingerprint scanner' OR @approvedAttendanceOtp = TRUE)))
+                                    AND schedule.schedule_date BETWEEN @schoolDate AND DATE_ADD(@schoolDate, INTERVAL 1 DAY)
+                                    AND TIMESTAMP(@schoolDate, @schoolTime) >= DATE_SUB(TIMESTAMP(schedule.schedule_date, schedule.start_time), INTERVAL 15 MINUTE)
+                                    AND TIMESTAMP(@schoolDate, @schoolTime) < TIMESTAMP(schedule.schedule_date, schedule.end_time)
                                     AND schedule.classroom_id IS NOT NULL
-                                    AND @schoolDate BETWEEN semester.start_date AND semester.end_date
+                                    AND schedule.schedule_date BETWEEN semester.start_date AND semester.end_date
+                                    AND NOT EXISTS (
+                                            SELECT 1 FROM class_schedules replacement
+                                            WHERE replacement.replaces_schedule_id = schedule.id
+                                    )
                                     AND NOT EXISTS (
                                             SELECT 1
                                             FROM attendance_logs active
@@ -1442,11 +1699,11 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             start.Parameters.Add("@schoolDate", MySqlDbType.Date).Value = schoolDate;
             start.Parameters.Add("@schoolTime", MySqlDbType.Time).Value = schoolTime;
             start.Parameters.Add("@verificationMethod", MySqlDbType.VarChar).Value = verificationMethod;
+            start.Parameters.Add("@approvedAttendanceOtp", MySqlDbType.Bool).Value = approvedAttendanceOtp;
             start.Parameters.Add("@lateGraceSeconds", MySqlDbType.Int32).Value = lateGraceSeconds;
             start.Parameters.Add("@recordedAt", MySqlDbType.DateTime).Value = SchoolNow();
             if (await start.ExecuteNonQueryAsync(cancellationToken) != 1)
             {
-                await transaction.RollbackAsync(cancellationToken);
                 return OperationResult.Failure("Choose one of your schedules for today that has not already started.");
             }
 
@@ -1459,19 +1716,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
 
             await SetClassroomStatusAndLogAsync(connection, transaction, classroomId, teacherAccountId, "Cooling", "ClassStarted", null, SchoolNow(), cancellationToken);
             await SetAttendanceIrPowerAsync(connection, transaction, classroomId, true, cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
             return OperationResult.Success();
-        }
-        catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            return OperationResult.Failure("This teacher already has an active class.");
-        }
-        catch
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            throw;
-        }
     }
 
     public async Task<OperationResult> EndClassAsync(long teacherAccountId, CancellationToken cancellationToken = default)
@@ -1480,15 +1725,35 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            var result = await EndClassInTransactionAsync(connection, transaction, teacherAccountId, null, null, cancellationToken);
+            if (result.Succeeded) await transaction.CommitAsync(cancellationToken);
+            else await transaction.RollbackAsync(cancellationToken);
+            return result;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    internal async Task<OperationResult> EndClassInTransactionAsync(
+        MySqlConnection connection, MySqlTransaction transaction, long teacherAccountId,
+        long? expectedScheduleId, long? expectedClassroomId, CancellationToken cancellationToken)
+    {
             await using var end = connection.CreateCommand();
             end.Transaction = transaction;
             end.CommandText = @"
                 SELECT id, classroom_id, class_schedule_id FROM attendance_logs
                 WHERE teacher_account_id = @teacherId AND time_out_utc IS NULL
+                  AND (@scheduleId IS NULL OR class_schedule_id = @scheduleId)
+                  AND (@classroomId IS NULL OR classroom_id = @classroomId)
                 ORDER BY time_in_utc DESC
                 LIMIT 1
                 FOR UPDATE;";
             end.Parameters.Add("@teacherId", MySqlDbType.Int64).Value = teacherAccountId;
+            end.Parameters.Add("@scheduleId", MySqlDbType.Int64).Value = (object?)expectedScheduleId ?? DBNull.Value;
+            end.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = (object?)expectedClassroomId ?? DBNull.Value;
             long attendanceId;
             long classroomId;
             long? scheduleId;
@@ -1496,7 +1761,6 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             {
                 if (!await reader.ReadAsync(cancellationToken))
                 {
-                    await transaction.RollbackAsync(cancellationToken);
                     return OperationResult.Failure("There is no active class attendance record to end.");
                 }
 
@@ -1521,14 +1785,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 DateOnly.FromDateTime(now), TimeOnly.FromDateTime(now), cancellationToken);
             await SetClassroomStatusAndLogAsync(connection, transaction, classroomId, teacherAccountId, keepOn ? "Cooling" : "Off", "ClassEnded", null, now, cancellationToken);
             await SetAttendanceIrPowerAsync(connection, transaction, classroomId, keepOn, cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
             return OperationResult.Success();
-        }
-        catch
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            throw;
-        }
     }
 
     private static async Task SetAttendanceIrPowerAsync(MySqlConnection connection, MySqlTransaction transaction,
@@ -1570,8 +1827,13 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             INNER JOIN semesters sem ON sem.id = s.semester_id AND sem.is_active = TRUE
             INNER JOIN teacher_semesters e ON e.semester_id = s.semester_id AND e.teacher_account_id = s.teacher_account_id
             WHERE s.classroom_id = @room AND (@ended IS NULL OR s.id <> @ended) AND s.schedule_date = @date
+              AND (COALESCE(s.original_teacher_account_id, s.teacher_account_id) = s.teacher_account_id OR s.substitution_verified = TRUE)
               AND @date BETWEEN sem.start_date AND sem.end_date
               AND @time >= s.start_time AND @time < s.end_time
+              AND NOT EXISTS (
+                    SELECT 1 FROM class_schedules replacement
+                    WHERE replacement.replaces_schedule_id = s.id
+              )
             LIMIT 1 FOR UPDATE;
             """;
         scheduled.Parameters.Add("@room", MySqlDbType.Int64).Value = classroomId;
@@ -1583,7 +1845,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
 
     public async Task<int> ReconcileAttendanceOutcomesAsync(DateOnly schoolDate, TimeOnly schoolTime, CancellationToken cancellationToken = default)
     {
-        var missingGraceSeconds = Math.Max(0, _schoolTime.MissingTimeOutGraceMinutes) * 60;
+        var missingGraceSeconds = Math.Clamp(_schoolTime.MissingTimeOutGraceMinutes, 0, 29) * 60;
         var recordedAt = SchoolNow();
         var changed = 0;
         await using var connection = await OpenConnectionAsync(cancellationToken);
@@ -1603,7 +1865,9 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                         s.schedule_date < @schoolDate
                      OR (
                             s.schedule_date = @schoolDate
-                        AND ADDTIME(s.end_time, SEC_TO_TIME(@missingGraceSeconds)) <= @schoolTime
+                        AND ADDTIME(
+                            ADDTIME(s.end_time, SEC_TO_TIME(a.class_extension_minutes * 60)),
+                            SEC_TO_TIME(@missingGraceSeconds)) <= @schoolTime
                      )
                   )
                 FOR UPDATE;";
@@ -1628,7 +1892,9 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                     UPDATE attendance_logs
                     SET time_out_utc = @recordedAt,
                         status = 'Completed',
-                        outcome = 'MissingTimeOut'
+                        outcome = 'MissingTimeOut',
+                        missing_time_out_sms_status = 'Pending',
+                        missing_time_out_sms_attempted_utc = NULL
                     WHERE id = @id AND time_out_utc IS NULL;";
                 close.Parameters.Add("@id", MySqlDbType.Int64).Value = session.AttendanceId;
                 close.Parameters.Add("@recordedAt", MySqlDbType.DateTime).Value = recordedAt;
@@ -1670,6 +1936,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                     ON enrollment.semester_id = schedule.semester_id
                    AND enrollment.teacher_account_id = schedule.teacher_account_id
                 WHERE schedule.classroom_id IS NOT NULL
+                  AND (COALESCE(schedule.original_teacher_account_id, schedule.teacher_account_id) = schedule.teacher_account_id OR schedule.substitution_verified = TRUE)
                   AND schedule.schedule_date BETWEEN semester.start_date AND semester.end_date
                   AND (
                         schedule.schedule_date < @schoolDate
@@ -1678,6 +1945,10 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                   AND NOT EXISTS (
                         SELECT 1 FROM attendance_logs existing
                         WHERE existing.class_schedule_id = schedule.id
+                  )
+                  AND NOT EXISTS (
+                        SELECT 1 FROM class_schedules replacement
+                        WHERE replacement.replaces_schedule_id = schedule.id
                   );";
             markAbsent.Parameters.Add("@schoolDate", MySqlDbType.Date).Value = schoolDate;
             markAbsent.Parameters.Add("@schoolTime", MySqlDbType.Time).Value = schoolTime;
@@ -1701,9 +1972,14 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                         SELECT 1
                         FROM class_schedules s
                         WHERE s.classroom_id = c.id
+                          AND (COALESCE(s.original_teacher_account_id, s.teacher_account_id) = s.teacher_account_id OR s.substitution_verified = TRUE)
                           AND s.schedule_date = @schoolDate
                           AND @schoolTime >= s.start_time
                           AND @schoolTime < s.end_time
+                          AND NOT EXISTS (
+                                SELECT 1 FROM class_schedules replacement
+                                WHERE replacement.replaces_schedule_id = s.id
+                          )
                   )
                 FOR UPDATE;";
             clearAc.Parameters.Add("@schoolDate", MySqlDbType.Date).Value = schoolDate;
@@ -1798,7 +2074,6 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
-            long requesterId;
             DateOnly requestDate;
             string requestType;
             bool needsSubstitute;
@@ -1815,7 +2090,6 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                     await transaction.RollbackAsync(cancellationToken);
                     return OperationResult.Failure("The request is no longer pending.");
                 }
-                requesterId = reader.GetInt64(0);
                 requestDate = reader.GetFieldValue<DateOnly>(1);
                 requestType = reader.GetString(2);
                 needsSubstitute = reader.GetBoolean(3);
@@ -1829,59 +2103,8 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
 
             if (request.Status == "Approved" && requestType == "Leave" && needsSubstitute)
             {
-                if (request.SubstituteTeacherAccountId is not long substituteId || substituteId == requesterId)
-                {
-                    await transaction.RollbackAsync(cancellationToken);
-                    return OperationResult.Failure("Assign a different active teacher as the substitute.");
-                }
-
-                await using var substitute = connection.CreateCommand();
-                substitute.Transaction = transaction;
-                substitute.CommandText = @"
-                    SELECT EXISTS(
-                        SELECT 1 FROM user_accounts
-                        WHERE id = @substituteId AND role = 'Teacher' AND is_active = TRUE
-                    );";
-                substitute.Parameters.Add("@substituteId", MySqlDbType.Int64).Value = substituteId;
-                if (!(Convert.ToInt64(await substitute.ExecuteScalarAsync(cancellationToken) ?? 0L) != 0))
-                {
-                    await transaction.RollbackAsync(cancellationToken);
-                    return OperationResult.Failure("Assign a different active teacher as the substitute.");
-                }
-
-                await using var conflict = connection.CreateCommand();
-                conflict.Transaction = transaction;
-                conflict.CommandText = @"
-                    SELECT EXISTS(
-                        SELECT 1
-                        FROM class_schedules original
-                        INNER JOIN class_schedules substitute
-                            ON substitute.teacher_account_id = @substituteId
-                           AND substitute.schedule_date = original.schedule_date
-                           AND substitute.start_time < original.end_time
-                           AND substitute.end_time > original.start_time
-                        WHERE original.original_teacher_account_id = @teacherId
-                          AND original.schedule_date = @date
-                    );";
-                conflict.Parameters.Add("@substituteId", MySqlDbType.Int64).Value = substituteId;
-                conflict.Parameters.Add("@teacherId", MySqlDbType.Int64).Value = requesterId;
-                conflict.Parameters.Add("@date", MySqlDbType.Date).Value = requestDate;
-                if (Convert.ToInt64(await conflict.ExecuteScalarAsync(cancellationToken) ?? 0L) != 0)
-                {
-                    await transaction.RollbackAsync(cancellationToken);
-                    return OperationResult.Failure("The selected substitute already has an overlapping schedule.");
-                }
-
-                await using var assign = connection.CreateCommand();
-                assign.Transaction = transaction;
-                assign.CommandText = @"
-                    UPDATE class_schedules
-                    SET teacher_account_id = @substituteId
-                    WHERE original_teacher_account_id = @teacherId AND schedule_date = @date;";
-                assign.Parameters.Add("@substituteId", MySqlDbType.Int64).Value = substituteId;
-                assign.Parameters.Add("@teacherId", MySqlDbType.Int64).Value = requesterId;
-                assign.Parameters.Add("@date", MySqlDbType.Date).Value = requestDate;
-                await assign.ExecuteNonQueryAsync(cancellationToken);
+                await transaction.RollbackAsync(cancellationToken);
+                return OperationResult.Failure("Assign substitutes to individual classes using SMS verification on the Schedules page.");
             }
 
             await using var update = connection.CreateCommand();
@@ -1954,17 +2177,86 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         var fingerprints = new List<TeacherFingerprint>();
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = @"SELECT f.finger_position, f.template_identifier, d.device_id, b.template_identifier IS NOT NULL
+        command.CommandText = @"SELECT f.finger_position, f.template_identifier, d.device_id, b.template_identifier IS NOT NULL, r.state, r.id
             FROM fingerprint_templates f
             LEFT JOIN fingerprint_template_device_bindings d ON d.fingerprint_template_id = f.id
             LEFT JOIN fingerprint_slot_blocks b ON b.template_identifier = f.template_identifier
+            LEFT JOIN fingerprint_deletion_requests r ON r.fingerprint_template_id = f.id
             WHERE f.user_account_id = @teacher ORDER BY f.template_identifier;";
         command.Parameters.Add("@teacher", MySqlDbType.Int64).Value = teacherId;
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
             fingerprints.Add(new TeacherFingerprint(reader.GetString(0), reader.GetInt64(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetBoolean(3)));
+                reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetBoolean(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5)));
         return fingerprints;
+    }
+
+    public async Task<OperationResult> RenameTeacherFingerprintAsync(
+        long teacherId, long slot, string currentFinger, string newFinger, CancellationToken cancellationToken = default)
+    {
+        if (teacherId <= 0 || slot <= 0 || slot > ushort.MaxValue ||
+            !FingerprintSlots.IsValid(currentFinger) || !FingerprintSlots.IsValid(newFinger))
+            return OperationResult.Failure("Select a valid teacher, fingerprint and finger label.");
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var teacher = connection.CreateCommand();
+        teacher.Transaction = transaction;
+        teacher.CommandText = "SELECT id FROM user_accounts WHERE id=@teacher AND role='Teacher' FOR UPDATE;";
+        teacher.Parameters.Add("@teacher", MySqlDbType.Int64).Value = teacherId;
+        if (await teacher.ExecuteScalarAsync(cancellationToken) is null)
+            return OperationResult.Failure("The teacher was not found.");
+
+        await using var fingerprint = connection.CreateCommand();
+        fingerprint.Transaction = transaction;
+        fingerprint.CommandText = @"SELECT id FROM fingerprint_templates
+            WHERE user_account_id=@teacher AND template_identifier=@slot
+              AND finger_position=@current COLLATE utf8mb4_unicode_ci FOR UPDATE;";
+        fingerprint.Parameters.Add("@teacher", MySqlDbType.Int64).Value = teacherId;
+        fingerprint.Parameters.Add("@slot", MySqlDbType.Int64).Value = slot;
+        fingerprint.Parameters.Add("@current", MySqlDbType.VarChar).Value = currentFinger;
+        if (await fingerprint.ExecuteScalarAsync(cancellationToken) is null)
+            return OperationResult.Failure("The fingerprint changed or no longer exists. Refresh and try again.");
+
+        await using var unavailable = connection.CreateCommand();
+        unavailable.Transaction = transaction;
+        unavailable.CommandText = @"SELECT
+            EXISTS(SELECT 1 FROM fingerprint_slot_blocks WHERE template_identifier=@slot)
+            OR EXISTS(SELECT 1 FROM fingerprint_enrollment_preparations
+                WHERE template_identifier=@slot OR (teacher_account_id=@teacher AND finger_position=@new));";
+        unavailable.Parameters.Add("@slot", MySqlDbType.Int64).Value = slot;
+        unavailable.Parameters.Add("@teacher", MySqlDbType.Int64).Value = teacherId;
+        unavailable.Parameters.Add("@new", MySqlDbType.VarChar).Value = newFinger;
+        if (Convert.ToBoolean(await unavailable.ExecuteScalarAsync(cancellationToken)))
+            return OperationResult.Failure("This slot or finger has a block or pending enrollment. Resolve it before editing.");
+
+        if (string.Equals(currentFinger, newFinger, StringComparison.Ordinal))
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return OperationResult.Success();
+        }
+
+        try
+        {
+            await using var update = connection.CreateCommand();
+            update.Transaction = transaction;
+            update.CommandText = @"UPDATE fingerprint_templates SET finger_position=@new
+                WHERE user_account_id=@teacher AND template_identifier=@slot
+                  AND finger_position=@current COLLATE utf8mb4_unicode_ci;";
+            update.Parameters.Add("@new", MySqlDbType.VarChar).Value = newFinger;
+            update.Parameters.Add("@teacher", MySqlDbType.Int64).Value = teacherId;
+            update.Parameters.Add("@slot", MySqlDbType.Int64).Value = slot;
+            update.Parameters.Add("@current", MySqlDbType.VarChar).Value = currentFinger;
+            if (await update.ExecuteNonQueryAsync(cancellationToken) != 1)
+                return OperationResult.Failure("The fingerprint changed or no longer exists. Refresh and try again.");
+            await transaction.CommitAsync(cancellationToken);
+            return OperationResult.Success();
+        }
+        catch (MySqlException exception) when (exception.ErrorCode == MySqlErrorCode.DuplicateKeyEntry)
+        {
+            return OperationResult.Failure("That finger is already enrolled for this teacher.");
+        }
     }
 
     public async Task<OperationResult> PrepareFingerprintEnrollmentAsync(long teacherId, string fingerPosition, long templateId, CancellationToken cancellationToken = default)
@@ -2033,6 +2325,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 INNER JOIN classrooms c ON c.id = d.classroom_id
                 WHERE e.singleton_id = 1 AND d.is_active = TRUE AND d.paired_at IS NOT NULL
                   AND d.fingerprint_enrollment_enabled = TRUE AND d.pending_clear_fingerprints = FALSE
+                  AND NOT EXISTS (SELECT 1 FROM fingerprint_deletion_requests r WHERE r.device_id=d.id)
                   AND c.is_active = TRUE FOR UPDATE;";
             var deviceId = await scanner.ExecuteScalarAsync(cancellationToken);
             if (deviceId is null)
@@ -2404,9 +2697,13 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 await using var attendance = connection.CreateCommand();
                 attendance.Transaction = transaction;
                 attendance.CommandText = """
-                    SELECT id FROM attendance_logs
-                    WHERE teacher_account_id = @teacher AND classroom_id = @room
-                      AND status = 'Active' AND time_out_utc IS NULL LIMIT 1 FOR UPDATE;
+                    SELECT a.id FROM attendance_logs a
+                    LEFT JOIN class_schedules s ON s.id = a.class_schedule_id
+                    WHERE a.teacher_account_id = @teacher AND a.classroom_id = @room
+                      AND a.status = 'Active' AND a.time_out_utc IS NULL
+                      AND (a.class_schedule_id IS NULL OR
+                           (s.id IS NOT NULL AND (COALESCE(s.original_teacher_account_id, s.teacher_account_id) = s.teacher_account_id OR s.substitution_verified = TRUE)))
+                    LIMIT 1 FOR UPDATE;
                     """;
                 attendance.Parameters.Add("@teacher", MySqlDbType.Int64).Value = actorAccountId;
                 attendance.Parameters.Add("@room", MySqlDbType.Int64).Value = request.ClassroomId;
@@ -2508,13 +2805,18 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                    COALESCE(schedule.original_teacher_account_id, schedule.teacher_account_id), original_teacher.display_name,
                    classroom.id, classroom.name,
                    schedule.semester_id, semester.name, schedule.schedule_kind,
-                   schedule.subject_name, schedule.schedule_date, schedule.start_time, schedule.end_time
+                   schedule.subject_name, schedule.schedule_date, schedule.start_time, schedule.end_time,
+                   schedule.replaces_schedule_id, schedule.substitution_verified
             FROM class_schedules schedule
             INNER JOIN user_accounts teacher ON teacher.id = schedule.teacher_account_id
             INNER JOIN user_accounts original_teacher ON original_teacher.id = COALESCE(schedule.original_teacher_account_id, schedule.teacher_account_id)
             INNER JOIN classrooms classroom ON classroom.id = schedule.classroom_id
             LEFT JOIN semesters semester ON semester.id = schedule.semester_id
             WHERE (@teacherId IS NULL OR schedule.teacher_account_id = @teacherId)
+              AND (@teacherId IS NULL OR NOT EXISTS (
+                    SELECT 1 FROM class_schedules replacement
+                    WHERE replacement.replaces_schedule_id = schedule.id
+              ))
             ORDER BY schedule.schedule_date, schedule.start_time, classroom.name;";
         command.Parameters.AddWithValue("@teacherId", (object?)teacherAccountId ?? DBNull.Value);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -2534,7 +2836,9 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 reader.GetString(10),
                 reader.GetFieldValue<DateOnly>(11),
                 reader.GetFieldValue<TimeOnly>(12),
-                reader.GetFieldValue<TimeOnly>(13)));
+                reader.GetFieldValue<TimeOnly>(13),
+                reader.IsDBNull(14) ? null : reader.GetInt64(14),
+                reader.GetBoolean(15)));
         }
         return items;
     }
@@ -2551,6 +2855,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         command.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = request.ClassroomId;
         command.Parameters.Add("@semesterId", MySqlDbType.Int64).Value = request.SemesterId;
         command.Parameters.Add("@scheduleKind", MySqlDbType.VarChar).Value = request.ScheduleKind;
+        command.Parameters.Add("@replacesScheduleId", MySqlDbType.Int64).Value = (object?)request.ReplacesScheduleId ?? DBNull.Value;
         command.Parameters.Add("@subject", MySqlDbType.VarChar).Value = request.SubjectName;
         command.Parameters.Add("@date", MySqlDbType.Date).Value = request.ScheduleDate;
         command.Parameters.Add("@startTime", MySqlDbType.Time).Value = request.StartTime;
@@ -2985,7 +3290,7 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         }
         catch (MySqlException exception) when (!blocked && exception.ErrorCode == MySqlErrorCode.RowIsReferenced2)
         {
-            return OperationResult.Failure("Cancel the enrollment preparation before removing its slot block.");
+            return OperationResult.Failure("Resolve the fingerprint preparation or deletion request before removing its slot block.");
         }
         return OperationResult.Success();
     }
@@ -3550,13 +3855,19 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             INNER JOIN teacher_semesters ts
                 ON ts.semester_id = cs.semester_id AND ts.teacher_account_id = cs.teacher_account_id
             WHERE cs.teacher_account_id = @teacherId
+              AND (COALESCE(cs.original_teacher_account_id, cs.teacher_account_id) = cs.teacher_account_id OR cs.substitution_verified = TRUE)
               AND cs.classroom_id = @classroomId
-              AND cs.schedule_date = @schoolDate
-              AND @schoolTime >= cs.start_time
-              AND @schoolTime < cs.end_time
+              AND cs.schedule_date BETWEEN @schoolDate AND DATE_ADD(@schoolDate, INTERVAL 1 DAY)
+              AND TIMESTAMP(@schoolDate, @schoolTime) >= DATE_SUB(TIMESTAMP(cs.schedule_date, cs.start_time), INTERVAL 15 MINUTE)
+              AND TIMESTAMP(@schoolDate, @schoolTime) < TIMESTAMP(cs.schedule_date, cs.end_time)
               AND cs.classroom_id IS NOT NULL
-              AND @schoolDate BETWEEN s.start_date AND s.end_date
-            ORDER BY CASE cs.schedule_kind WHEN 'Makeup' THEN 0 ELSE 1 END, cs.start_time
+              AND cs.schedule_date BETWEEN s.start_date AND s.end_date
+              AND NOT EXISTS (
+                    SELECT 1 FROM class_schedules replacement
+                    WHERE replacement.replaces_schedule_id = cs.id
+              )
+            ORDER BY CASE WHEN TIMESTAMP(@schoolDate, @schoolTime) >= TIMESTAMP(cs.schedule_date, cs.start_time) THEN 0 ELSE 1 END,
+                     CASE cs.schedule_kind WHEN 'Makeup' THEN 0 ELSE 1 END, cs.schedule_date, cs.start_time
             LIMIT 1;";
         command.Parameters.Add("@teacherId", MySqlDbType.Int64).Value = teacherAccountId;
         command.Parameters.Add("@classroomId", MySqlDbType.Int64).Value = classroomId;
@@ -3895,6 +4206,8 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var guard = connection.CreateCommand();
         guard.Transaction = transaction;
         guard.CommandText = "SELECT preparation_id FROM fingerprint_enrollment_write_guards LIMIT 1 FOR UPDATE;";
+        if (await guard.ExecuteScalarAsync(cancellationToken) is not null) return true;
+        guard.CommandText = "SELECT id FROM fingerprint_deletion_requests LIMIT 1 FOR UPDATE;";
         return await guard.ExecuteScalarAsync(cancellationToken) is not null;
     }
 
@@ -3967,6 +4280,16 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             INNER JOIN biometric_devices d ON d.id = p.device_id
             WHERE {field} = @id LIMIT 1 FOR UPDATE;";
         guard.Parameters.Add("@id", MySqlDbType.Int64).Value = id;
+        if (await guard.ExecuteScalarAsync(cancellationToken) is not null) return true;
+        var deletionField = field switch
+        {
+            "p.teacher_account_id" => "r.teacher_account_id",
+            "p.device_id" => "r.device_id",
+            _ => "d.classroom_id"
+        };
+        guard.CommandText = $@"SELECT r.id FROM fingerprint_deletion_requests r
+            INNER JOIN biometric_devices d ON d.id=r.device_id
+            WHERE {deletionField}=@id LIMIT 1 FOR UPDATE;";
         return await guard.ExecuteScalarAsync(cancellationToken) is not null;
     }
 
@@ -3990,6 +4313,23 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            var result = await TryInWindowAcReentryInTransactionAsync(connection, transaction, teacherAccountId,
+                scheduleId, classroomId, schoolDate, schoolTime, cancellationToken);
+            if (result is not null) await transaction.CommitAsync(cancellationToken);
+            else await transaction.RollbackAsync(cancellationToken);
+            return result;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            throw;
+        }
+    }
+
+    internal async Task<AcReentryResult?> TryInWindowAcReentryInTransactionAsync(
+        MySqlConnection connection, MySqlTransaction transaction, long teacherAccountId, long scheduleId,
+        long classroomId, DateOnly schoolDate, TimeOnly schoolTime, CancellationToken cancellationToken)
+    {
             // Still inside this teacher's schedule window; a real (non-Absent) punch already exists.
             // Caller only reaches here when the teacher has no open session (logout already recorded).
             await using var eligible = connection.CreateCommand();
@@ -4004,11 +4344,16 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 INNER JOIN classrooms c ON c.id = schedule.classroom_id AND c.is_active = TRUE
                 WHERE schedule.id = @scheduleId
                   AND schedule.teacher_account_id = @teacherId
+                  AND (COALESCE(schedule.original_teacher_account_id, schedule.teacher_account_id) = schedule.teacher_account_id OR schedule.substitution_verified = TRUE)
                   AND schedule.classroom_id = @classroomId
-                  AND schedule.schedule_date = @schoolDate
-                  AND @schoolTime >= schedule.start_time
-                  AND @schoolTime < schedule.end_time
-                  AND @schoolDate BETWEEN semester.start_date AND semester.end_date
+                  AND schedule.schedule_date BETWEEN @schoolDate AND DATE_ADD(@schoolDate, INTERVAL 1 DAY)
+                  AND TIMESTAMP(@schoolDate, @schoolTime) >= DATE_SUB(TIMESTAMP(schedule.schedule_date, schedule.start_time), INTERVAL 15 MINUTE)
+                  AND TIMESTAMP(@schoolDate, @schoolTime) < TIMESTAMP(schedule.schedule_date, schedule.end_time)
+                  AND schedule.schedule_date BETWEEN semester.start_date AND semester.end_date
+                  AND NOT EXISTS (
+                        SELECT 1 FROM class_schedules replacement
+                        WHERE replacement.replaces_schedule_id = schedule.id
+                  )
                   AND EXISTS (
                         SELECT 1
                         FROM attendance_logs prior
@@ -4033,7 +4378,6 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
             var currentStatus = await eligible.ExecuteScalarAsync(cancellationToken) as string;
             if (string.IsNullOrWhiteSpace(currentStatus))
             {
-                await transaction.RollbackAsync(cancellationToken);
                 return null;
             }
 
@@ -4050,7 +4394,11 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 reopen.CommandText = @"
                     UPDATE attendance_logs
                     SET time_out_utc = NULL,
-                        status = 'Active'
+                        status = 'Active',
+                        session_generation = session_generation + 1,
+                        outcome = 'OnTime',
+                        missing_time_out_sms_status = 'NotRequired',
+                        missing_time_out_sms_attempted_utc = NULL
                     WHERE class_schedule_id = @scheduleId
                       AND teacher_account_id = @teacherId
                       AND verification_method <> 'System'
@@ -4061,7 +4409,6 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 reopen.Parameters.Add("@teacherId", MySqlDbType.Int64).Value = teacherAccountId;
                 if (await reopen.ExecuteNonQueryAsync(cancellationToken) != 1)
                 {
-                    await transaction.RollbackAsync(cancellationToken);
                     return null;
                 }
             }
@@ -4076,13 +4423,6 @@ public sealed class MariaDbUserAccountRepository : IUserAccountRepository
                 recordedAt,
                 cancellationToken);
             await SetAttendanceIrPowerAsync(connection, transaction, classroomId, true, cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
             return new AcReentryResult(action, nextStatus);
-        }
-        catch
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            throw;
-        }
     }
 }

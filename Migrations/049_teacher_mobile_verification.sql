@@ -1,0 +1,2 @@
+ALTER TABLE user_accounts
+    ADD COLUMN IF NOT EXISTS phone_verified BOOLEAN NOT NULL DEFAULT TRUE;

@@ -132,7 +132,7 @@ public sealed class DemoDataSeeder
 
             if (mariaId is long mariaScience && scienceLab is long lab)
             {
-                schedules.Add(new CreateScheduleRequest(mariaScience, lab, semester, ScheduleKinds.Makeup, "Science Lab (makeup afternoon)", today, new TimeOnly(13, 0), new TimeOnly(14, 30)));
+                schedules.Add(new CreateScheduleRequest(mariaScience, lab, semester, ScheduleKinds.Regular, "Science Lab (afternoon)", today, new TimeOnly(13, 0), new TimeOnly(14, 30)));
             }
 
             foreach (var schedule in schedules)

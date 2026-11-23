@@ -1,0 +1,3 @@
+ALTER TABLE class_schedules
+    ADD COLUMN IF NOT EXISTS substitution_version BIGINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS substitution_verified BOOLEAN NOT NULL DEFAULT FALSE;
