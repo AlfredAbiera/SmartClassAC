@@ -1,4 +1,11 @@
 using System.Reflection;
+using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Rendering;
+using Microsoft.AspNetCore.Components.Web;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using SmartClassAC.Pages;
 using SmartClassAC.Services;
 using SmartClassAC.Shared;
@@ -78,6 +85,84 @@ public sealed class DeviceManagementFilterTests
         pager.Next(12);
         typeof(Admin).GetMethod("ResetDevicePage", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(page, null);
         Assert.Equal(1, pager.Page);
+    }
+
+    [Fact]
+    public async Task FilledFingerprintSlotsKeepLabelAndSameSlotRescanActions()
+    {
+        var html = await RenderFingerprintDialogAsync(replacementEnabled: true);
+
+        Assert.Equal(2, Regex.Matches(html, @">Edit label</button>").Count);
+        var rescanButtons = Regex.Matches(html, @"<button\b[^>]*>Rescan / replace</button>");
+        Assert.Equal(2, rescanButtons.Count);
+        Assert.All(rescanButtons.Cast<Match>(), button => Assert.DoesNotContain("disabled", button.Value));
+        Assert.Contains("Both fingerprint slots are filled.", html);
+        Assert.DoesNotContain(">Reserve slot</button>", html);
+    }
+
+    [Fact]
+    public async Task DisabledReplacementShowsActionsAndConfigurationReason()
+    {
+        var html = await RenderFingerprintDialogAsync(replacementEnabled: false);
+
+        var rescanButtons = Regex.Matches(html, @"<button\b[^>]*>Rescan / replace</button>");
+        Assert.Equal(2, rescanButtons.Count);
+        Assert.All(rescanButtons.Cast<Match>(), button => Assert.Contains("disabled", button.Value));
+        Assert.Contains("Same-slot replacement is disabled in the portal configuration.", html);
+        Assert.Contains("EnableReplacementWriteClaimApi", html);
+        Assert.Equal(2, Regex.Matches(html, @">Edit label</button>").Count);
+    }
+
+    [Fact]
+    public async Task WrongEnrollmentScannerExplainsWhyFilledSlotCannotBeReplaced()
+    {
+        var html = await RenderFingerprintDialogAsync(replacementEnabled: true, boundDeviceId: "1000000002");
+
+        var rescanButtons = Regex.Matches(html, @"<button\b[^>]*>Rescan / replace</button>");
+        Assert.Equal(2, rescanButtons.Count);
+        Assert.All(rescanButtons.Cast<Match>(), button => Assert.Contains("disabled", button.Value));
+        Assert.Contains("Select the bound scanner 1000000002 as the enrollment scanner under Devices.", html);
+    }
+
+    private static async Task<string> RenderFingerprintDialogAsync(bool replacementEnabled, string boundDeviceId = "1000000001")
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["EnrollmentSecurity:EnableSameSlotReplacement"] = replacementEnabled.ToString(),
+            ["EnrollmentSecurity:EnableReplacementOperationApi"] = "true",
+            ["EnrollmentSecurity:EnableReplacementGuardReserveApi"] = "true",
+            ["EnrollmentSecurity:EnableReplacementWriteClaimApi"] = "true",
+            ["EnrollmentSecurity:EnableReplacementFinishApi"] = "true"
+        }).Build();
+        var page = new Admin();
+        typeof(Admin).GetProperty("Configuration", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(page, configuration);
+        SetField(page, "isLoading", true);
+        SetField(page, "fingerprintTeacher", new TeacherDirectoryEntry(1, "Teacher", "teacher", "EMP-000001", null, null, 2, true));
+        SetField(page, "teacherFingerprints", new TeacherFingerprint[]
+        {
+            new("Right thumb", 2, boundDeviceId, false),
+            new("Left thumb", 3, boundDeviceId, false)
+        });
+        SetField(page, "biometricDevices", new List<BiometricDeviceEntry>
+        {
+            new(1, 1, "Room", "1000000001", "Device 1", true, 22, 30, true, true, null, true, true)
+        });
+        var render = typeof(Admin).GetMethod("BuildRenderTree", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        RenderFragment dialog = builder => render.Invoke(page, new object[] { builder });
+        using var services = new ServiceCollection().AddLogging().BuildServiceProvider();
+        await using var renderer = new HtmlRenderer(services, services.GetRequiredService<ILoggerFactory>());
+        return await renderer.Dispatcher.InvokeAsync(async () =>
+        {
+            var root = await renderer.RenderComponentAsync<FingerprintDialogHarness>(
+                ParameterView.FromDictionary(new Dictionary<string, object?> { [nameof(FingerprintDialogHarness.Dialog)] = dialog }));
+            return root.ToHtmlString();
+        });
+    }
+
+    public sealed class FingerprintDialogHarness : ComponentBase
+    {
+        [Parameter] public RenderFragment? Dialog { get; set; }
+        protected override void BuildRenderTree(RenderTreeBuilder builder) => builder.AddContent(0, Dialog);
     }
 
     private static Admin CreatePage()

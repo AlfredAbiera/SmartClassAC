@@ -880,10 +880,12 @@
             @if (!string.IsNullOrEmpty(message)) { <p class="fingerprint-feedback" role="status">@message</p> }
             <div class="fingerprint-section">
                 <div class="fingerprint-section-heading"><h3>Enrolled fingerprints</h3><span class="fingerprint-count">@teacherFingerprints.Count / 2</span></div>
-                <p class="fingerprint-hint">Server mappings may differ from the sensor.</p>
+                <p class="fingerprint-hint">Edit label corrects the named finger only. Rescan / replace captures a new fingerprint in the same occupied slot, including when both slots are filled. Server mappings may differ from the sensor.</p>
                 @if (teacherFingerprints.Count == 0) { <div class="fingerprint-empty">No fingerprints enrolled.</div> }
                 @foreach (var fingerprint in teacherFingerprints)
                 {
+                    var replacementScanner = biometricDevices.FirstOrDefault(device => device.IsEnrollmentScanner && device.DeviceId == fingerprint.DeviceId);
+                    var replacementUnavailableReason = GetFingerprintReplacementUnavailableReason(fingerprint, replacementScanner);
                     <div class="fingerprint-item">
                         <div class="fingerprint-item-details">
                             <strong>@fingerprint.FingerPosition</strong>
@@ -892,15 +894,12 @@
                             @if (fingerprint.DeletionState is not null) { <span class="status-badge pending">Deletion: @fingerprint.DeletionState</span> }
                         </div>
                         <div class="fingerprint-actions">
-                            @if (!fingerprint.IsBlocked)
-                            {
-                                <button type="button" class="secondary-button" disabled="@preparingEnrollment" @onclick="() => SelectFingerprintLabel(fingerprint)">Edit label</button>
-                            }
-                            @if (FingerprintReplacementAvailability.IsEnabled(Configuration) && fingerprintTeacher.IsActive && !fingerprint.IsBlocked &&
-                                 biometricDevices.FirstOrDefault(device => device.IsEnrollmentScanner && device.DeviceId == fingerprint.DeviceId) is { } replacementScanner)
-                            {
-                                <button type="button" class="secondary-button" disabled="@preparingEnrollment" @onclick="() => SelectReplacement(fingerprint, replacementScanner)">Replace</button>
-                            }
+                            <button type="button" class="secondary-button" disabled="@(preparingEnrollment || fingerprint.IsBlocked)"
+                                    title="@(fingerprint.IsBlocked ? "Resolve the blocked slot before editing its label." : "Correct the named finger without changing the sensor fingerprint.")"
+                                    @onclick="() => SelectFingerprintLabel(fingerprint)">Edit label</button>
+                            <button type="button" class="secondary-button" disabled="@(preparingEnrollment || replacementUnavailableReason is not null)"
+                                    title="@(replacementUnavailableReason ?? "Capture a new fingerprint in this same slot.")"
+                                    @onclick="() => SelectReplacement(fingerprint, replacementScanner)">Rescan / replace</button>
                             @if (fingerprint.DeletionState == "Pending")
                             {
                                 <button type="button" class="secondary-button" disabled="@preparingEnrollment" @onclick="() => CancelFingerprintDeletion(fingerprint)">Cancel deletion</button>
@@ -912,10 +911,14 @@
                             }
                         </div>
                     </div>
+                    @if (replacementUnavailableReason is not null)
+                    {
+                        <p class="fingerprint-hint" role="status">Slot @fingerprint.Slot: @replacementUnavailableReason</p>
+                    }
                 }
                 @if (!FingerprintReplacementAvailability.IsEnabled(Configuration))
                 {
-                    <p class="fingerprint-hint">Replacement is unavailable; do not overwrite an occupied slot.</p>
+                    <p class="fingerprint-hint">Same-slot replacement requires EnableSameSlotReplacement, EnableReplacementOperationApi, EnableReplacementGuardReserveApi, EnableReplacementWriteClaimApi and EnableReplacementFinishApi under EnrollmentSecurity. See the README fingerprint replacement setup; do not bypass these safeguards or overwrite a slot using normal enrollment.</p>
                 }
                 @if (!Configuration.GetValue<bool>("EnrollmentSecurity:EnableFingerprintDeletion"))
                 {
@@ -965,7 +968,7 @@
             <div class="fingerprint-section">
                 <div class="fingerprint-section-heading"><h3>Enroll a fingerprint</h3></div>
                 @if (!fingerprintTeacher.IsActive) { <p class="fingerprint-hint">Activate this teacher before enrollment.</p> }
-                else if (teacherFingerprints.Count >= 2) { <p class="fingerprint-hint">The two-fingerprint limit has been reached.</p> }
+                else if (teacherFingerprints.Count >= 2) { <p class="fingerprint-hint">Both fingerprint slots are filled. Use Edit label or Rescan / replace above to update an existing fingerprint; a third slot cannot be added.</p> }
                 else
                 {
                     <div class="fingerprint-enroll-form">
@@ -2640,8 +2643,27 @@
         replacementConfirmed = false;
     }
 
-    private void SelectReplacement(TeacherFingerprint fingerprint, BiometricDeviceEntry scanner)
+    private string? GetFingerprintReplacementUnavailableReason(TeacherFingerprint fingerprint, BiometricDeviceEntry? scanner)
     {
+        if (fingerprint.IsBlocked) return "Resolve the blocked slot or pending operation before replacing it.";
+        if (fingerprintTeacher?.IsActive != true) return "Activate this teacher before replacing a fingerprint.";
+        if (fingerprint.DeviceId is null) return "This legacy fingerprint has no scanner binding; replacement is unavailable.";
+        if (scanner is null) return $"Select the bound scanner {fingerprint.DeviceId} as the enrollment scanner under Devices.";
+        if (!scanner.IsActive || !scanner.IsPaired) return "The bound enrollment scanner must be active and paired.";
+        if (!scanner.FingerprintEnrollmentEnabled) return "Enable fingerprint enrollment for the bound scanner under Devices.";
+        if (scanner.ClassroomId is null) return "Assign the bound scanner to an active classroom before replacing a fingerprint.";
+        if (!FingerprintReplacementAvailability.IsEnabled(Configuration)) return "Same-slot replacement is disabled in the portal configuration.";
+        return null;
+    }
+
+    private void SelectReplacement(TeacherFingerprint fingerprint, BiometricDeviceEntry? scanner)
+    {
+        var unavailableReason = GetFingerprintReplacementUnavailableReason(fingerprint, scanner);
+        if (unavailableReason is not null)
+        {
+            Toast(unavailableReason);
+            return;
+        }
         fingerprintLabelSelection = null;
         fingerprintDeletionSelection = null;
         replacementSelection = fingerprint;

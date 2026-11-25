@@ -449,6 +449,15 @@ template. A duplicate finger label or a pending preparation for that finger
 is rejected. For a new biometric scan, use the separately gated **Replace**
 workflow below.
 
+The two-fingerprint limit applies to adding another fingerprint, not updating
+an existing one. **Edit label** and **Rescan / replace** remain visible when
+both slots are filled. Replacement reuses the occupied slot and retains the
+mapping and scanner binding; it does not allocate a third slot. If unavailable,
+the dialog shows the missing scanner/configuration requirement or blocked
+operation instead of hiding the action. Replacement is still disabled by
+default and requires the guarded setup described below. Correcting a label
+alone does not capture a different finger.
+
 **Individual fingerprint deletion** is experimental and disabled by default.
 Apply migration `050`, provision the scanner's enrollment key, and use matching
 firmware source `1.6.66` or newer built with both `ENROLLMENT_WRITES_ENABLED=1`
